@@ -44,63 +44,6 @@ extern "C" __global__ void ew_kernel_emergent_bloom_add(const float* L0, const f
                                                         int gx, int gy, int slice_z,
                                                         float bloom_gain);
 
-// Deterministic integer reduction for sampling centered Q15-ish means from
-// multiple world fields.
-// We clamp each float to [-1,1], convert to centered signed Q15-ish integers
-// using a fixed scale, and reduce with atomicAdd on int64.
-__global__ void ew_kernel_sample_means_q15_box(const float* E_curr,
-                                               const float* flux,
-                                               const float* coherence,
-                                               const float* curvature,
-                                               const float* doppler,
-                                               int gx, int gy, int gz,
-                                               int cx, int cy, int cz,
-                                               int rx, int ry, int rz,
-                                               int64_t* out_sums_i64_5,
-                                               uint64_t* out_cnt_u64) {
-    const int tid = (int)blockIdx.x * (int)blockDim.x + (int)threadIdx.x;
-    const int sx0 = cx - rx;
-    const int sx1 = cx + rx;
-    const int sy0 = cy - ry;
-    const int sy1 = cy + ry;
-    const int sz0 = cz - rz;
-    const int sz1 = cz + rz;
-    const int nx = sx1 - sx0 + 1;
-    const int ny = sy1 - sy0 + 1;
-    const int nz = sz1 - sz0 + 1;
-    const int n = nx * ny * nz;
-    if (tid >= n) return;
-    const int lx = tid % nx;
-    const int ly = (tid / nx) % ny;
-    const int lz = (tid / (nx * ny));
-    int x = sx0 + lx;
-    int y = sy0 + ly;
-    int z = sz0 + lz;
-    if (x < 0) x = 0; if (x >= gx) x = gx - 1;
-    if (y < 0) y = 0; if (y >= gy) y = gy - 1;
-    if (z < 0) z = 0; if (z >= gz) z = gz - 1;
-    const int idx = (z * gy + y) * gx + x;
-    auto clamp_q15ish = [](float v) -> int32_t {
-        float c = v;
-        if (c > 1.0f) c = 1.0f;
-        if (c < -1.0f) c = -1.0f;
-        return (int32_t)(c * 16384.0f);
-    };
-
-    const int32_t q0 = clamp_q15ish(E_curr[idx]);
-    const int32_t q1 = clamp_q15ish(flux[idx]);
-    const int32_t q2 = clamp_q15ish(coherence[idx]);
-    const int32_t q3 = clamp_q15ish(curvature[idx]);
-    const int32_t q4 = clamp_q15ish(doppler[idx]);
-
-    atomicAdd(&out_sums_i64_5[0], (int64_t)q0);
-    atomicAdd(&out_sums_i64_5[1], (int64_t)q1);
-    atomicAdd(&out_sums_i64_5[2], (int64_t)q2);
-    atomicAdd(&out_sums_i64_5[3], (int64_t)q3);
-    atomicAdd(&out_sums_i64_5[4], (int64_t)q4);
-    atomicAdd(out_cnt_u64, (uint64_t)1ull);
-}
-
 static inline void ew_cuda_check(cudaError_t e, const char* what) {
     if (e != cudaSuccess) {
         throw std::runtime_error(std::string("CUDA error: ") + what + ": " + cudaGetErrorString(e));
@@ -182,61 +125,6 @@ void EwFieldLatticeGpu::alloc_buffers_() {
     ew_cuda_check(cudaMalloc(&d_pulse_cmds_, max_cmd * sizeof(EwPulseInjectCmd)), "malloc pulse cmds");
     pulse_cmd_cap_ = (uint32_t)max_cmd;
     pulse_cmd_count_ = 0u;
-
-    // Persistent sampling scratch for boundary exchange (int64 sums + u64 count).
-    ew_cuda_check(cudaMalloc(&d_sample_sums_i64_, sizeof(int64_t) * 5u), "malloc sample sums");
-    ew_cuda_check(cudaMalloc(&d_sample_cnt_u64_, sizeof(uint64_t)), "malloc sample cnt");
-}
-
-EwBoundarySampleQ15 EwFieldLatticeGpu::sample_boundary_means_q15_box(uint32_t center_x, uint32_t center_y, uint32_t center_z,
-                                                                     uint32_t radius_x, uint32_t radius_y, uint32_t radius_z) const {
-    EwBoundarySampleQ15 out{};
-    if (!d_E_curr_ || !d_flux_ || !d_coherence_ || !d_curvature_ || !d_doppler_) return out;
-    if (!d_sample_sums_i64_ || !d_sample_cnt_u64_) return out;
-
-    const int cx = (int)center_x;
-    const int cy = (int)center_y;
-    const int cz = (int)center_z;
-    const int rx = (int)radius_x;
-    const int ry = (int)radius_y;
-    const int rz = (int)radius_z;
-    const int nx = rx * 2 + 1;
-    const int ny = ry * 2 + 1;
-    const int nz = rz * 2 + 1;
-    const int n = nx * ny * nz;
-
-    int64_t h_sums[5] = {0,0,0,0,0};
-    uint64_t h_cnt = 0;
-    ew_cuda_check(cudaMemcpy(d_sample_sums_i64_, h_sums, sizeof(h_sums), cudaMemcpyHostToDevice), "init sample sums");
-    ew_cuda_check(cudaMemcpy(d_sample_cnt_u64_, &h_cnt, sizeof(h_cnt), cudaMemcpyHostToDevice), "init sample cnt");
-
-    const int block = 256;
-    const int grid = (n + block - 1) / block;
-    ew_kernel_sample_means_q15_box<<<grid, block>>>(reinterpret_cast<const float*>(d_E_curr_),
-                                                    reinterpret_cast<const float*>(d_flux_),
-                                                    reinterpret_cast<const float*>(d_coherence_),
-                                                    reinterpret_cast<const float*>(d_curvature_),
-                                                    reinterpret_cast<const float*>(d_doppler_),
-                                                    (int)gx_, (int)gy_, (int)gz_,
-                                                    cx, cy, cz, rx, ry, rz,
-                                                    reinterpret_cast<int64_t*>(d_sample_sums_i64_),
-                                                    reinterpret_cast<uint64_t*>(d_sample_cnt_u64_));
-    ew_cuda_check(cudaDeviceSynchronize(), "sync sample means");
-    ew_cuda_check(cudaMemcpy(h_sums, d_sample_sums_i64_, sizeof(h_sums), cudaMemcpyDeviceToHost), "copy sample sums");
-    ew_cuda_check(cudaMemcpy(&h_cnt, d_sample_cnt_u64_, sizeof(h_cnt), cudaMemcpyDeviceToHost), "copy sample cnt");
-    if (h_cnt == 0) return out;
-
-    auto clamp_i16 = [](int64_t v) -> int16_t {
-        if (v < -32768) v = -32768;
-        if (v > 32767) v = 32767;
-        return (int16_t)v;
-    };
-    out.e_curr_q15 = clamp_i16(h_sums[0] / (int64_t)h_cnt);
-    out.flux_q15 = clamp_i16(h_sums[1] / (int64_t)h_cnt);
-    out.coherence_q15 = clamp_i16(h_sums[2] / (int64_t)h_cnt);
-    out.curvature_q15 = clamp_i16(h_sums[3] / (int64_t)h_cnt);
-    out.doppler_q15 = clamp_i16(h_sums[4] / (int64_t)h_cnt);
-    return out;
 }
 
 void EwFieldLatticeGpu::free_buffers_() {
@@ -259,8 +147,6 @@ void EwFieldLatticeGpu::free_buffers_() {
     fre(d_slice_bgra8_);
     fre(d_reduce_scratch_);
     fre(d_pulse_cmds_);
-    fre(d_sample_sums_i64_);
-    fre(d_sample_cnt_u64_);
     d_E_prev_ = d_E_curr_ = d_E_next_ = nullptr;
     d_flux_ = d_coherence_ = d_curvature_ = d_doppler_ = nullptr;
     d_density_u8_ = nullptr;
@@ -270,8 +156,6 @@ void EwFieldLatticeGpu::free_buffers_() {
     d_slice_bgra8_ = nullptr;
     d_reduce_scratch_ = nullptr;
     d_pulse_cmds_ = nullptr;
-    d_sample_sums_i64_ = nullptr;
-    d_sample_cnt_u64_ = nullptr;
     pulse_cmd_cap_ = 0u;
     pulse_cmd_count_ = 0u;
 }

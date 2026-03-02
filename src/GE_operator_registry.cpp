@@ -12,7 +12,6 @@
 #include "harmonic_fingerprint.hpp"
 #include "substrate_harmonics.hpp"
 #include "ewmesh_voxelizer.hpp"
-#include "GE_uv_atlas_baker.hpp"
 
 #include <cstddef>
 #include <string>
@@ -1054,28 +1053,6 @@ bool object_synthesize_voxelize(EwState& state,
         return false;
     }
 
-    // Bake UV atlas variables into UV space (RGBA8).
-    // Fixed atlas size is deterministic and sufficient for export workflows.
-    const uint32_t atlas_w_u32 = 256;
-    const uint32_t atlas_h_u32 = 256;
-    std::vector<uint8_t> atlas_rgba8;
-    if (!genesis::ge_bake_uv_atlas_rgba8(mesh,
-                                         object_id_u64,
-                                         grid_x_u32,
-                                         grid_y_u32,
-                                         grid_z_u32,
-                                         occ.data(),
-                                         atlas_w_u32,
-                                         atlas_h_u32,
-                                         atlas_rgba8)) {
-        if (out_reject_code) *out_reject_code = 7; // uv_atlas_failed
-        return false;
-    }
-    if (!state.object_store.upsert_uv_atlas_rgba8(object_id_u64, atlas_w_u32, atlas_h_u32, atlas_rgba8.data(), atlas_rgba8.size())) {
-        if (out_reject_code) *out_reject_code = 7;
-        return false;
-    }
-
     // Also update the entry header so the voxel volume is discoverable.
     EwObjectEntry e2 = *e;
     e2.voxel_grid_x_u32 = grid_x_u32;
@@ -1083,31 +1060,6 @@ bool object_synthesize_voxelize(EwState& state,
     e2.voxel_grid_z_u32 = grid_z_u32;
     e2.voxel_format_u32 = 1;
     e2.voxel_blob_id_u64 = object_id_u64;
-
-    e2.uv_atlas_w_u32 = atlas_w_u32;
-    e2.uv_atlas_h_u32 = atlas_h_u32;
-    e2.uv_atlas_format_u32 = 1;
-    e2.uv_atlas_blob_id_u64 = object_id_u64;
-
-    // Initialize object-local lattice state (phi_q15_s16) deterministically.
-    // phi = centered occupancy mapped to signed Q15.
-    {
-        const size_t nvox = occ.size();
-        std::vector<int16_t> phi;
-        phi.resize(nvox);
-        for (size_t i = 0; i < nvox; ++i) {
-            const uint8_t o = occ[i];
-            const int32_t q = (int32_t)((uint32_t)o * 32767u) / 255u;
-            phi[i] = (int16_t)(q - 16384);
-        }
-        (void)state.object_store.upsert_local_phi_q15_s16(object_id_u64, grid_x_u32, grid_y_u32, grid_z_u32,
-                                                          phi.data(), phi.size() * sizeof(int16_t));
-        e2.local_grid_x_u32 = grid_x_u32;
-        e2.local_grid_y_u32 = grid_y_u32;
-        e2.local_grid_z_u32 = grid_z_u32;
-        e2.local_format_u32 = 1u;
-        e2.local_blob_id_u64 = object_id_u64;
-    }
     state.object_store.upsert(e2);
     return true;
 }

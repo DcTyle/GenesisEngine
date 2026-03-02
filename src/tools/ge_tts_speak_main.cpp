@@ -34,7 +34,7 @@ int main(int argc, char** argv) {
     cfg.sample_rate_hz_u32 = sr;
     cfg.f0_hz_q16_u32 = f0 << 16;
 
-    auto phones = ge_text_to_phones_english(text);
+    auto phones = ge_text_to_phones_fallback_english(text);
 
     TtsResult res;
     if (!model_path.empty()) {

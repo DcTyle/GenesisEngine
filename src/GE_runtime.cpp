@@ -23,12 +23,6 @@
 #include "substrate_harmonics.hpp"
 #include "ew_coherence_analyzer.hpp"
 
-#include "GE_shell_mesh.hpp"
-#include "GE_object_ancilla.hpp"
-
-#include <filesystem>
-#include <fstream>
-
 static inline int64_t q32_32_mul(int64_t a_q32_32, int64_t b_q32_32) {
     // (a*b)>>32, no rounding.
     __int128 p = (__int128)a_q32_32 * (__int128)b_q32_32;
@@ -321,6 +315,25 @@ static void ew_synth_query_best(SubstrateManager* sm, const std::string& request
     }
 }
 
+static bool ew_synth_emit_function_stub_patch(SubstrateManager* sm, const std::string& rel_path, const std::string& func_name) {
+    if (!sm) return false;
+    if (rel_path.empty() || func_name.empty()) return false;
+
+    EwPatchSpec ps;
+    ps.mode_u16 = EW_PATCH_APPEND_EOF;
+    ps.text = "\n// EW_ANCHOR:EW_SYNTH_STUB_BEGIN\n";
+    ps.text += "// Synthesized stub (deterministic). Fill in logic under coherence gate.\n";
+    ps.text += "static int ";
+    ps.text += func_name;
+    ps.text += "(int argc, char** argv) {\n";
+    ps.text += "    (void)argc; (void)argv;\n";
+    ps.text += "    return 0;\n";
+    ps.text += "}\n";
+    ps.text += "// EW_ANCHOR:EW_SYNTH_STUB_END\n";
+
+    return code_apply_patch_coherence_gated(sm, rel_path, code_artifact_kind_from_rel_path(rel_path), ps, 0xE330u);
+}
+
 static bool ew_synth_emit_cli_tool(SubstrateManager* sm, const std::string& tool_name) {
     if (!sm) return false;
     if (tool_name.empty()) return false;
@@ -430,10 +443,36 @@ static bool ew_synthcode_execute(SubstrateManager* sm, const std::string& reques
         return true;
     }
 
-    // No stubs. SYNTHCODE only emits complete, coherence-gated artifacts (modules/tools)
-    // or fails closed. If the request is not one of the implemented emitters,
-    // we refuse deterministically so the repo never accumulates incomplete logic.
-    sm->emit_ui_line("SYNTHCODE_REFUSED_NO_IMPLEMENTATION");
+    // Add stub.
+    std::string explicit_path = ew_pick_explicit_path_or_empty(req);
+    std::string func;
+    {
+        const std::string key = "function ";
+        size_t p = lc.find(key);
+        if (p != std::string::npos) {
+            std::string tail = req.substr(p + key.size());
+            func = ew_extract_first_ident_ascii(tail);
+        }
+        if (func.empty()) func = ew_extract_first_ident_ascii(req);
+    }
+
+    if (!func.empty()) {
+        if (!explicit_path.empty()) {
+            const bool ok = ew_synth_emit_function_stub_patch(sm, explicit_path, func);
+            sm->emit_ui_line(std::string("SYNTHCODE_PATCH ") + explicit_path + " ok=" + (ok ? "1" : "0"));
+            return ok;
+        }
+
+        std::vector<std::pair<std::string, uint32_t>> ms;
+        ew_synth_query_best(sm, req, 8u, ms);
+        if (!ms.empty()) {
+            const std::string target = ms[0].first;
+            const bool ok = ew_synth_emit_function_stub_patch(sm, target, func);
+            sm->emit_ui_line(std::string("SYNTHCODE_PATCH ") + target + " ok=" + (ok ? "1" : "0"));
+            return ok;
+        }
+    }
+    sm->emit_ui_line("SYNTHCODE_NO_TARGET");
     return false;
 }
 // Game-engine bootstrap request. This is a substrate-managed process that seeds
@@ -448,30 +487,21 @@ static bool ew_gameboot_execute(SubstrateManager* sm, const std::string& request
     // Enqueue measurable checkpoint tasks for Stage 6 (game engine bootstrap).
     // These tasks are validated by the existing learning gate in the sandbox.
     {
-        genesis::MetricTask t{};
-        t.target.kind = genesis::MetricKind::Game_RenderPipeline_Determinism;
-        t.context_anchor_id_u32 = genesis::EwObjectAncilla::LEDGER_ANCILLA_ID;
-        t.tries_remaining_u64 = 1024;
-        t.tries_per_step_u32 = 32;
-        t.ticks_remaining_u32 = 360;
+        MetricTask t{};
+        t.kind_u32 = (uint32_t)MetricKind::Game_RenderPipeline_Determinism;
+        t.label_utf8 = "Game_RenderPipeline_Determinism";
         sm->learning_gate.registry().enqueue_task(t);
     }
     {
-        genesis::MetricTask t{};
-        t.target.kind = genesis::MetricKind::Game_SceneGraph_TransformConsistency;
-        t.context_anchor_id_u32 = genesis::EwObjectAncilla::LEDGER_ANCILLA_ID;
-        t.tries_remaining_u64 = 1024;
-        t.tries_per_step_u32 = 32;
-        t.ticks_remaining_u32 = 360;
+        MetricTask t{};
+        t.kind_u32 = (uint32_t)MetricKind::Game_SceneGraph_TransformConsistency;
+        t.label_utf8 = "Game_SceneGraph_TransformConsistency";
         sm->learning_gate.registry().enqueue_task(t);
     }
     {
-        genesis::MetricTask t{};
-        t.target.kind = genesis::MetricKind::Game_EditorHook_CommandSurface;
-        t.context_anchor_id_u32 = genesis::EwObjectAncilla::LEDGER_ANCILLA_ID;
-        t.tries_remaining_u64 = 1024;
-        t.tries_per_step_u32 = 32;
-        t.ticks_remaining_u32 = 360;
+        MetricTask t{};
+        t.kind_u32 = (uint32_t)MetricKind::Game_EditorHook_CommandSurface;
+        t.label_utf8 = "Game_EditorHook_CommandSurface";
         sm->learning_gate.registry().enqueue_task(t);
     }
 
@@ -798,26 +828,23 @@ void SubstrateManager::ensure_lattice_gpu_() {
 
 void SubstrateManager::ensure_lattice_probe_gpu_() {
     if (!gpu_lattice_authoritative) return;
-    // Default sandbox 0.
-    const uint32_t sandbox_id = 0u;
-    if (sandbox_id >= EW_LEARNING_SANDBOX_MAX) return;
-    if (lattice_probe_gpu_[sandbox_id]) return;
+    if (lattice_probe_gpu_) return;
     // Deterministic learning sandbox lattice dimensions.
     // This lattice is used for parameter molding/evolution during metric fitting
     // and never perturbs the world lattice.
     const uint32_t gx = 32, gy = 32, gz = 32;
-    lattice_probe_gpu_[sandbox_id].reset(new EwFieldLatticeGpu(gx, gy, gz));
-    lattice_probe_gpu_[sandbox_id]->init(projection_seed ^ 0xC0FFEEULL);
+    lattice_probe_gpu_.reset(new EwFieldLatticeGpu(gx, gy, gz));
+    lattice_probe_gpu_->init(projection_seed ^ 0xC0FFEEULL);
     std::vector<uint8_t> dens((size_t)gx * (size_t)gy * (size_t)gz, 0u);
-    lattice_probe_gpu_[sandbox_id]->upload_density_mask_u8(dens.data(), dens.size());
+    lattice_probe_gpu_->upload_density_mask_u8(dens.data(), dens.size());
 
     // Bind probe lattice view for learning metric extraction.
     (void)genesis::ew_learning_bind_probe_lattice_cuda(
-        lattice_probe_gpu_[sandbox_id]->device_E_curr_f32(),
-        lattice_probe_gpu_[sandbox_id]->device_flux_f32(),
-        lattice_probe_gpu_[sandbox_id]->device_coherence_f32(),
-        lattice_probe_gpu_[sandbox_id]->device_curvature_f32(),
-        lattice_probe_gpu_[sandbox_id]->device_doppler_f32(),
+        lattice_probe_gpu_->device_E_curr_f32(),
+        lattice_probe_gpu_->device_flux_f32(),
+        lattice_probe_gpu_->device_coherence_f32(),
+        lattice_probe_gpu_->device_curvature_f32(),
+        lattice_probe_gpu_->device_doppler_f32(),
         (int)gx, (int)gy, (int)gz
     );
 }
@@ -837,17 +864,11 @@ EwFieldLatticeGpu* SubstrateManager::world_lattice_gpu_for_learning() {
     return lattice_gpu_.get();
 }
 
-EwFieldLatticeGpu* SubstrateManager::probe_lattice_gpu_for_learning(uint32_t sandbox_id_u32) {
+EwFieldLatticeGpu* SubstrateManager::probe_lattice_gpu_for_learning() {
     if (!gpu_lattice_authoritative) return nullptr;
     ensure_lattice_gpu_();
-    if (sandbox_id_u32 >= EW_LEARNING_SANDBOX_MAX) sandbox_id_u32 = 0u;
-    // Ensure the requested sandbox exists.
-    if (!lattice_probe_gpu_[sandbox_id_u32]) {
-        // For now, initialize only sandbox 0 deterministically; other ids alias to 0.
-        sandbox_id_u32 = 0u;
-        ensure_lattice_probe_gpu_();
-    }
-    return lattice_probe_gpu_[sandbox_id_u32].get();
+    ensure_lattice_probe_gpu_();
+    return lattice_probe_gpu_.get();
 }
 
 void SubstrateManager::ai_log_event(const EwAiActionEvent& e) {
@@ -2110,10 +2131,6 @@ void SubstrateManager::observe_text_line(const std::string& utf8_line) {
     const uint32_t f_code_u32 = (uint32_t)f_code;
     const uint64_t artifact_id_u64 = (static_cast<uint64_t>(byte_len_u32) << 32) | static_cast<uint64_t>(f_code_u32);
 
-
-    // Phase-amplitude current: every observation emits an activation footprint.
-    phase_current.on_activation(genesis::EwPhaseCurrent::footprint_from_text(canonical_tick, artifact_id_u64));
-
     const uint32_t stream_id_u32 = 1u;
     const uint32_t extractor_id_u32 = 1u; // UTF8 text
     const uint32_t trust_class_u32 = 1u;  // local user observation
@@ -2194,79 +2211,6 @@ void SubstrateManager::ui_submit_user_text_line(const std::string& utf8_line) {
             live_crawler.enqueue_url(url);
             emit_ui_line("GE_LIVE_CRAWL:seed url=" + url);
         }
-        return;
-    }
-
-    // User-updatable allowlist.
-    //  - /allowlist_reload (loads Draft Container/Corpus/allowlist_user.md if present)
-    //  - /allowlist_update <markdown...>  (inline markdown; bounded)
-    //  - allowlist_update: <markdown...>
-    if (utf8_line.rfind("/allowlist_reload", 0) == 0 || utf8_line.rfind("allowlist_reload:", 0) == 0) {
-        const bool ok = corpus_allowlist_load_user_file_if_present();
-        emit_ui_line(ok ? "ALLOWLIST_RELOADED" : "ALLOWLIST_RELOAD_NOFILE");
-        return;
-    }
-    if (utf8_line.rfind("/allowlist_update", 0) == 0 || utf8_line.rfind("allowlist_update:", 0) == 0) {
-        // Inline update: everything after first space (or after colon) is treated as markdown.
-        std::string md;
-        const size_t psp = utf8_line.find(' ');
-        const size_t pco = utf8_line.find(':');
-        size_t p = std::string::npos;
-        if (psp != std::string::npos) p = psp + 1;
-        else if (pco != std::string::npos) p = pco + 1;
-        if (p != std::string::npos && p < utf8_line.size()) {
-            md = utf8_line.substr(p);
-            while (!md.empty() && (md[0] == ' ' || md[0] == '\t')) md.erase(md.begin());
-        }
-        if (md.empty()) {
-            emit_ui_line("ALLOWLIST_UPDATE_EMPTY");
-        } else {
-            (void)corpus_allowlist_update_from_user_text(md);
-        }
-        return;
-    }
-
-    // Simulation snapshot + playback/injection.
-    //  - /sim_save name=foo
-    //  - /sim_play_loop name=foo
-    //  - /sim_play_live name=foo
-    if (utf8_line.rfind("/sim_save", 0) == 0 || utf8_line.rfind("sim_save:", 0) == 0) {
-        std::vector<std::string> toks;
-        ew::ew_split_shell_ascii(utf8_line, toks);
-        std::string name;
-        for (size_t i = 1; i < toks.size(); ++i) {
-            std::string_view k_sv, v_sv;
-            if (ew::ew_split_kv_token_ascii(std::string_view(toks[i]), k_sv, v_sv)) {
-                if (k_sv == "name") name = std::string(v_sv);
-            }
-        }
-        (void)sim_save_to_file(name);
-        return;
-    }
-    if (utf8_line.rfind("/sim_play_loop", 0) == 0 || utf8_line.rfind("sim_play_loop:", 0) == 0) {
-        std::vector<std::string> toks;
-        ew::ew_split_shell_ascii(utf8_line, toks);
-        std::string name;
-        for (size_t i = 1; i < toks.size(); ++i) {
-            std::string_view k_sv, v_sv;
-            if (ew::ew_split_kv_token_ascii(std::string_view(toks[i]), k_sv, v_sv)) {
-                if (k_sv == "name") name = std::string(v_sv);
-            }
-        }
-        (void)sim_load_from_file(name, true);
-        return;
-    }
-    if (utf8_line.rfind("/sim_play_live", 0) == 0 || utf8_line.rfind("sim_play_live:", 0) == 0) {
-        std::vector<std::string> toks;
-        ew::ew_split_shell_ascii(utf8_line, toks);
-        std::string name;
-        for (size_t i = 1; i < toks.size(); ++i) {
-            std::string_view k_sv, v_sv;
-            if (ew::ew_split_kv_token_ascii(std::string_view(toks[i]), k_sv, v_sv)) {
-                if (k_sv == "name") name = std::string(v_sv);
-            }
-        }
-        (void)sim_load_from_file(name, false);
         return;
     }
 
@@ -2382,479 +2326,6 @@ void SubstrateManager::set_lattice_projection_tag_ex(uint32_t lattice_sel_u32,
 }
 
 
-uint32_t SubstrateManager::ui_create_chat_anchor_from_text(const std::string& utf8_line) {
-#if defined(EW_ENABLE_UI_PARTITION) && (EW_ENABLE_UI_PARTITION==1)
-    // Bounded ring buffer (drop oldest deterministically).
-    if (ui_chat_q.size() >= UI_CHAT_CAP) ui_chat_q.pop_front();
-    ui_chat_q.push_back(utf8_line);
-
-    // Create a UI chat anchor as a dedicated partitioned anchor.
-    Anchor a{};
-    a.id = next_anchor_id_u32++;
-    a.kind_u32 = EW_ANCHOR_KIND_DEFAULT;
-    a.flags_u32 = (EW_ANCHOR_FLAG_UI_PARTITION | EW_ANCHOR_FLAG_CHAT_MESSAGE);
-    a.context_id_u32 = 0u;
-    a.crawler_id_u32 = 0u;
-    a.object_id_u64 = (uint64_t)a.id;
-    a.object_phase_seed_u64 = (uint64_t)a.id;
-
-    // Start "low coherence": chi_q is the observable we already use for confidence gating.
-    // Use a small, deterministic baseline rather than zero to avoid divide-by-zero behavior.
-    a.chi_q = (TURN_SCALE / 256);
-    a.theta_q = 0;
-    a.m_q = 0;
-    a.tau_q = 0;
-    a.tau_turns_q = 0;
-    a.curvature_q = 0;
-    a.doppler_q = 0;
-    a.last_theta_q = 0;
-    a.last_f_code = 0;
-    a.last_a_code = 0;
-    a.last_v_code = 0;
-    a.last_i_code = 0;
-    for (uint32_t k = 0; k < Anchor::HARMONICS_N; ++k) a.harmonics_q15[k] = 0;
-    a.harmonics_mean_q15 = 0;
-    a.harmonics_epoch_u32 = 0;
-    a.last_lnA_q32_32 = 0;
-    a.last_lnF_q32_32 = 0;
-
-    const uint32_t idx = (uint32_t)anchors.size();
-    anchors.push_back(a);
-    ancilla.push_back(ancilla_particle{});
-    // Ensure lane count matches anchor count (Blueprint requirement).
-    if (lanes.size() < anchors.size()) {
-        EwQubitLane lane{};
-        lanes.push_back(lane);
-    }
-
-    ui_anchor_indices.push_back(idx);
-    ui_last_chat_anchor_idx_u32 = idx;
-
-    // Feed the text into the crawler encoder path as a local observation so it becomes harmonics.
-    // This keeps all "meaning extraction" GPU/substrate-side.
-    crawler.enqueue_observation_utf8(
-        /*artifact_id*/ (uint64_t)idx,
-        /*target_anchor_id*/ idx,
-        /*crawler_anchor_id*/ 0u,
-        /*context_anchor_id*/ 0u,
-        /*stream_id*/ 0u,
-        /*extractor_id*/ 0u,
-        /*trust_class*/ 1u,
-        /*causal_tag*/ 0u,
-        /*domain*/ "local",
-        /*url*/ std::string("chat:") + std::to_string((uint64_t)idx),
-        /*utf8*/ utf8_line
-    );
-
-    // Spike global coherence deterministically from user input (attention).
-    // Trust for UI input is high but not absolute; keep bounded.
-    global_coherence.spike_from_user_input(canonical_tick_u64(), (uint32_t)utf8_line.size(), (uint16_t)24576);
-
-    return idx;
-#else
-    (void)utf8_line;
-    return 0u;
-#endif
-}
-
-
-bool SubstrateManager::corpus_allowlist_update_from_user_text(const std::string& allowlist_md_utf8) {
-    // Deterministic validation: bounded size + strict parser.
-    std::string s = allowlist_md_utf8;
-    if (s.size() > (size_t)128 * 1024) s.resize((size_t)128 * 1024);
-
-    GE_CorpusAllowlist tmp;
-    if (!GE_load_corpus_allowlist_from_md_text(s, tmp)) {
-        if (ui_out_q.size() < UI_OUT_CAP) ui_out_q.push_back("ALLOWLIST_UPDATE_REJECTED");
-        return false;
-    }
-
-    corpus_allowlist = tmp;
-    corpus_allowlist_loaded = true;
-    corpus_allowlist_user_md_utf8 = s;
-    corpus_allowlist_user_loaded = true;
-    domain_policies.build_from_allowlist(corpus_allowlist);
-
-    // Persist to disk (deterministic relpath under Draft Container).
-    {
-        const std::string rel = "Draft Container/Corpus/allowlist_user.md";
-        std::ofstream f(rel.c_str(), std::ios::binary);
-        if (f.good()) {
-            f.write(s.data(), (std::streamsize)s.size());
-            f.flush();
-        }
-    }
-
-    // Also persist as an inspector artifact for UI inspection/copy.
-    EwInspectorArtifact out{};
-    out.coord_coord9_u64 = ((uint64_t)canonical_tick << 1) ^ 0x414C4C57U; // 'ALLW'
-    out.kind_u32 = EW_ARTIFACT_TEXT;
-    out.rel_path = "Draft Container/Corpus/allowlist_user.md";
-    out.producer_tick_u64 = canonical_tick;
-    out.payload = s;
-    inspector_fields.upsert(out);
-
-    if (ui_out_q.size() < UI_OUT_CAP) ui_out_q.push_back("ALLOWLIST_UPDATE_OK");
-    return true;
-}
-
-
-bool SubstrateManager::corpus_allowlist_load_user_file_if_present() {
-    const std::string rel = "Draft Container/Corpus/allowlist_user.md";
-    std::ifstream f(rel.c_str(), std::ios::binary);
-    if (!f.good()) return false;
-    std::string s;
-    f.seekg(0, std::ios::end);
-    std::streampos n = f.tellg();
-    f.seekg(0, std::ios::beg);
-    if (n > (std::streampos)(128 * 1024)) n = (std::streampos)(128 * 1024);
-    s.resize((size_t)n);
-    if (n > 0) f.read(&s[0], n);
-    if (s.empty()) return false;
-    return corpus_allowlist_update_from_user_text(s);
-}
-
-
-static inline bool ew_write_i64(std::ostream& out, int64_t v) {
-    out.write(reinterpret_cast<const char*>(&v), sizeof(v));
-    return out.good();
-}
-static inline bool ew_read_i64(std::istream& in, int64_t& v) {
-    in.read(reinterpret_cast<char*>(&v), sizeof(v));
-    return in.good();
-}
-
-bool SubstrateManager::sim_save_to_file(const std::string& name_ascii) {
-    // Snapshot current state (same struct used by candidate/commit path).
-    EwState st;
-    st.canonical_tick = canonical_tick;
-    st.reservoir = reservoir;
-    st.boundary_scale_q32_32 = boundary_scale_q32_32;
-    st.anchors = anchors;
-    st.ancilla = ancilla;
-    st.lanes = lanes;
-    st.object_store = object_store;
-    st.materials_calib_done = materials_calib_done;
-    sim_snapshot = st;
-    sim_snapshot_valid = true;
-
-    // Persist.
-    std::string nm = name_ascii;
-    if (nm.empty()) nm = "default";
-    for (size_t i = 0; i < nm.size(); ++i) {
-        const unsigned char b = (unsigned char)nm[i];
-        const bool ok = (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_' || b == '-';
-        if (!ok) nm[i] = '_';
-    }
-    const std::string rel = std::string("Draft Container/Sim/sim_") + nm + ".bin";
-
-    // Ensure directory exists (best-effort; on failure we still keep in-memory snapshot).
-    (void)std::system("mkdir -p \"Draft Container/Sim\" 2>nul");
-
-    std::ofstream out(rel.c_str(), std::ios::binary);
-    if (!out.good()) {
-        emit_ui_line("SIM_SAVE_FAIL");
-        return false;
-    }
-    const uint32_t magic = 0x47455349U; // 'GESI'
-    const uint32_t ver = 1u;
-    out.write(reinterpret_cast<const char*>(&magic), sizeof(magic));
-    out.write(reinterpret_cast<const char*>(&ver), sizeof(ver));
-    if (!out.good()) return false;
-    // Core scalars
-    out.write(reinterpret_cast<const char*>(&st.canonical_tick), sizeof(st.canonical_tick));
-    if (!ew_write_i64(out, st.reservoir)) return false;
-    if (!ew_write_i64(out, st.boundary_scale_q32_32)) return false;
-    const uint32_t mc = st.materials_calib_done ? 1u : 0u;
-    out.write(reinterpret_cast<const char*>(&mc), sizeof(mc));
-
-    // Anchors
-    uint32_t na = (uint32_t)st.anchors.size();
-    out.write(reinterpret_cast<const char*>(&na), sizeof(na));
-    for (uint32_t i = 0; i < na; ++i) {
-        const Anchor& a = st.anchors[i];
-        // Serialize a stable subset + neighbors.
-        out.write(reinterpret_cast<const char*>(&a.id), sizeof(a.id));
-        out.write(reinterpret_cast<const char*>(&a.kind_u32), sizeof(a.kind_u32));
-        out.write(reinterpret_cast<const char*>(&a.flags_u32), sizeof(a.flags_u32));
-        out.write(reinterpret_cast<const char*>(&a.context_id_u32), sizeof(a.context_id_u32));
-        out.write(reinterpret_cast<const char*>(&a.crawler_id_u32), sizeof(a.crawler_id_u32));
-        out.write(reinterpret_cast<const char*>(&a.object_id_u64), sizeof(a.object_id_u64));
-        out.write(reinterpret_cast<const char*>(&a.object_phase_seed_u64), sizeof(a.object_phase_seed_u64));
-        out.write(reinterpret_cast<const char*>(&a.theta_q), sizeof(a.theta_q));
-        out.write(reinterpret_cast<const char*>(&a.chi_q), sizeof(a.chi_q));
-        out.write(reinterpret_cast<const char*>(&a.m_q), sizeof(a.m_q));
-        out.write(reinterpret_cast<const char*>(&a.tau_q), sizeof(a.tau_q));
-        out.write(reinterpret_cast<const char*>(&a.curvature_q), sizeof(a.curvature_q));
-        out.write(reinterpret_cast<const char*>(&a.doppler_q), sizeof(a.doppler_q));
-        out.write(reinterpret_cast<const char*>(&a.harmonics_mean_q15), sizeof(a.harmonics_mean_q15));
-        out.write(reinterpret_cast<const char*>(&a.harmonics_epoch_u32), sizeof(a.harmonics_epoch_u32));
-        out.write(reinterpret_cast<const char*>(&a.last_lnA_q32_32), sizeof(a.last_lnA_q32_32));
-        out.write(reinterpret_cast<const char*>(&a.last_lnF_q32_32), sizeof(a.last_lnF_q32_32));
-        // Harmonics
-        for (uint32_t k = 0; k < Anchor::HARMONICS_N; ++k) {
-            out.write(reinterpret_cast<const char*>(&a.harmonics_q15[k]), sizeof(a.harmonics_q15[k]));
-        }
-        // Neighbors
-        uint32_t nn = (uint32_t)a.neighbors.size();
-        if (nn > 1024u) nn = 1024u;
-        out.write(reinterpret_cast<const char*>(&nn), sizeof(nn));
-        for (uint32_t k = 0; k < nn; ++k) {
-            const uint32_t nid = a.neighbors[k];
-            out.write(reinterpret_cast<const char*>(&nid), sizeof(nid));
-        }
-        if (!out.good()) return false;
-    }
-
-    // Ancilla particles
-    uint32_t np = (uint32_t)st.ancilla.size();
-    out.write(reinterpret_cast<const char*>(&np), sizeof(np));
-    if (np) {
-        out.write(reinterpret_cast<const char*>(st.ancilla.data()), (std::streamsize)(np * sizeof(ancilla_particle)));
-        if (!out.good()) return false;
-    }
-
-    // Lanes
-    uint32_t nl = (uint32_t)st.lanes.size();
-    out.write(reinterpret_cast<const char*>(&nl), sizeof(nl));
-    if (nl) {
-        out.write(reinterpret_cast<const char*>(st.lanes.data()), (std::streamsize)(nl * sizeof(EwQubitLane)));
-        if (!out.good()) return false;
-    }
-
-    // Object store
-    if (!st.object_store.serialize_binary(out)) return false;
-
-    emit_ui_line(std::string("SIM_SAVED ") + rel);
-    return true;
-}
-
-bool SubstrateManager::sim_load_from_file(const std::string& name_ascii, bool play_loop) {
-    std::string nm = name_ascii;
-    if (nm.empty()) nm = "default";
-    for (size_t i = 0; i < nm.size(); ++i) {
-        const unsigned char b = (unsigned char)nm[i];
-        const bool ok = (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_' || b == '-';
-        if (!ok) nm[i] = '_';
-    }
-    const std::string rel = std::string("Draft Container/Sim/sim_") + nm + ".bin";
-    std::ifstream in(rel.c_str(), std::ios::binary);
-    if (!in.good()) {
-        emit_ui_line("SIM_LOAD_NOFILE");
-        return false;
-    }
-    uint32_t magic = 0, ver = 0;
-    in.read(reinterpret_cast<char*>(&magic), sizeof(magic));
-    in.read(reinterpret_cast<char*>(&ver), sizeof(ver));
-    if (!in.good() || magic != 0x47455349U || ver != 1u) {
-        emit_ui_line("SIM_LOAD_BAD_HEADER");
-        return false;
-    }
-    EwState st;
-    in.read(reinterpret_cast<char*>(&st.canonical_tick), sizeof(st.canonical_tick));
-    if (!ew_read_i64(in, st.reservoir)) return false;
-    if (!ew_read_i64(in, st.boundary_scale_q32_32)) return false;
-    uint32_t mc = 0;
-    in.read(reinterpret_cast<char*>(&mc), sizeof(mc));
-    st.materials_calib_done = (mc != 0u);
-
-    uint32_t na = 0;
-    in.read(reinterpret_cast<char*>(&na), sizeof(na));
-    if (na > 200000u) return false;
-    st.anchors.resize(na);
-    for (uint32_t i = 0; i < na; ++i) {
-        Anchor a{};
-        in.read(reinterpret_cast<char*>(&a.id), sizeof(a.id));
-        in.read(reinterpret_cast<char*>(&a.kind_u32), sizeof(a.kind_u32));
-        in.read(reinterpret_cast<char*>(&a.flags_u32), sizeof(a.flags_u32));
-        in.read(reinterpret_cast<char*>(&a.context_id_u32), sizeof(a.context_id_u32));
-        in.read(reinterpret_cast<char*>(&a.crawler_id_u32), sizeof(a.crawler_id_u32));
-        in.read(reinterpret_cast<char*>(&a.object_id_u64), sizeof(a.object_id_u64));
-        in.read(reinterpret_cast<char*>(&a.object_phase_seed_u64), sizeof(a.object_phase_seed_u64));
-        in.read(reinterpret_cast<char*>(&a.theta_q), sizeof(a.theta_q));
-        in.read(reinterpret_cast<char*>(&a.chi_q), sizeof(a.chi_q));
-        in.read(reinterpret_cast<char*>(&a.m_q), sizeof(a.m_q));
-        in.read(reinterpret_cast<char*>(&a.tau_q), sizeof(a.tau_q));
-        in.read(reinterpret_cast<char*>(&a.curvature_q), sizeof(a.curvature_q));
-        in.read(reinterpret_cast<char*>(&a.doppler_q), sizeof(a.doppler_q));
-        in.read(reinterpret_cast<char*>(&a.harmonics_mean_q15), sizeof(a.harmonics_mean_q15));
-        in.read(reinterpret_cast<char*>(&a.harmonics_epoch_u32), sizeof(a.harmonics_epoch_u32));
-        in.read(reinterpret_cast<char*>(&a.last_lnA_q32_32), sizeof(a.last_lnA_q32_32));
-        in.read(reinterpret_cast<char*>(&a.last_lnF_q32_32), sizeof(a.last_lnF_q32_32));
-        for (uint32_t k = 0; k < Anchor::HARMONICS_N; ++k) {
-            in.read(reinterpret_cast<char*>(&a.harmonics_q15[k]), sizeof(a.harmonics_q15[k]));
-        }
-        uint32_t nn = 0;
-        in.read(reinterpret_cast<char*>(&nn), sizeof(nn));
-        if (nn > 1024u) return false;
-        a.neighbors.resize(nn);
-        for (uint32_t k = 0; k < nn; ++k) {
-            uint32_t nid = 0;
-            in.read(reinterpret_cast<char*>(&nid), sizeof(nid));
-            a.neighbors[k] = nid;
-        }
-        if (!in.good()) return false;
-        a.sync_basis9_from_core();
-        st.anchors[i] = a;
-    }
-
-    uint32_t np = 0;
-    in.read(reinterpret_cast<char*>(&np), sizeof(np));
-    if (np > 200000u) return false;
-    st.ancilla.resize(np);
-    if (np) {
-        in.read(reinterpret_cast<char*>(st.ancilla.data()), (std::streamsize)(np * sizeof(ancilla_particle)));
-        if (!in.good()) return false;
-    }
-
-    uint32_t nl = 0;
-    in.read(reinterpret_cast<char*>(&nl), sizeof(nl));
-    if (nl > 200000u) return false;
-    st.lanes.resize(nl);
-    if (nl) {
-        in.read(reinterpret_cast<char*>(st.lanes.data()), (std::streamsize)(nl * sizeof(EwQubitLane)));
-        if (!in.good()) return false;
-    }
-
-    if (!st.object_store.deserialize_binary(in)) {
-        emit_ui_line("SIM_LOAD_OBJECT_STORE_FAIL");
-        return false;
-    }
-
-    // Apply to live runtime.
-    reservoir = st.reservoir;
-    boundary_scale_q32_32 = st.boundary_scale_q32_32;
-    anchors = st.anchors;
-    ancilla = st.ancilla;
-    lanes = st.lanes;
-    object_store = st.object_store;
-    materials_calib_done = st.materials_calib_done;
-    // Ensure topology vectors are sized.
-    const uint32_t need = (uint32_t)anchors.size();
-    if (redirect_to.size() < need) redirect_to.resize(need, 0u);
-    if (split_child_a.size() < need) split_child_a.resize(need, 0u);
-    if (split_child_b.size() < need) split_child_b.resize(need, 0u);
-    next_anchor_id_u32 = (uint32_t)anchors.size();
-
-    // Snapshot for loop playback.
-    sim_snapshot = st;
-    sim_snapshot_valid = true;
-    sim_play_loop_enabled = play_loop;
-    sim_play_loop_start_tick_u64 = canonical_tick_u64();
-
-    emit_ui_line(play_loop ? "SIM_PLAY_LOOP" : "SIM_PLAY_LIVE");
-    return true;
-}
-
-
-uint32_t SubstrateManager::ui_create_anchor_from_chat_seed(uint32_t chat_anchor_idx_u32, uint16_t resonance_q15) {
-#if defined(EW_ENABLE_UI_PARTITION) && (EW_ENABLE_UI_PARTITION==1)
-    if (chat_anchor_idx_u32 >= anchors.size()) return 0u;
-
-    Anchor a{};
-    a.id = next_anchor_id_u32++;
-    a.kind_u32 = EW_ANCHOR_KIND_CONTEXT_ROOT;
-    a.flags_u32 = EW_ANCHOR_FLAG_UI_PARTITION;
-    a.context_id_u32 = anchors[chat_anchor_idx_u32].id;
-    a.crawler_id_u32 = 0u;
-    a.object_id_u64 = (uint64_t)a.id;
-    a.object_phase_seed_u64 = (uint64_t)a.id;
-
-    // Start at low coherence, then bump based on resonance.
-    // resonance_q15 is [0..32768].
-    const int64_t base = (TURN_SCALE / 256);
-    const int64_t bump = (int64_t)(((__int128)TURN_SCALE * (int64_t)resonance_q15) / (int64_t)32768 / 64); // max ~TURN/64
-    a.chi_q = base + bump;
-    a.theta_q = 0;
-    a.m_q = 0;
-    a.tau_q = 0;
-    a.tau_turns_q = 0;
-    a.curvature_q = 0;
-    a.doppler_q = 0;
-    a.last_theta_q = 0;
-    a.last_f_code = 0;
-    a.last_a_code = 0;
-    a.last_v_code = 0;
-    a.last_i_code = 0;
-    for (uint32_t k = 0; k < Anchor::HARMONICS_N; ++k) a.harmonics_q15[k] = 0;
-    a.harmonics_mean_q15 = 0;
-    a.harmonics_epoch_u32 = 0;
-    a.last_lnA_q32_32 = 0;
-    a.last_lnF_q32_32 = 0;
-
-    const uint32_t idx = (uint32_t)anchors.size();
-    anchors.push_back(a);
-    ancilla.push_back(ancilla_particle{});
-    if (lanes.size() < anchors.size()) {
-        EwQubitLane lane{};
-        lanes.push_back(lane);
-    }
-
-    ui_anchor_indices.push_back(idx);
-    // Target subsequent live crawl observations to this new training anchor.
-    ui_livecrawl_target_anchor_idx_u32 = idx;
-
-    // Also seed a plan packet so automation can chain immediately.
-    genesis::AutoArtifact plan{};
-    plan.kind = genesis::AutoArtifactKind::PlanPacket;
-    plan.created_tick_u64 = canonical_tick_u64();
-    plan.lane_u32 = 0u;
-    plan.payload_utf8 = "{\"plan\":\"ui_seed\",\"source\":\"chat\",\"tol_percent\":6}";
-    learning_automation.bus().push(plan);
-
-    return idx;
-#else
-    (void)chat_anchor_idx_u32; (void)resonance_q15;
-    return 0u;
-#endif
-}
-
-
-void SubstrateManager::ui_maybe_enqueue_crawl_seeds_from_text(const std::string& utf8_line) {
-    // Only act when live crawl is enabled and consent is granted.
-    if (crawler_enable_live_u32 == 0u || crawler_live_consent_required_u32 != 0u) {
-        emit_ui_line("AUTO_CRAWL_BLOCKED: live crawl disabled or consent required");
-        return;
-    }
-    // Extract any explicit http://... tokens first.
-    std::vector<std::string> toks;
-    ew::ew_split_shell_ascii(utf8_line, toks);
-    bool saw = false;
-    for (const auto& t : toks) {
-        if (t.rfind("http://", 0) == 0) {
-            live_crawler.enqueue_url(t);
-            saw = true;
-        }
-    }
-    if (saw) return;
-
-    // No explicit URL provided; deterministically choose one allowed domain root
-    // from domain policies as a "topic-general" seed.
-    // This keeps automation moving without guessing arbitrary external sites.
-    uint64_t acc = 1469598103934665603ULL;
-    for (size_t i = 0; i < utf8_line.size(); ++i) {
-        acc ^= (uint8_t)utf8_line[i];
-        acc *= 1099511628211ULL;
-    }
-    const size_t n = domain_policies.rows.size();
-    if (n == 0) {
-        emit_ui_line("AUTO_CRAWL_BLOCKED: no domain policies loaded");
-        return;
-    }
-    const size_t start = (size_t)(acc % (uint64_t)n);
-    for (size_t k = 0; k < n; ++k) {
-        const size_t idx = (start + k) % n;
-        const auto& r = domain_policies.rows[idx];
-        if (r.offline_only) continue;
-        if (!r.allow_http) continue;
-        live_crawler.enqueue_url(std::string("http://") + r.domain_ascii + "/");
-        emit_ui_line(std::string("AUTO_CRAWL_SEED: domain=") + r.domain_ascii);
-        return;
-    }
-    emit_ui_line("AUTO_CRAWL_BLOCKED: no http-allowed domains");
-}
-
-
 void SubstrateManager::emit_ui_line(const std::string& utf8_line) {
     if (ui_out_q.size() < UI_OUT_CAP) {
         ui_out_q.push_back(utf8_line);
@@ -2865,171 +2336,6 @@ bool SubstrateManager::ui_pop_output_text(std::string& out_utf8) {
     if (ui_out_q.empty()) return false;
     out_utf8 = ui_out_q.front();
     ui_out_q.pop_front();
-    return true;
-}
-
-bool SubstrateManager::export_object_bundle(uint64_t object_id_u64,
-                                            const std::string& out_dir_utf8,
-                                            std::string* out_report_utf8) const {
-    auto rep = [&](const std::string& s){ if (out_report_utf8) { out_report_utf8->append(s); out_report_utf8->push_back('\n'); } };
-
-    const EwObjectEntry* e = object_store.find(object_id_u64);
-    if (!e) {
-        rep("EXPORT:missing_object");
-        return false;
-    }
-
-    EwVoxelVolumeView vv;
-    if (!object_store.view_voxel_volume(object_id_u64, vv) || !vv.bytes || vv.byte_count == 0) {
-        rep("EXPORT:missing_voxel_volume");
-        return false;
-    }
-
-    // Ensure output directory exists.
-    std::error_code ec;
-    std::filesystem::create_directories(out_dir_utf8, ec);
-    if (ec) {
-        rep(std::string("EXPORT:mkdir_failed:") + ec.message());
-        return false;
-    }
-
-    // Build standard shell mesh from voxels (auto-topologize).
-    genesis::EwMeshV1 shell;
-    if (!genesis::ge_build_shell_mesh_from_voxels(/*subdiv*/5u,
-                                                  vv.grid_x_u32, vv.grid_y_u32, vv.grid_z_u32,
-                                                  vv.bytes,
-                                                  /*thr*/16u,
-                                                  shell)) {
-        rep("EXPORT:shell_build_failed");
-        return false;
-    }
-
-    const std::string mesh_path = (std::filesystem::path(out_dir_utf8) / "mesh_shell.ewmesh").u8string();
-    if (!genesis::ewmesh_write_v1(mesh_path, shell)) {
-        rep("EXPORT:write_mesh_failed");
-        return false;
-    }
-
-    // UV atlas
-    uint32_t aw=0, ah=0, af=0;
-    const uint8_t* atlas_bytes = nullptr;
-    size_t atlas_n = 0;
-    if (!object_store.view_uv_atlas(object_id_u64, aw, ah, af, atlas_bytes, atlas_n) || !atlas_bytes || atlas_n == 0) {
-        rep("EXPORT:missing_uv_atlas");
-        return false;
-    }
-    const std::string atlas_path = (std::filesystem::path(out_dir_utf8) / "uv_atlas.rgba8").u8string();
-    {
-        std::ofstream f(atlas_path, std::ios::binary);
-        if (!f) { rep("EXPORT:write_uv_atlas_failed"); return false; }
-        f.write((const char*)atlas_bytes, (std::streamsize)atlas_n);
-    }
-
-    // Also export a viewable diffuse texture derived from the UV atlas for universal formats.
-    // Deterministic: uncompressed 32bpp TGA (BGRA) named uv_atlas.tga.
-    const std::string atlas_tga_rel = "uv_atlas.tga";
-    const std::string atlas_tga_path = (std::filesystem::path(out_dir_utf8) / atlas_tga_rel).u8string();
-    {
-        // TGA header.
-        uint8_t hdr[18];
-        std::memset(hdr, 0, sizeof(hdr));
-        hdr[2] = 2; // uncompressed true-color
-        hdr[12] = (uint8_t)(aw & 0xFF);
-        hdr[13] = (uint8_t)((aw >> 8) & 0xFF);
-        hdr[14] = (uint8_t)(ah & 0xFF);
-        hdr[15] = (uint8_t)((ah >> 8) & 0xFF);
-        hdr[16] = 32;
-        hdr[17] = 8;
-
-        std::ofstream f(atlas_tga_path, std::ios::binary | std::ios::trunc);
-        if (!f) { rep("EXPORT:write_uv_tga_failed"); return false; }
-        f.write((const char*)hdr, 18);
-        // Convert RGBA->BGRA.
-        for (size_t i = 0; i + 3 < atlas_n; i += 4) {
-            uint8_t bgra[4];
-            bgra[0] = atlas_bytes[i + 2];
-            bgra[1] = atlas_bytes[i + 1];
-            bgra[2] = atlas_bytes[i + 0];
-            bgra[3] = atlas_bytes[i + 3];
-            f.write((const char*)bgra, 4);
-        }
-        if (!f.good()) { rep("EXPORT:write_uv_tga_failed"); return false; }
-    }
-
-    // Universal export: write FBX using Assimp, using the shell mesh and atlas texture.
-    // This makes exported assets portable while keeping the substrate-native UV atlas variables.
-    const std::string fbx_path = (std::filesystem::path(out_dir_utf8) / "mesh_shell.fbx").u8string();
-    {
-        std::string repx;
-        if (!genesis::assimp_export_ewmesh_v1_single_material(shell, fbx_path, "fbx", atlas_tga_rel, &repx)) {
-            rep("EXPORT:fbx_export_failed");
-            if (out_report_utf8) out_report_utf8->append(repx);
-            return false;
-        }
-        if (out_report_utf8) out_report_utf8->append(repx);
-    }
-    const std::string atlas_meta_path = (std::filesystem::path(out_dir_utf8) / "uv_atlas.json").u8string();
-    {
-        std::ofstream f(atlas_meta_path, std::ios::binary);
-        if (!f) { rep("EXPORT:write_uv_meta_failed"); return false; }
-        f << "{\n";
-        f << "  \"width\": " << aw << ",\n";
-        f << "  \"height\": " << ah << ",\n";
-        f << "  \"format\": \"RGBA8_UNORM\",\n";
-        f << "  \"channels\": {\n";
-        f << "    \"R\": \"density_occupancy_u8\",\n";
-        f << "    \"G\": \"coherence_proxy_u8\",\n";
-        f << "    \"B\": \"curvature_proxy_u8\",\n";
-        f << "    \"A\": \"object_id_lo_u8\"\n";
-        f << "  }\n";
-        f << "}\n";
-    }
-
-    // Material animation: single keyframe (deterministic baseline).
-    // When deformation clips are later recorded, this file extends to a sequence.
-    const std::string mat_anim_path = (std::filesystem::path(out_dir_utf8) / "material_anim.json").u8string();
-    {
-        // Derive a stable emissive scalar from mean density.
-        uint64_t sum = 0;
-        for (size_t i = 0; i < atlas_n; i += 4) sum += atlas_bytes[i];
-        const double mean = (atlas_n > 0) ? ((double)sum / (double)(atlas_n/4u)) : 0.0;
-        const double emiss = mean / 255.0;
-        std::ofstream f(mat_anim_path, std::ios::binary);
-        if (!f) { rep("EXPORT:write_mat_anim_failed"); return false; }
-        f << "{\n";
-        f << "  \"object_id_u64\": " << (unsigned long long)object_id_u64 << ",\n";
-        f << "  \"track\": [\n";
-        f << "    { \"t\": 0.0, \"emissive\": " << emiss << " }\n";
-        f << "  ]\n";
-        f << "}\n";
-    }
-
-    const std::string manifest_path = (std::filesystem::path(out_dir_utf8) / "export_manifest.json").u8string();
-    {
-        std::ofstream f(manifest_path, std::ios::binary);
-        if (!f) { rep("EXPORT:write_manifest_failed"); return false; }
-        f << "{\n";
-        f << "  \"object_id_u64\": " << (unsigned long long)object_id_u64 << ",\n";
-        f << "  \"label_utf8\": \"";
-        for (char c : e->label_utf8) {
-            if (c == '"') f << "\\\"";
-            else if (c == '\\') f << "\\\\";
-            else if ((unsigned char)c < 0x20) f << "?";
-            else f << c;
-        }
-        f << "\",\n";
-        f << "  \"files\": {\n";
-        f << "    \"mesh\": \"mesh_shell.ewmesh\",\n";
-        f << "    \"mesh_fbx\": \"mesh_shell.fbx\",\n";
-        f << "    \"uv_atlas\": \"uv_atlas.rgba8\",\n";
-        f << "    \"uv_atlas_tga\": \"uv_atlas.tga\",\n";
-        f << "    \"uv_atlas_meta\": \"uv_atlas.json\",\n";
-        f << "    \"material_anim\": \"material_anim.json\"\n";
-        f << "  }\n";
-        f << "}\n";
-    }
-
-    rep("EXPORT:OK");
     return true;
 }
 
@@ -3599,23 +2905,13 @@ UE marketplace (not necessarily free/open):
 - `gutenberg.org`, `si.edu`, `3d.si.edu`, `science.nasa.gov/3d-resources/`
 )EW_ALLOWLISTX";
 void SubstrateManager::corpus_crawl_start_neuralis_corpus_default() {
-    // Prefer user-updated allowlist if present.
-    // This keeps the allowlist user-updatable without weakening enforcement.
-    if (!corpus_allowlist_user_loaded) {
-        (void)corpus_allowlist_load_user_file_if_present();
-    }
-
     // Start strictly allowlisted crawls in parallel sessions.
     // Session layout:
     //  0: general allowlist hosts
     //  1: publisher targets (license-gated ingestion profile)
     //  2: US patent targets
     //  3: US trademark + copyright targets (separate endpoints, same scheduling caps)
-    if (corpus_allowlist_user_loaded && !corpus_allowlist_user_md_utf8.empty()) {
-        corpus_crawl_start_from_allowlist_text(corpus_allowlist_user_md_utf8);
-    } else {
-        corpus_crawl_start_from_allowlist_text(std::string(EW_NEURALIS_CORPUS_ALLOWLIST_MD_UTF8));
-    }
+    corpus_crawl_start_from_allowlist_text(std::string(EW_NEURALIS_CORPUS_ALLOWLIST_MD_UTF8));
 
     auto start_session = [&](uint32_t slot, uint32_t profile_u32, const std::vector<std::pair<std::string,std::string>>& host_paths, const char* label) {
         if (slot >= EW_CRAWL_SESSION_MAX) return;
@@ -4388,23 +3684,6 @@ static inline void ew_execute_operator_packets_v1(SubstrateManager* sm) {
 
 void SubstrateManager::tick() {
     const uint64_t prev_tick_u64 = canonical_tick;
-
-    // Loop playback: restore snapshot before any evolution so the world repeats deterministically.
-    if (sim_play_loop_enabled && sim_snapshot_valid) {
-        reservoir = sim_snapshot.reservoir;
-        boundary_scale_q32_32 = sim_snapshot.boundary_scale_q32_32;
-        anchors = sim_snapshot.anchors;
-        ancilla = sim_snapshot.ancilla;
-        lanes = sim_snapshot.lanes;
-        object_store = sim_snapshot.object_store;
-        materials_calib_done = sim_snapshot.materials_calib_done;
-        // Keep topology vectors sized.
-        const uint32_t need = (uint32_t)anchors.size();
-        if (redirect_to.size() < need) redirect_to.resize(need, 0u);
-        if (split_child_a.size() < need) split_child_a.resize(need, 0u);
-        if (split_child_b.size() < need) split_child_b.resize(need, 0u);
-        next_anchor_id_u32 = (uint32_t)anchors.size();
-    }
     // Optional live crawler: emits observations into crawler queue (http-only).
     if (crawler_enable_live_u32 != 0u && crawler_live_consent_required_u32 == 0u) {
         live_crawler.enabled = true;
@@ -4431,62 +3710,6 @@ void SubstrateManager::tick() {
     learning_gate.tick(this);
 
     // ------------------------------------------------------------------
-    // Global coherence update (deterministic)
-    //
-    // Global coherence is the only gate for AI output. It aggregates:
-    //  - language/intention learning progress (stage0 checkpoints)
-    //  - physics substrate coherence (lattice probe device coherence)
-    //  - crawl evidence stability (manifest records present)
-    //  - experiment/metric acceptance stability (learning gate)
-    // ------------------------------------------------------------------
-    {
-        // Language coherence: fraction of required stage0 bits completed.
-        uint16_t lang_q15 = 0;
-        const uint64_t need0 = learning_stage_required_mask_u64[0];
-        const uint64_t have0 = learning_stage_completed_mask_u64[0];
-        if (need0 != 0ULL) {
-            const uint32_t need_cnt = (uint32_t)__builtin_popcountll(need0);
-            const uint32_t have_cnt = (uint32_t)__builtin_popcountll(have0 & need0);
-            if (need_cnt > 0) {
-                lang_q15 = (uint16_t)((int32_t)32768 * (int32_t)have_cnt / (int32_t)need_cnt);
-            }
-        }
-
-        // Physics coherence: a deterministic availability proxy.
-        // A full device-side coherence reduction is bound by the learning
-        // probe metric path when CUDA is enabled.
-        uint16_t phys_q15 = lattice_probe_gpu_[0] ? (uint16_t)16384 : 0;
-
-        // Crawl coherence: whether we have any admitted records in manifest.
-        uint16_t crawl_q15 = 0;
-        if (manifest_records.size() >= 4) crawl_q15 = 16384;
-        if (manifest_records.size() >= 16) crawl_q15 = 24576;
-        if (manifest_records.size() >= 64) crawl_q15 = 32768;
-
-        // Experiment coherence: acceptance ratio over recent tasks (bounded window).
-        uint16_t exp_q15 = 0;
-        {
-            const auto& done = learning_gate.registry().completed();
-            const size_t win = 32;
-            size_t a = (done.size() > win) ? (done.size() - win) : 0;
-            uint32_t tot = 0, acc = 0;
-            for (size_t i = a; i < done.size(); ++i) {
-                tot++;
-                if (done[i].accepted) acc++;
-            }
-            if (tot > 0) exp_q15 = (uint16_t)((int32_t)32768 * (int32_t)acc / (int32_t)tot);
-        }
-
-        global_coherence.update(canonical_tick_u64(), lang_q15, phys_q15, crawl_q15, exp_q15);
-        // Leak slowly each tick to prevent runaway. 1/4096 per tick.
-        global_coherence.leak(canonical_tick_u64(), (uint16_t)8);
-    }
-
-    // Canonical object ancilla update (bounded fan-out) BEFORE physics evolution.
-    // This is the only authority path for object registry/coupling updates.
-    genesis::EwObjectAncilla::tick_object_updates(this, 2u);
-
-    // ------------------------------------------------------------------
     // Curriculum stage advancement (deterministic)
     //
     // Process newly completed metric tasks and advance the curriculum stage
@@ -4505,10 +3728,6 @@ void SubstrateManager::tick() {
         while (learning_completed_cursor_u32 < (uint32_t)done.size()) {
             const genesis::MetricTask& t = done[(size_t)learning_completed_cursor_u32++];
             if (!t.accepted) continue;
-
-
-            // Phase-amplitude current: accepted measurable results reinforce region current.
-            phase_current.on_activation(genesis::EwPhaseCurrent::footprint_from_metric(canonical_tick, (uint32_t)t.target.kind));
 
             // Map accepted metric kind -> curriculum stage bucket deterministically.
             // Stage buckets align with GENESIS_CURRICULUM_STAGE_COUNT.
@@ -4562,73 +3781,6 @@ void SubstrateManager::tick() {
     }
 
     // ------------------------------------------------------------------
-    // Learning automation (artifact-driven, event-based)
-    // ------------------------------------------------------------------
-    learning_automation.init_once(this);
-    learning_automation.tick(this);
-
-
-// ------------------------------------------------------------------
-// Phase-amplitude current actuation (bounded)
-//
-// Current accumulates from activation resonance and discharges into
-// measurable substrate experiments (no hidden side effects).
-// ------------------------------------------------------------------
-{
-    uint32_t top_keys[8] = {};
-    uint16_t top_amp[8] = {};
-    const uint32_t n = phase_current.top_regions(8u, top_keys, top_amp);
-
-    // Hard caps: at most 1 experiment launch per tick.
-    const uint16_t AMP_LAUNCH_THRESH_Q15 = (uint16_t)(32767 / 8); // 12.5%
-    bool launched = false;
-
-    for (uint32_t i = 0; i < n && !launched; ++i) {
-        const uint32_t rk = top_keys[i];
-        const uint16_t a = top_amp[i];
-        if (a < AMP_LAUNCH_THRESH_Q15) continue;
-
-        // Respect curriculum gates: require at least Stage 0 (language) for experiments.
-        if (learning_curriculum_stage_u32 < 0u) break;
-
-        // Map region key to a stable probe origin (small deterministic mapping).
-        EigenWare::EwExperimentRequest req;
-        req.name = "probe_isolate";
-        req.micro_ticks_u32 = 64u;
-        req.tag_render = false;
-
-        req.origin_x_u32 = (rk      ) & 63u;
-        req.origin_y_u32 = (rk >> 6 ) & 63u;
-        req.origin_z_u32 = (rk >> 12) & 63u;
-
-        // Pattern kind/radius derived from current bins via region state.
-        const auto& rr = phase_current.region(rk);
-        req.pattern_kind_u32 = (uint32_t)(1u + (rr.ring_bins_u16[0] % 3u)); // 1..3
-        req.pattern_radius_u32 = (uint32_t)(2u + (rr.ring_bins_u16[1] % 6u)); // 2..7
-
-        // Deterministic amplitude from current.
-        req.amp_q32_32 = (int64_t)((uint64_t)a << 17); // q15 -> q32.32-ish scale
-
-        std::vector<std::vector<uint8_t>> packets;
-        if (EigenWare::ew_compile_experiment_to_operator_packets(req, packets)) {
-            for (size_t pi = 0; pi < packets.size(); ++pi) {
-                submit_operator_packet_v1(packets[pi].data(), packets[pi].size());
-            }
-            // Discharge proportional to work launched.
-            phase_current.discharge(rk, (uint16_t)(a >> 1));
-            launched = true;
-
-            // Observability
-            emit_ui_line(std::string("PHASE_CURRENT_LAUNCH probe_isolate region=") + std::to_string((unsigned long long)rk) +
-                         " amp_q15=" + std::to_string((unsigned long long)a));
-        } else {
-            // If compile fails, cool the region to avoid oscillation.
-            phase_current.discharge(rk, (uint16_t)(a >> 2));
-        }
-    }
-}
-
-// ------------------------------------------------------------------
     // Global carrier hum: re-admit last tick's emitted carrier pulses as
     // inbound pulses for this tick.
     //
@@ -6296,64 +5448,6 @@ ctx.envelope_headroom_q32_32 = clamp01_q32_32(ctx.envelope_headroom_q32_32);
         // Set lattice dt from canonical tick dt.
         const float dt_s = (float)((double)tick_dt_seconds_q32_32 / 4294967296.0);
         if (lattice_gpu_) lattice_gpu_->set_dt_seconds(dt_s);
-// Rebuild world density mask from synthesized object voxel volumes.
-// This makes object↔global coupling spatial (same lattice), not just anchor-id addressing.
-if (lattice_gpu_) {
-    const uint32_t gx = lattice_gpu_->grid_x();
-    const uint32_t gy = lattice_gpu_->grid_y();
-    const uint32_t gz = lattice_gpu_->grid_z();
-    const size_t n = (size_t)gx * (size_t)gy * (size_t)gz;
-    std::vector<uint8_t> dens;
-    dens.assign(n, 0u);
-
-    auto q32_32_to_i32_round = [](uint64_t q)->int32_t {
-        const int64_t s = (int64_t)q;
-        // Round toward nearest: add 0.5 in Q32.32 then shift.
-        const int64_t r = (s >= 0) ? (s + (1ll << 31)) : (s - (1ll << 31));
-        return (int32_t)(r >> 32);
-    };
-
-    std::vector<uint64_t> ids;
-    object_store.list_object_ids_sorted(ids);
-    for (size_t oi = 0; oi < ids.size(); ++oi) {
-        const uint64_t oid = ids[oi];
-        const EwObjectEntry* e = object_store.find(oid);
-        if (!e) continue;
-
-        EwVoxelVolumeView vv;
-        if (!object_store.view_voxel_volume(oid, vv)) continue;
-        if (vv.format_u32 != 1u || !vv.bytes || vv.byte_count == 0) continue;
-
-        // Deterministic placement: center at geomcoord9[0..2] (Q32.32), mapped 1 cell per 1 unit.
-        const int32_t cx = q32_32_to_i32_round(e->geomcoord9_u64x9.u64x9[0]) + (int32_t)(gx / 2u);
-        const int32_t cy = q32_32_to_i32_round(e->geomcoord9_u64x9.u64x9[1]) + (int32_t)(gy / 2u);
-        const int32_t cz = q32_32_to_i32_round(e->geomcoord9_u64x9.u64x9[2]) + (int32_t)(gz / 2u);
-
-        const int32_t ox0 = cx - (int32_t)(vv.grid_x_u32 / 2u);
-        const int32_t oy0 = cy - (int32_t)(vv.grid_y_u32 / 2u);
-        const int32_t oz0 = cz - (int32_t)(vv.grid_z_u32 / 2u);
-
-        for (uint32_t z = 0; z < vv.grid_z_u32; ++z) {
-            const int32_t zt = oz0 + (int32_t)z;
-            if (zt < 0 || zt >= (int32_t)gz) continue;
-            for (uint32_t y = 0; y < vv.grid_y_u32; ++y) {
-                const int32_t yt = oy0 + (int32_t)y;
-                if (yt < 0 || yt >= (int32_t)gy) continue;
-                const size_t src_row = ((size_t)z * (size_t)vv.grid_y_u32 + (size_t)y) * (size_t)vv.grid_x_u32;
-                const size_t dst_row = ((size_t)zt * (size_t)gy + (size_t)yt) * (size_t)gx;
-                for (uint32_t x = 0; x < vv.grid_x_u32; ++x) {
-                    const int32_t xt = ox0 + (int32_t)x;
-                    if (xt < 0 || xt >= (int32_t)gx) continue;
-                    const uint8_t v = vv.bytes[src_row + (size_t)x];
-                    uint8_t& d = dens[dst_row + (size_t)xt];
-                    d = (v > d) ? v : d; // deterministic combine
-                }
-            }
-        }
-    }
-    lattice_gpu_->upload_density_mask_u8(dens.data(), dens.size());
-}
-
 
         struct TmpCmd {
             uint32_t x, y, z;
@@ -6384,34 +5478,10 @@ if (lattice_gpu_) {
             for (size_t pi = 0; pi < inbound.size(); ++pi) {
                 const Pulse& p = inbound[pi];
                 const uint64_t aid = (uint64_t)p.anchor_id;
-
-// Spatial addressing: for per-object anchors, inject at the object's
-// lattice-mapped center derived from its geomcoord9 position. This
-// makes object↔global coupling act on the same lattice.
-uint32_t x = (uint32_t)(aid % (uint64_t)gx);
-uint32_t y = (uint32_t)((aid / (uint64_t)gx) % (uint64_t)gy);
-uint32_t z = (uint32_t)((aid / gxy) % (uint64_t)gz);
-
-const Anchor* ap = (p.anchor_id < anchors.size()) ? &anchors[p.anchor_id] : nullptr;
-if (ap && ap->object_id_u64 != 0u) {
-    const EwObjectEntry* oe = object_store.find(ap->object_id_u64);
-    if (oe) {
-        auto q32_32_to_i32_round = [](uint64_t q)->int32_t {
-            const int64_t s = (int64_t)q;
-            const int64_t r = (s >= 0) ? (s + (1ll << 31)) : (s - (1ll << 31));
-            return (int32_t)(r >> 32);
-        };
-        const int32_t cx = q32_32_to_i32_round(oe->geomcoord9_u64x9.u64x9[0]) + (int32_t)(gx / 2u);
-        const int32_t cy = q32_32_to_i32_round(oe->geomcoord9_u64x9.u64x9[1]) + (int32_t)(gy / 2u);
-        const int32_t cz = q32_32_to_i32_round(oe->geomcoord9_u64x9.u64x9[2]) + (int32_t)(gz / 2u);
-        if (cx >= 0 && cy >= 0 && cz >= 0) {
-            x = (uint32_t)clamp_u32((uint32_t)cx, 0u, gx - 1u);
-            y = (uint32_t)clamp_u32((uint32_t)cy, 0u, gy - 1u);
-            z = (uint32_t)clamp_u32((uint32_t)cz, 0u, gz - 1u);
-        }
-    }
-}
-
+                const uint32_t x = (uint32_t)(aid % (uint64_t)gx);
+                const uint32_t y = (uint32_t)((aid / (uint64_t)gx) % (uint64_t)gy);
+                const uint32_t z = (uint32_t)((aid / gxy) % (uint64_t)gz);
+                const Anchor* ap = (p.anchor_id < anchors.size()) ? &anchors[p.anchor_id] : nullptr;
                 const float amp = amp_from_pulse(p, ap);
                 float t = 0.0f, im = 0.0f, au = 0.0f;
                 // Profile mapping: 0->text, 1->image, 2->audio; otherwise split.
@@ -6544,58 +5614,6 @@ if (ap && ap->object_id_u64 != 0u) {
         anchors[i].basis9 = projected_for(anchors[i]);
     }
 
-    // ------------------------------------------------------------------
-    // Object export texture refresh (boundary-coupling observable)
-    //
-    // The engine treats the UV atlas as a substrate-resident carrier of
-    // object variables (density/coherence/curvature/id). To ensure OBJ/MTL
-    // parameters (textures) are exportable and reflect the object update
-    // law and coupling observables, we refresh the atlas channels from the
-    // current anchor frame each tick under a bounded budget.
-    //
-    // Deterministic policy:
-    //  - update at most 2 objects per tick
-    //  - object list is ascending id
-    //  - per-pixel update is a pure function of (existing atlas, anchor state)
-    // ------------------------------------------------------------------
-    {
-        std::vector<uint64_t> obj_ids;
-        object_store.list_object_ids_sorted(obj_ids);
-        const uint32_t max_updates = 2u;
-        uint32_t updated = 0;
-        const uint32_t n = (uint32_t)obj_ids.size();
-        const uint32_t start = (n == 0u) ? 0u : (uint32_t)(canonical_tick % (uint64_t)n);
-        for (uint32_t k = 0; k < n && updated < max_updates; ++k) {
-            const uint32_t idx = (start + k) % n;
-            const uint64_t oid = obj_ids[idx];
-            uint32_t aw=0, ah=0, af=0;
-            const uint8_t* bytes = nullptr;
-            size_t bn = 0;
-            if (!object_store.view_uv_atlas(oid, aw, ah, af, bytes, bn) || !bytes || bn == 0) continue;
-
-            // Anchor observable: use the object id as anchor id when in range.
-            const uint32_t aid = (oid < (uint64_t)anchors.size()) ? (uint32_t)oid : 0u;
-            const Anchor* a = (aid < anchors.size()) ? &anchors[aid] : nullptr;
-            const uint64_t curv = a ? (uint64_t)((a->curvature_q < 0) ? -a->curvature_q : a->curvature_q) : 0u;
-            const uint64_t dop  = a ? (uint64_t)((a->doppler_q < 0) ? -a->doppler_q : a->doppler_q) : 0u;
-            // Scale down TURN_SCALE-ish values to 0..255.
-            const uint64_t mix = (curv >> 20) + (dop >> 20);
-            const uint8_t s = (uint8_t)((mix > 255u) ? 255u : mix);
-            const uint8_t idlo = (uint8_t)(oid & 0xFFu);
-
-            std::vector<uint8_t> out;
-            out.assign(bytes, bytes + bn);
-            for (size_t i = 0; i + 3 < out.size(); i += 4) {
-                // R = density remains
-                out[i + 1] = (uint8_t)(out[i + 1] ^ s);      // G: coherence proxy modulated by coupling
-                out[i + 2] = (uint8_t)(out[i + 2] ^ (s ^ idlo)); // B: curvature proxy modulated
-                // A = id tag remains
-            }
-            (void)object_store.upsert_uv_atlas_rgba8(oid, aw, ah, out.data(), out.size());
-            updated++;
-        }
-    }
-
     // Post-tick cognition: update attractor memory and classification from
     // committed state. This does not modify the physics state directly.
     neural_ai.post_tick(this);
@@ -6725,7 +5743,7 @@ void SubstrateManager::build_viz_points(std::vector<EwVizPoint>& out) const {
     EwFieldLatticeGpu* viz_lat = nullptr;
     if (lattice_proj_tag_.enabled) {
         const uint32_t sel = lattice_proj_tag_.lattice_sel_u32;
-        if (sel == 1u && lattice_probe_gpu_[0]) viz_lat = lattice_probe_gpu_[0].get();
+        if (sel == 1u && lattice_probe_gpu_) viz_lat = lattice_probe_gpu_.get();
         else if (lattice_gpu_) viz_lat = lattice_gpu_.get();
     }
 
@@ -7038,47 +6056,6 @@ for (size_t i = 0; i < hits.size(); ++i) {
 
 void SubstrateManager::corpus_answer_emit(const std::string& query_utf8, uint32_t context_anchor_id_u32) {
     (void)context_anchor_id_u32;
-
-    // Global coherence gate: AI output must be restricted by the *global* coherence,
-    // not merely local resonance. If coherence is low, fail closed and
-    // deterministically request evidence (allowlist crawl / experiments) instead.
-    if (global_coherence.global_q15 < global_coherence_gate_min_q15) {
-        if (ui_out_q.size() < UI_OUT_CAP) ui_out_q.push_back("AI_GATE_LOW_GLOBAL_COHERENCE");
-
-        // Deterministic behavior:
-        // - emit a PlanPacket to nudge automation
-        // - emit a CrawlRequest to gather allowlisted evidence (if allowed)
-        genesis::AutoArtifact plan{};
-        plan.kind = genesis::AutoArtifactKind::PlanPacket;
-        plan.created_tick_u64 = canonical_tick_u64();
-        plan.lane_u32 = 0u;
-        plan.payload_utf8 = "{\"plan\":\"evidence_needed\",\"reason\":\"low_global_coherence\",\"tol_percent\":6}";
-        learning_automation.bus().push(plan);
-
-        // If allowlist not loaded yet, start default allowlist crawl deterministically.
-        if (!corpus_allowlist_loaded) {
-            corpus_crawl_start_neuralis_corpus_default();
-        }
-
-        // Issue a bounded CrawlRequest referencing the query. Scheduler will pick canonical ordering.
-        genesis::AutoArtifact cr{};
-        cr.kind = genesis::AutoArtifactKind::CrawlRequest;
-        cr.created_tick_u64 = canonical_tick_u64();
-        cr.lane_u32 = 0u;
-        // Payload is small JSON-ish and ASCII-safe.
-        std::string q = query_utf8;
-        if (q.size() > 196) q.resize(196);
-        for (size_t i = 0; i < q.size(); ++i) {
-            unsigned char b = (unsigned char)q[i];
-            if (b < 0x20 || b == 0x7F) q[i] = ' ';
-        }
-        cr.payload_utf8 = std::string("{\"crawl\":\"query_seed\",\"q\":\"") + q + "\",\"lane_max\":" + std::to_string((unsigned long long)crawl_allowlist_lane_max_u32) + "}";
-        learning_automation.bus().push(cr);
-
-        // Deterministic UI guidance (no speculative answer).
-        if (ui_out_q.size() < UI_OUT_CAP) ui_out_q.push_back("AI_NEEDS_EVIDENCE:run_allowlist_crawl_or_provide_more_context");
-        return;
-    }
 
     // Deterministic, extractive "answer": pick best-matching corpus artifacts and
     // emit bounded ASCII snippets around query term matches.

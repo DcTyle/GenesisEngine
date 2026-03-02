@@ -38,7 +38,7 @@ struct TtsResult {
 // Convert English text into ARPABET-like phones using a tiny deterministic rule set.
 // If a CMU-style lexicon is available in the LanguageFoundation, callers should
 // prefer that and only fall back to this.
-std::vector<PhonemeSpan> ge_text_to_phones_english(const std::string& text);
+std::vector<PhonemeSpan> ge_text_to_phones_fallback_english(const std::string& text);
 
 // Synthesize PCM16 mono waveform from a phoneme sequence using a simple
 // deterministic source-filter / formant-ish synthesizer (very small, fully local).

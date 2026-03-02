@@ -37,16 +37,6 @@ struct EwPulseInjectCmd {
     float amp_audio;
 };
 
-// Centered signed Q15-ish means sampled from the world lattice in a clamped box.
-// These values serve as boundary conditions for object-local sublattice evolution.
-struct EwBoundarySampleQ15 {
-    int16_t e_curr_q15 = 0;
-    int16_t flux_q15 = 0;
-    int16_t coherence_q15 = 0;
-    int16_t curvature_q15 = 0;
-    int16_t doppler_q15 = 0;
-};
-
 class EwFieldLatticeGpu {
 public:
     EwFieldLatticeGpu(uint32_t gx, uint32_t gy, uint32_t gz);
@@ -108,12 +98,6 @@ public:
     uint32_t grid_y() const { return gy_; }
     uint32_t grid_z() const { return gz_; }
 
-    // Deterministic sampling support for object↔world boundary exchange.
-    // Returns centered signed Q15-ish means of multiple world fields over a clamped box.
-    // These values are intended to bias object-local boundary evolution.
-    EwBoundarySampleQ15 sample_boundary_means_q15_box(uint32_t center_x, uint32_t center_y, uint32_t center_z,
-                                                      uint32_t radius_x, uint32_t radius_y, uint32_t radius_z) const;
-
 private:
     uint32_t gx_ = 0, gy_ = 0, gz_ = 0;
     uint64_t tick_index_ = 0;
@@ -161,10 +145,6 @@ private:
     void* d_pulse_cmds_ = nullptr;
     uint32_t pulse_cmd_cap_ = 0;
     uint32_t pulse_cmd_count_ = 0;
-
-    // Persistent device-side sampling scratch (integer sums + count).
-    void* d_sample_sums_i64_ = nullptr; // int64_t[5]
-    void* d_sample_cnt_u64_ = nullptr;  // uint64_t
 
     void alloc_buffers_();
     void free_buffers_();

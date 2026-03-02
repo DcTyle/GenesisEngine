@@ -1,8 +1,6 @@
 #include "assimp_fbx_io.hpp"
 
 #include "GE_runtime.hpp"
-#include "GE_uv_unwrap.hpp"
-#include "ewmesh_voxelizer.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -18,73 +16,6 @@
 #include <assimp/scene.h>
 
 namespace genesis {
-
-static aiScene* build_single_mesh_scene(const EwMeshV1& mesh,
-                                       const std::string& diffuse_texture_rel_utf8,
-                                       std::string* report) {
-    if (mesh.vertices.empty() || mesh.indices.empty()) return nullptr;
-    if ((mesh.indices.size() % 3u) != 0u) return nullptr;
-
-    aiScene* sc = new aiScene();
-    sc->mRootNode = new aiNode();
-    sc->mRootNode->mName = aiString("root");
-
-    // One mesh.
-    sc->mNumMeshes = 1;
-    sc->mMeshes = new aiMesh*[1];
-    sc->mMeshes[0] = new aiMesh();
-    aiMesh* am = sc->mMeshes[0];
-    am->mMaterialIndex = 0;
-    am->mPrimitiveTypes = aiPrimitiveType_TRIANGLE;
-
-    const unsigned vcount = (unsigned)mesh.vertices.size();
-    const unsigned fcount = (unsigned)(mesh.indices.size() / 3u);
-    am->mNumVertices = vcount;
-    am->mVertices = new aiVector3D[vcount];
-    am->mNormals = new aiVector3D[vcount];
-    am->mTextureCoords[0] = new aiVector3D[vcount];
-    am->mNumUVComponents[0] = 2;
-
-    for (unsigned i = 0; i < vcount; ++i) {
-        const auto& v = mesh.vertices[(size_t)i];
-        am->mVertices[i] = aiVector3D(v.px, v.py, v.pz);
-        am->mNormals[i]  = aiVector3D(v.nx, v.ny, v.nz);
-        am->mTextureCoords[0][i] = aiVector3D(v.u, v.v, 0.0f);
-    }
-
-    am->mNumFaces = fcount;
-    am->mFaces = new aiFace[fcount];
-    for (unsigned f = 0; f < fcount; ++f) {
-        aiFace& face = am->mFaces[f];
-        face.mNumIndices = 3;
-        face.mIndices = new unsigned[3];
-        face.mIndices[0] = mesh.indices[(size_t)f * 3u + 0u];
-        face.mIndices[1] = mesh.indices[(size_t)f * 3u + 1u];
-        face.mIndices[2] = mesh.indices[(size_t)f * 3u + 2u];
-    }
-
-    // One material.
-    sc->mNumMaterials = 1;
-    sc->mMaterials = new aiMaterial*[1];
-    sc->mMaterials[0] = new aiMaterial();
-    aiMaterial* mat = sc->mMaterials[0];
-
-    aiString mat_name("GenesisMaterial0");
-    mat->AddProperty(&mat_name, AI_MATKEY_NAME);
-
-    // Set diffuse texture path (relative) if provided.
-    if (!diffuse_texture_rel_utf8.empty()) {
-        aiString tex(diffuse_texture_rel_utf8);
-        mat->AddProperty(&tex, AI_MATKEY_TEXTURE(aiTextureType_DIFFUSE, 0));
-        append_report(report, std::string("ASSIMP_EXPORT_OBJ:DIFFUSE_TEX=") + diffuse_texture_rel_utf8);
-    }
-
-    // Node references mesh 0.
-    sc->mRootNode->mNumMeshes = 1;
-    sc->mRootNode->mMeshes = new unsigned[1];
-    sc->mRootNode->mMeshes[0] = 0;
-    return sc;
-}
 
 static inline int64_t clamp_i64(int64_t v, int64_t lo, int64_t hi) {
     return (v < lo) ? lo : ((v > hi) ? hi : v);
@@ -129,6 +60,7 @@ static uint32_t stable_postprocess_flags() {
         aiProcess_ImproveCacheLocality |
         aiProcess_RemoveRedundantMaterials |
         aiProcess_FindInvalidData |
+        aiProcess_GenUVCoords |
         aiProcess_ValidateDataStructure |
         aiProcess_OptimizeMeshes |
         aiProcess_OptimizeGraph
@@ -216,13 +148,6 @@ static bool scene_to_ewmesh(const aiScene* sc, EwMeshV1& out_mesh, std::string* 
     append_report(report, "ASSIMP_IMPORT:mesh_count=" + std::to_string(sc->mNumMeshes) +
                           " vertices=" + std::to_string(out_mesh.vertices.size()) +
                           " indices=" + std::to_string(out_mesh.indices.size()));
-
-    // Deterministic auto-UV unwrap for synthesis. Import UVs are treated as hints.
-    if (!ge_auto_uv_unwrap_box(out_mesh)) {
-        append_report(report, "ASSIMP_IMPORT:auto_uv_unwrap=FAIL");
-        return false;
-    }
-    append_report(report, "ASSIMP_IMPORT:auto_uv_unwrap=OK");
 
     // also list material names deterministically
     if (sc->HasMaterials()) {
@@ -455,30 +380,6 @@ bool assimp_export_with_external_textures(const std::string& src_path_utf8,
         return false;
     }
     append_report(out_report_utf8, "ASSIMP_EXPORT:OK:" + dst_path_utf8);
-    return true;
-}
-
-bool assimp_export_ewmesh_v1_single_material(const EwMeshV1& mesh,
-                                            const std::string& dst_path_utf8,
-                                            const std::string& dst_format_id_utf8,
-                                            const std::string& diffuse_texture_rel_utf8,
-                                            std::string* out_report_utf8) {
-    // Build and export a single-mesh scene.
-    aiScene* sc = build_single_mesh_scene(mesh, diffuse_texture_rel_utf8, out_report_utf8);
-    if (!sc || !sc->mRootNode) {
-        append_report(out_report_utf8, "ASSIMP_EXPORT_OBJ:FAIL:build_scene");
-        delete sc;
-        return false;
-    }
-    Assimp::Exporter exp;
-    const aiReturn r = exp.Export(sc, dst_format_id_utf8.c_str(), dst_path_utf8);
-    if (r != aiReturn_SUCCESS) {
-        append_report(out_report_utf8, std::string("ASSIMP_EXPORT_OBJ:FAIL:") + exp.GetErrorString());
-        delete sc;
-        return false;
-    }
-    append_report(out_report_utf8, "ASSIMP_EXPORT_OBJ:OK:" + dst_path_utf8);
-    delete sc;
     return true;
 }
 

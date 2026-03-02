@@ -64,7 +64,6 @@ add_library(EigenWareCore
     src/GE_audio_features.cpp
     src/GE_speech_alignment.cpp
     src/GE_voice_synth.cpp
-    src/GE_g2p_lexicon.cpp
     src/GE_voice_predictive_model.cpp
     src/GE_math_foundation.cpp
     src/GE_experiment_templates.cpp
@@ -73,7 +72,6 @@ add_library(EigenWareCore
     src/GE_live_crawler.cpp
     src/GE_curriculum_manager.cpp
     src/GE_learning_checkpoint_gate.cpp
-    src/GE_learning_automation.cpp
     src/code_artifact_ops.cpp
     src/inspector_fields.cpp
     src/anchor_pack.cpp
@@ -90,8 +88,6 @@ add_library(EigenWareCore
     src/GE_quantity_peeling_trainer.cpp
     src/GE_coherence_graph_store.cpp
     src/GE_safety_governor.cpp
-    src/GE_phase_current.cpp
-    src/GE_global_coherence.cpp
     src/ancilla_ops.cpp
     src/substrate_alu.cpp
     src/substrate_harmonics.cpp
@@ -103,11 +99,6 @@ add_library(EigenWareCore
     src/bytes_encoder.cpp
     # CUDA-only glue (GPU-resident crawler/learning kernels). Added below when EW_ENABLE_CUDA is ON.
     src/GE_object_memory.cpp
-    src/GE_uv_unwrap.cpp
-    src/GE_uv_atlas_baker.cpp
-    src/GE_shell_mesh.cpp
-    src/GE_object_ancilla.cpp
-    src/GE_object_local_cuda.cpp
     src/ew_cordic.cpp
     src/spec_aux_ops.cpp
     src/canonical_ops.cpp
@@ -167,7 +158,6 @@ add_executable(GenesisEngine
 )
 target_link_libraries(GenesisEngine PRIVATE EigenWareCore)
 
-option(EW_ENABLE_UI_PARTITION "Enable UI anchor partition + chat stream" ON)
 option(EW_ENABLE_CUDA "Enable CUDA evolution kernel (required for GPU-only pipeline)" ON)
 if (EW_ENABLE_CUDA)
     enable_language(CUDA)
@@ -183,8 +173,6 @@ if (EW_ENABLE_CUDA)
         cuda/GE_canonicalize_kernels.cu
         cuda/GE_topk_select_kernels.cu
         cuda/symbol_tokenize_kernels.cu
-        cuda/GE_phase_current_kernels.cu
-        cuda/GE_object_local_kernels.cu
 )
     target_link_libraries(eigen_cuda PRIVATE CUDA::cudart)
     target_include_directories(eigen_cuda PRIVATE ${CUDAToolkit_INCLUDE_DIRS} ${CMAKE_CURRENT_SOURCE_DIR}/include)

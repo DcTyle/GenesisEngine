@@ -156,7 +156,7 @@ int main(int argc, char** argv) {
         if (amp_ratio > 2.0) amp_ratio = 2.0;
 
         // Phones from text (fallback, deterministic).
-        auto phones = ge_text_to_phones_english(s.text_utf8);
+        auto phones = ge_text_to_phones_fallback_english(s.text_utf8);
         if (phones.empty()) continue;
 
         double dur_per_phone = audio_ms / (double)phones.size();
