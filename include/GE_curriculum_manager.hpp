@@ -7,7 +7,7 @@ class SubstrateManager;
 // Deterministic curriculum manager that drives ingest/training scheduling.
 // Does NOT "skip" stages; advances only based on accepted measurable checkpoints.
 struct GE_CurriculumManager {
-    uint32_t stage_u32 = 0; // 0..5
+    uint32_t stage_u32 = 0; // 0..6
     uint64_t epoch_u64 = 0;
 
     // Scheduling knobs (deterministic, can be configured later).

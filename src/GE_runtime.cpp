@@ -475,6 +475,46 @@ static bool ew_synthcode_execute(SubstrateManager* sm, const std::string& reques
     sm->emit_ui_line("SYNTHCODE_NO_TARGET");
     return false;
 }
+// Game-engine bootstrap request. This is a substrate-managed process that seeds
+// measurable tasks for the "game" curriculum bucket and emits minimal engine
+// scaffolding modules as inspector artifacts for later hydration.
+static bool ew_gameboot_execute(SubstrateManager* sm, const std::string& request_utf8) {
+    if (!sm) return false;
+    std::string req = request_utf8;
+    ew_trim_left_ws(req);
+    if (req.empty()) req = "bootstrap";
+
+    // Enqueue measurable checkpoint tasks for Stage 6 (game engine bootstrap).
+    // These tasks are validated by the existing learning gate in the sandbox.
+    {
+        MetricTask t{};
+        t.kind_u32 = (uint32_t)MetricKind::Game_RenderPipeline_Determinism;
+        t.label_utf8 = "Game_RenderPipeline_Determinism";
+        sm->learning_gate.registry().enqueue_task(t);
+    }
+    {
+        MetricTask t{};
+        t.kind_u32 = (uint32_t)MetricKind::Game_SceneGraph_TransformConsistency;
+        t.label_utf8 = "Game_SceneGraph_TransformConsistency";
+        sm->learning_gate.registry().enqueue_task(t);
+    }
+    {
+        MetricTask t{};
+        t.kind_u32 = (uint32_t)MetricKind::Game_EditorHook_CommandSurface;
+        t.label_utf8 = "Game_EditorHook_CommandSurface";
+        sm->learning_gate.registry().enqueue_task(t);
+    }
+
+    // Emit minimal scaffolding modules (no autonomous side-effects).
+    // These are projections only; hydration remains a gated, explicit step.
+    code_emit_minimal_cpp_module(sm, "GE_game_stage");
+    code_emit_minimal_cpp_module(sm, "GE_game_world");
+    code_emit_minimal_cpp_module(sm, "GE_editor_ai_hooks");
+
+    sm->emit_ui_line("GAMEBOOT_ENQUEUED req=" + req);
+    return true;
+}
+
 
 
 
@@ -4842,6 +4882,14 @@ if (starts_with("WEBFETCH:")) {
                             (void)ew_synthcode_execute(this, req);
                         }
                         break;
+
+if (starts_with("GAMEBOOT:")) {
+    std::string req = last_observation_text.substr(std::strlen("GAMEBOOT:"));
+    trim_left(req);
+    (void)ew_gameboot_execute(this, req);
+    break;
+}
+
                     }
 
                     if (starts_with("CODEEDIT:")) {

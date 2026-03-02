@@ -18,13 +18,15 @@ void GE_CurriculumManager::update_lane_masks_(SubstrateManager* sm) {
     // stage3: lane3 materials + lane6 robotics/control
     // stage4: lane2 cosmology/atmos + lane4 bio reference unlock pre-bio
     // stage5: lane4 bio + lane5 neuro + lane6 control
+    // stage6: lane7 game engine bootstrap (render/scene/editor) + lane1 determinism/compilers + lane2 physics/math
     uint32_t m = 0u;
     if (stage_u32 == 0u) m = (1u<<8) | (1u<<2) | (1u<<0);
     else if (stage_u32 == 1u) m = (1u<<2) | (1u<<1);
     else if (stage_u32 == 2u) m = (1u<<3) | (1u<<2);
     else if (stage_u32 == 3u) m = (1u<<3) | (1u<<6);
     else if (stage_u32 == 4u) m = (1u<<2) | (1u<<4);
-    else m = (1u<<4) | (1u<<5) | (1u<<6);
+    else if (stage_u32 == 5u) m = (1u<<4) | (1u<<5) | (1u<<6);
+    else m = (1u<<7) | (1u<<1) | (1u<<2);
     ingest_lane_mask_u32 = m;
     train_lane_mask_u32 = m;
     (void)sm;
@@ -47,7 +49,7 @@ void GE_CurriculumManager::maybe_advance_(SubstrateManager* sm) {
     if (accepted_since == 0) return;
 
     // Hard prerequisites: biology (stage5) locked until stage4 achieved.
-    if (stage_u32 < 5u) {
+    if (stage_u32 < 6u) {
         stage_u32 += 1u;
         stage_advances_u64 += 1;
         last_stage_tick_u64 = sm->canonical_tick;

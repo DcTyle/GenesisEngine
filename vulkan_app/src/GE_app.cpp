@@ -1424,6 +1424,11 @@ void App::CreateChildWindows() {
                                  100, 40, 110, 26,
                                  hwnd_panel_, (HMENU)2003, GetModuleHandleW(nullptr), nullptr);
 
+    hwnd_bootstrap_ = CreateWindowW(L\"BUTTON\", L\"Bootstrap Engine\",
+                               WS_CHILD | WS_VISIBLE,
+                               220, 40, 190, 26,
+                               hwnd_panel_, (HMENU)2006, GetModuleHandleW(nullptr), nullptr);
+
     hwnd_objlist_ = CreateWindowW(L"LISTBOX", L"",
                                   WS_CHILD | WS_VISIBLE | WS_BORDER | LBS_NOTIFY,
                                   10, 76, 400, 180,
@@ -2344,6 +2349,14 @@ void App::OnImportObj() {
     }
 }
 
+
+void App::OnBootstrapGame() {
+    if (!scene_) return;
+    scene_->SubmitUiLine("GAMEBOOT: editor_bootstrap");
+    AppendOutputUtf8("EDITOR: GAMEBOOT submitted");
+}
+
+
 void App::AppendOutputUtf8(const std::string& line) {
     std::wstring wline = utf8_to_wide(line);
     wline.append(L"\r\n");
@@ -2377,6 +2390,7 @@ LRESULT App::WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             const int code = HIWORD(wparam);
             if (id == 2002 && code == BN_CLICKED) { OnSend(); }
             if (id == 2003 && code == BN_CLICKED) { OnImportObj(); }
+            if (id == 2006 && code == BN_CLICKED) { OnBootstrapGame(); }
             if (id == 2004 && code == LBN_SELCHANGE) {
                 int sel = (int)SendMessageW(hwnd_objlist_, LB_GETCURSEL, 0, 0);
                 if (scene_) scene_->selected = sel;

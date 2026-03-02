@@ -36,6 +36,7 @@ private:
     HWND hwnd_send_ = nullptr;
     HWND hwnd_output_ = nullptr;
     HWND hwnd_import_ = nullptr;
+    HWND hwnd_bootstrap_ = nullptr;
     HWND hwnd_objlist_ = nullptr;
 
     bool running_ = true;
@@ -75,6 +76,7 @@ private:
 
     void OnSend();
     void OnImportObj();
+    void OnBootstrapGame();
 
     void AppendOutputUtf8(const std::string& line);
 };

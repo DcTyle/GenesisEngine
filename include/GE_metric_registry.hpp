@@ -82,6 +82,11 @@ enum class MetricKind : uint32_t {
     Cosmo_Radiation_Spectrum = 51,
     Cosmo_Atmos_PressureProfile = 52,
 
+// Game engine bootstrap measurable set (Stage 6).
+Game_RenderPipeline_Determinism = 70,
+Game_SceneGraph_TransformConsistency = 71,
+Game_EditorHook_CommandSurface = 72,
+
     // Biology measurable set (Stage 5, deferred).
     Bio_CellDiffusion_Osmosis = 60,
 };
