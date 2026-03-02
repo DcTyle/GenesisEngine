@@ -1,0 +1,42 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 18,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "win64-vs2022-cuda",
+      "displayName": "Win64 VS2022 + CUDA (fresh build via script)",
+      "generator": "Visual Studio 17 2022",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "architecture": "x64",
+      "cacheVariables": {
+        "CMAKE_CUDA_ARCHITECTURES": "75"
+      }
+    },
+    {
+      "name": "win64-ninja-cuda",
+      "displayName": "Win64 Ninja + CUDA (fresh build via script)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CUDA_ARCHITECTURES": "75"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "win64-vs2022-cuda",
+      "configurePreset": "win64-vs2022-cuda",
+      "configuration": "Release"
+    },
+    {
+      "name": "win64-ninja-cuda",
+      "configurePreset": "win64-ninja-cuda",
+      "configuration": "Release"
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+# One path prefix per line (forward slashes). These are the ONLY allowed removals.
+# If a future zip is missing a file outside these prefixes, verify_release_delta fails.
+
+Source/
+Config/
+ue_adapter/
+ThirdParty/
+GenesisEngine.uplugin
+README_PLUGIN.txt
+BuildConfiguration.xml
+build/
+Binaries/
+Intermediate/
+Saved/
+.vs/
+
+# Optional: per-user local output
+Draft Container/GenesisEngine/out/

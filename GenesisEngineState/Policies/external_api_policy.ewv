@@ -1,0 +1,8 @@
+# EigenWare external API policy (strict, fail-closed)
+allow_http_u8=0
+allow_https_u8=1
+domains_allowlist_csv=html.duckduckgo.com,dev.epicgames.com,docs.unrealengine.com,forums.unrealengine.com,github.com,raw.githubusercontent.com,objects.githubusercontent.com,release-assets.githubusercontent.com,stackoverflow.com,wikipedia.org,commonvoice.mozilla.org,openslr.org,huggingface.co,cdn-lfs.huggingface.co
+max_request_bytes_u32=65536
+max_response_bytes_u32=262144
+timeout_ms_u32=15000
+rate_limit_per_min_u32=30

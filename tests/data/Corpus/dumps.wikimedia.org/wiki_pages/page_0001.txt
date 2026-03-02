@@ -1,0 +1,1 @@
+PEMDAS	PEMDAS is an acronym for the order of operations: parentheses, exponents, multiplication, division, addition, subtraction.
