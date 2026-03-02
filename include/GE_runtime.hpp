@@ -13,10 +13,15 @@
 #include "GE_object_memory.hpp"
 #include "crawler_subsystem.hpp"
 #include "GE_learning_checkpoint_gate.hpp"
+#include "GE_learning_automation.hpp"
 #include "GE_language_foundation.hpp"
 #include "GE_math_foundation.hpp"
 #include "GE_experiment_templates.hpp"
 #include "GE_neural_phase_ai.hpp"
+
+#include "GE_global_coherence.hpp"
+
+#include "GE_phase_current.hpp"
 
 #include "GE_corpus_allowlist.hpp"
 
@@ -748,6 +753,12 @@ public:
 
     // Learning checkpoint gate state.
     genesis::LearningCheckpointGate learning_gate;
+
+    // Learning automation scheduler (curriculum-driven parallel tasks)
+    genesis::LearningAutomation learning_automation;
+
+    // Phase-amplitude current rail (9D region current field)
+    genesis::EwPhaseCurrent phase_current;
     // Stage-0 language foundations (dictionary/thesaurus/encyclopedia/speech).
     genesis::LanguageFoundation language_foundation;
 
@@ -807,6 +818,7 @@ struct EwCrawlSession {
     std::vector<std::string> seen_url_keys;
 };
 
+static constexpr uint32_t EW_LEARNING_SANDBOX_MAX = 6;
 static constexpr uint32_t EW_CRAWL_SESSION_MAX = 4;
 EwCrawlSession crawl_sessions[EW_CRAWL_SESSION_MAX];
     uint32_t crawl_rr_u32 = 0;
@@ -815,6 +827,11 @@ EwCrawlSession crawl_sessions[EW_CRAWL_SESSION_MAX];
 // and for admission filtering when observations arrive.
 GE_CorpusAllowlist corpus_allowlist;
 bool corpus_allowlist_loaded = false;
+
+    // User-updatable allowlist (optional). If present, it overrides the embedded default.
+    // Stored as a corpus artifact and mirrored to disk for persistence.
+    std::string corpus_allowlist_user_md_utf8;
+    bool corpus_allowlist_user_loaded = false;
 
     // Corpus pipeline scheduling knobs (offline-first)
     uint32_t corpus_pipeline_enable_u32 = 1u;
@@ -858,6 +875,19 @@ uint64_t learning_stage_completed_mask_u64[GENESIS_CURRICULUM_STAGE_COUNT] = {0,
 // Visualization mode: headless disables continuous presentation but keeps
 // verification snapshots and metric validation alive.
 bool visualization_headless = false;
+
+    // -----------------------------------------------------------------
+    // Simulation snapshot + loop/live injection
+    // -----------------------------------------------------------------
+    bool sim_snapshot_valid = false;
+    EwState sim_snapshot;
+    bool sim_play_loop_enabled = false;
+    uint64_t sim_play_loop_start_tick_u64 = 0;
+    // For loop playback, we restore the snapshot before evolution each tick.
+    // For live injection, we restore once and then disable loop.
+
+    bool sim_save_to_file(const std::string& name_ascii);
+    bool sim_load_from_file(const std::string& name_ascii, bool play_loop);
 // Upper bound on allowlist lane accepted at current curriculum stage.
 uint32_t crawl_allowlist_lane_max_u32 = 1u; // stage0(language) allows lanes 0-1 by default
 
@@ -865,8 +895,35 @@ uint32_t crawl_allowlist_lane_max_u32 = 1u; // stage0(language) allows lanes 0-1
 static constexpr uint32_t UI_OUT_CAP = 256;
 std::deque<std::string> ui_out_q;
 
+    // Global coherence aggregator (q15). Gates *all* AI outputs/actions.
+    genesis::GE_GlobalCoherence global_coherence;
+
+    // Threshold below which AI must fail-closed (ask/plan/quiet) rather than answer.
+    uint16_t global_coherence_gate_min_q15 = 8192; // 0.25 default
+
+    // UI chat message ring buffer (deterministic, bounded).
+    static constexpr uint32_t UI_CHAT_CAP = 20;
+    std::deque<std::string> ui_chat_q;
+    // Index of the most recent chat anchor created from UI input.
+    uint32_t ui_last_chat_anchor_idx_u32 = 0u;
+    // Index of the current UI training anchor for live crawler targeting.
+    uint32_t ui_livecrawl_target_anchor_idx_u32 = 0u;
+    // Anchor indices flagged as UI_PARTITION (kept separate from sim/core intent).
+    std::vector<uint32_t> ui_anchor_indices;
+
+    // Create a UI chat anchor (UI_PARTITION|CHAT_MESSAGE) from a line of text.
+    uint32_t ui_create_chat_anchor_from_text(const std::string& utf8_line);
+    // Create a UI-derived concept/training anchor from the latest chat seed.
+    uint32_t ui_create_anchor_from_chat_seed(uint32_t chat_anchor_idx_u32, uint16_t resonance_q15);
+    // Extract deterministic crawl seeds from text and enqueue to live crawler when allowed.
+    void ui_maybe_enqueue_crawl_seeds_from_text(const std::string& utf8_line);
+
     // Emit one line to the UI output channel (deterministic, bounded).
     void emit_ui_line(const std::string& utf8_line);
+
+    // Allowlist update surface (UI command + config file). Deterministic validation.
+    bool corpus_allowlist_update_from_user_text(const std::string& allowlist_md_utf8);
+    bool corpus_allowlist_load_user_file_if_present();
 
     // Spec/Blueprint: neural phase dynamics controller.
     EwNeuralPhaseAI neural_ai;
@@ -992,6 +1049,17 @@ void ui_submit_user_text_line(const std::string& utf8_line);
 bool ui_pop_output_text(std::string& out_utf8);
 
 // -----------------------------------------------------------------
+// Deterministic export
+// -----------------------------------------------------------------
+// Exports a deterministic bundle for an object:
+//  - Standard shell mesh topology (ewmesh)
+//  - UV atlas variable map (raw rgba8 + json meta)
+//  - One-keyframe material animation json (for clip association)
+bool export_object_bundle(uint64_t object_id_u64,
+                          const std::string& out_dir_utf8,
+                          std::string* out_report_utf8) const;
+
+// -----------------------------------------------------------------
 // Corpus crawl control (button press consent)
 // -----------------------------------------------------------------
 // Parse an allowlist markdown/text and schedule crawl targets deterministically.
@@ -1093,11 +1161,11 @@ void corpus_crawl_stop();
     // These return pointers to GPU lattice objects; callers must not mutate
     // state directly except via lattice APIs.
     EwFieldLatticeGpu* world_lattice_gpu_for_learning();
-    EwFieldLatticeGpu* probe_lattice_gpu_for_learning();
+    EwFieldLatticeGpu* probe_lattice_gpu_for_learning(uint32_t sandbox_id_u32 = 0u);
 
 private:
     std::unique_ptr<EwFieldLatticeGpu> lattice_gpu_;
-    std::unique_ptr<EwFieldLatticeGpu> lattice_probe_gpu_;
+    std::unique_ptr<EwFieldLatticeGpu> lattice_probe_gpu_[EW_LEARNING_SANDBOX_MAX];
     void ensure_lattice_gpu_();
     void ensure_lattice_probe_gpu_();
 

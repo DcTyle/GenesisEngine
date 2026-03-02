@@ -51,6 +51,10 @@ public:
     uint32_t id;
     // Anchor kind tag (deterministic). This is a runtime semantic label.
     uint32_t kind_u32;
+
+    // Anchor flags (bitfield). Used for UI partitioning and runtime routing.
+    // Default is 0.
+    uint32_t flags_u32 = 0;
     // Owning context anchor id (0 means global/default).
     uint32_t context_id_u32;
     // Owning crawler anchor id (0 means none).
@@ -127,6 +131,8 @@ public:
 
     Basis9 basis9;
     std::vector<uint32_t> neighbors;
+
+    Anchor() : Anchor(0u) {}
 
     Anchor(uint32_t id_)
         : id(id_), kind_u32(0), context_id_u32(0), crawler_id_u32(0), object_id_u64(static_cast<uint64_t>(id_)), object_phase_seed_u64(0),
