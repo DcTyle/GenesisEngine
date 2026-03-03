@@ -19,6 +19,8 @@
 #include "GE_experiment_templates.hpp"
 #include "GE_neural_phase_ai.hpp"
 
+#include "GE_camera_anchor.hpp"
+
 #include "GE_global_coherence.hpp"
 
 #include "GE_phase_current.hpp"
@@ -402,6 +404,13 @@ public:
         int64_t median_depth_m_q32_32 = (int64_t)(5) * (1ll<<32);
         uint64_t tick_u64 = 0;
     } camera_sensor;
+
+    // -----------------------------------------------------------------
+    // Projected render packets (substate -> renderer). These are computed
+    // inside the substrate tick, not in the renderer.
+    // -----------------------------------------------------------------
+    EwRenderCameraPacket render_camera_packet;
+    uint64_t render_camera_packet_tick_u64 = 0;
 
     // -----------------------------------------------------------------
     // Control packet inbox (UI/editor/input -> AI substrate)

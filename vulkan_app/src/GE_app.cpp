@@ -1712,18 +1712,8 @@ void App::Tick() {
     // If we fell behind, drop excess accumulated time deterministically.
     if (acc > tick_dt * (float)kMaxTicksPerFrame) acc = 0.0f;
 
-    // Immersion: drive camera from selected object's "eyes".
-    if (immersion_mode_ && scene_->selected >= 0 && scene_->selected < (int)scene_->objects.size()) {
-        const auto& o = scene_->objects[(size_t)scene_->selected];
-        const float deg2rad = 0.01745329251994329577f;
-        cam_.pos[0] = o.xf.pos[0] + eye_offset_local_[0];
-        cam_.pos[1] = o.xf.pos[1] + eye_offset_local_[1];
-        cam_.pos[2] = o.xf.pos[2] + eye_offset_local_[2];
-        cam_.pitch_rad = o.xf.rot_euler_deg[0] * deg2rad;
-        cam_.yaw_rad   = o.xf.rot_euler_deg[1] * deg2rad;
-        cam_.orbit_mode = false;
-        cam_.fly_mode = true;
-    }
+    // Immersion: camera subject-lock should be implemented as substrate ops.
+    // Hard rule: no direct camera math/state mutation here.
 
     // Standard camera controls.
     // HARD RULE: no camera integration / derived control computation here.
@@ -1777,23 +1767,32 @@ void App::Tick() {
     }
 
     // Consume render camera packet derived from CameraAnchor state.
-    {
-        EwRenderCameraPacket rp{};
-        if (ew_runtime_get_render_camera_packet(&scene_->sm, &rp)) {
-            ew_camera_apply_render_packet(cam_, rp);
-        }
+    // Renderer must not rebuild basis from local controller state.
+    EwRenderCameraPacket rp{};
+    bool have_rp = ew_runtime_get_render_camera_packet(&scene_->sm, &rp);
+    if (have_rp) {
+        ew_camera_apply_render_packet(cam_, rp);
     }
 
-    // Build camera basis
-    float fwd[3];
-    ew_camera_get_forward(cam_, fwd);
-    float right[3] = { fwd[1], -fwd[0], 0.f };
-    float rl = std::sqrt(right[0]*right[0] + right[1]*right[1] + right[2]*right[2]);
-    if (rl > 1e-6f) { right[0]/=rl; right[1]/=rl; right[2]/=rl; }
-    float up[3] = {
-        right[1]*fwd[2] - right[2]*fwd[1],
-        right[2]*fwd[0] - right[0]*fwd[2],
-        right[0]*fwd[1] - right[1]*fwd[0]
+    // Camera-space position from projected view matrix (Q16.16), used for culling/LOD.
+    auto camera_space_pos = [&](float wx, float wy, float wz, float& out_cx, float& out_cy, float& out_cz) {
+        if (!have_rp) { out_cx = wx; out_cy = wy; out_cz = wz; return; }
+        const int64_t x_q = (int64_t)(wx * 65536.0f);
+        const int64_t y_q = (int64_t)(wy * 65536.0f);
+        const int64_t z_q = (int64_t)(wz * 65536.0f);
+        auto row_dot = [&](int row, int64_t bx, int64_t by, int64_t bz) -> int64_t {
+            const int64_t m0 = (int64_t)rp.view_mat_q16_16[row*4 + 0];
+            const int64_t m1 = (int64_t)rp.view_mat_q16_16[row*4 + 1];
+            const int64_t m2 = (int64_t)rp.view_mat_q16_16[row*4 + 2];
+            const int64_t m3 = (int64_t)rp.view_mat_q16_16[row*4 + 3];
+            return ((m0 * bx + m1 * by + m2 * bz) >> 16) + m3;
+        };
+        const int64_t cx_q = row_dot(0, x_q, y_q, z_q);
+        const int64_t cy_q = row_dot(1, x_q, y_q, z_q);
+        const int64_t cz_q = row_dot(2, x_q, y_q, z_q);
+        out_cx = (float)cx_q / 65536.0f;
+        out_cy = (float)cy_q / 65536.0f;
+        out_cz = (float)cz_q / 65536.0f;
     };
 
     // Focus control: all autofocus logic lives in substrate. The viewport is
@@ -1823,8 +1822,8 @@ void App::Tick() {
         const float dx = o.xf.pos[0] - cam_.pos[0];
         const float dy = o.xf.pos[1] - cam_.pos[1];
         const float dz = o.xf.pos[2] - cam_.pos[2];
-        const float cx = dx*right[0] + dy*right[1] + dz*right[2];
-        const float cy = dx*up[0]    + dy*up[1]    + dz*up[2];
+        float cx = 0.0f, cy = 0.0f, cz = 0.0f;
+        camera_space_pos(o.xf.pos[0], o.xf.pos[1], o.xf.pos[2], cx, cy, cz);
         // View-driven LOD: distance + focus (deterministic, meters).
         const float dist_m = std::sqrt(dx*dx + dy*dy + dz*dz);
         const float d_focus = cam_.focal_distance_m;
@@ -1891,12 +1890,8 @@ scene_->instances.push_back(inst);
                 const float wy = ((float)p.y_q16_16 / 65536.0f) * viz_scale_m;
                 const float wz = ((float)p.z_q16_16 / 65536.0f) * viz_scale_m;
 
-                const float dx = wx - cam_.pos[0];
-                const float dy = wy - cam_.pos[1];
-                const float dz = wz - cam_.pos[2];
-                const float cx = dx*right[0] + dy*right[1] + dz*right[2];
-                const float cy = dx*up[0]    + dy*up[1]    + dz*up[2];
-                const float cz = dx*fwd[0] + dy*fwd[1] + dz*fwd[2];
+                float cx = 0.0f, cy = 0.0f, cz = 0.0f;
+                camera_space_pos(wx, wy, wz, cx, cy, cz);
 
                 EwRenderInstance inst{};
                 inst.object_id_u64 = 0;

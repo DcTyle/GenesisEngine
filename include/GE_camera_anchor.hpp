@@ -42,6 +42,15 @@ struct EwRenderCameraPacket {
     int64_t focus_distance_m_q32_32 = (int64_t)(5) * (1ll<<32);
     uint8_t focus_mode_u8 = static_cast<uint8_t>(EwFocusMode::ManualDistance);
     uint8_t pad0_u8[7] = {0,0,0,0,0,0,0};
+
+    // View matrix in Q16.16 (row-major 4x4). This is a projection of camera anchor
+    // state produced by the substrate. Renderer consumes it directly.
+    int32_t view_mat_q16_16[16] = {
+        65536,0,0,0,
+        0,65536,0,0,
+        0,0,65536,0,
+        0,0,0,65536
+    };
 };
 
 class SubstrateManager;

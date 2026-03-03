@@ -68,18 +68,10 @@ bool ew_runtime_submit_control_packet(SubstrateManager* sm, const EwControlPacke
 
 bool ew_runtime_get_render_camera_packet(const SubstrateManager* sm, EwRenderCameraPacket* out) {
     if (!sm || !out) return false;
-    if (sm->camera_anchor_id_u32 == 0u || sm->camera_anchor_id_u32 >= sm->anchors.size()) return false;
-    const Anchor& a = sm->anchors[sm->camera_anchor_id_u32];
-    if (a.kind_u32 != EW_ANCHOR_KIND_CAMERA) return false;
-    out->focal_length_mm_q16_16 = a.camera_state.focal_length_mm_q16_16;
-    out->aperture_f_q16_16 = a.camera_state.aperture_f_q16_16;
-    out->exposure_ev_q16_16 = a.camera_state.exposure_ev_q16_16;
-    out->focus_distance_m_q32_32 = a.camera_state.focus_distance_m_q32_32;
-    out->focus_mode_u8 = a.camera_state.focus_mode_u8;
-    out->pos_xyz_q16_16[0] = a.camera_state.pos_xyz_q16_16[0];
-    out->pos_xyz_q16_16[1] = a.camera_state.pos_xyz_q16_16[1];
-    out->pos_xyz_q16_16[2] = a.camera_state.pos_xyz_q16_16[2];
-    for (int i = 0; i < 4; ++i) out->rot_quat_q16_16[i] = a.camera_state.rot_quat_q16_16[i];
+    // Renderer consumes the projected packet computed inside the substrate tick.
+    // Fail closed if not yet projected.
+    if (sm->render_camera_packet_tick_u64 == 0u) return false;
+    *out = sm->render_camera_packet;
     return true;
 }
 

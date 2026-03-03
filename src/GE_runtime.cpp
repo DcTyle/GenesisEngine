@@ -36,6 +36,73 @@ static inline int64_t q32_32_mul(int64_t a_q32_32, int64_t b_q32_32) {
     return (int64_t)(p >> 32);
 }
 
+// Build a view matrix (row-major 4x4) in Q16.16 from a camera pose expressed as
+// (pos_q16_16, quat_q16_16). Quaternion is interpreted as camera->world rotation.
+// View matrix is world->camera: R^T and -R^T * pos.
+static void ew_build_view_mat_q16_16(const int32_t pos_xyz_q16_16[3], const int32_t q_q16_16[4], int32_t out_m16_q16_16[16]) {
+    const int64_t x = (int64_t)q_q16_16[0];
+    const int64_t y = (int64_t)q_q16_16[1];
+    const int64_t z = (int64_t)q_q16_16[2];
+    const int64_t w = (int64_t)q_q16_16[3];
+
+    auto mul_q16 = [&](int64_t a, int64_t b) -> int64_t { return (a * b) >> 16; };
+    const int64_t xx = mul_q16(x, x);
+    const int64_t yy = mul_q16(y, y);
+    const int64_t zz = mul_q16(z, z);
+    const int64_t xy = mul_q16(x, y);
+    const int64_t xz = mul_q16(x, z);
+    const int64_t yz = mul_q16(y, z);
+    const int64_t xw = mul_q16(x, w);
+    const int64_t yw = mul_q16(y, w);
+    const int64_t zw = mul_q16(z, w);
+
+    const int64_t one = 65536;
+    const int64_t two = 2;
+
+    int32_t R[9];
+    R[0] = (int32_t)(one - two * (yy + zz));
+    R[1] = (int32_t)(two * (xy - zw));
+    R[2] = (int32_t)(two * (xz + yw));
+
+    R[3] = (int32_t)(two * (xy + zw));
+    R[4] = (int32_t)(one - two * (xx + zz));
+    R[5] = (int32_t)(two * (yz - xw));
+
+    R[6] = (int32_t)(two * (xz - yw));
+    R[7] = (int32_t)(two * (yz + xw));
+    R[8] = (int32_t)(one - two * (xx + yy));
+
+    const int32_t Rt00 = R[0];
+    const int32_t Rt01 = R[3];
+    const int32_t Rt02 = R[6];
+    const int32_t Rt10 = R[1];
+    const int32_t Rt11 = R[4];
+    const int32_t Rt12 = R[7];
+    const int32_t Rt20 = R[2];
+    const int32_t Rt21 = R[5];
+    const int32_t Rt22 = R[8];
+
+    const int64_t px = (int64_t)pos_xyz_q16_16[0];
+    const int64_t py = (int64_t)pos_xyz_q16_16[1];
+    const int64_t pz = (int64_t)pos_xyz_q16_16[2];
+
+    auto dot3_q16 = [&](int32_t a0, int32_t a1, int32_t a2, int64_t bx, int64_t by, int64_t bz) -> int32_t {
+        int64_t s = ((int64_t)a0 * bx + (int64_t)a1 * by + (int64_t)a2 * bz) >> 16;
+        if (s > 2147483647LL) s = 2147483647LL;
+        if (s < -2147483648LL) s = -2147483648LL;
+        return (int32_t)s;
+    };
+
+    const int32_t tx = (int32_t)(-dot3_q16(Rt00, Rt01, Rt02, px, py, pz));
+    const int32_t ty = (int32_t)(-dot3_q16(Rt10, Rt11, Rt12, px, py, pz));
+    const int32_t tz = (int32_t)(-dot3_q16(Rt20, Rt21, Rt22, px, py, pz));
+
+    out_m16_q16_16[0] = Rt00; out_m16_q16_16[1] = Rt01; out_m16_q16_16[2] = Rt02; out_m16_q16_16[3] = tx;
+    out_m16_q16_16[4] = Rt10; out_m16_q16_16[5] = Rt11; out_m16_q16_16[6] = Rt12; out_m16_q16_16[7] = ty;
+    out_m16_q16_16[8] = Rt20; out_m16_q16_16[9] = Rt21; out_m16_q16_16[10]= Rt22; out_m16_q16_16[11]= tz;
+    out_m16_q16_16[12]= 0;    out_m16_q16_16[13]= 0;    out_m16_q16_16[14]= 0;    out_m16_q16_16[15]= 65536;
+}
+
 
 static inline int64_t ew_mul_q63_local(int64_t a_q63, int64_t b_q63) {
     __int128 p = (__int128)a_q63 * (__int128)b_q63;
@@ -7244,6 +7311,29 @@ if (ap && ap->object_id_u64 != 0u) {
     // remaining a pure frame mismatch (no energy coupling).
     for (size_t i = 0; i < anchors.size(); ++i) {
         anchors[i].basis9 = projected_for(anchors[i]);
+    }
+
+    // ------------------------------------------------------------------
+    // Render packet projection (anchors -> renderer)
+    // Renderer must not derive camera basis from local controller state.
+    // The substrate projects a render-camera packet each tick.
+    // ------------------------------------------------------------------
+    if (camera_anchor_id_u32 != 0u && camera_anchor_id_u32 < anchors.size()) {
+        const Anchor& cam = anchors[camera_anchor_id_u32];
+        if (cam.kind_u32 == EW_ANCHOR_KIND_CAMERA) {
+            render_camera_packet.focal_length_mm_q16_16 = cam.camera_state.focal_length_mm_q16_16;
+            render_camera_packet.aperture_f_q16_16 = cam.camera_state.aperture_f_q16_16;
+            render_camera_packet.exposure_ev_q16_16 = cam.camera_state.exposure_ev_q16_16;
+            render_camera_packet.focus_distance_m_q32_32 = cam.camera_state.focus_distance_m_q32_32;
+            render_camera_packet.focus_mode_u8 = cam.camera_state.focus_mode_u8;
+            render_camera_packet.pos_xyz_q16_16[0] = cam.camera_state.pos_xyz_q16_16[0];
+            render_camera_packet.pos_xyz_q16_16[1] = cam.camera_state.pos_xyz_q16_16[1];
+            render_camera_packet.pos_xyz_q16_16[2] = cam.camera_state.pos_xyz_q16_16[2];
+            for (int qi = 0; qi < 4; ++qi) render_camera_packet.rot_quat_q16_16[qi] = cam.camera_state.rot_quat_q16_16[qi];
+
+            ew_build_view_mat_q16_16(cam.camera_state.pos_xyz_q16_16, cam.camera_state.rot_quat_q16_16, render_camera_packet.view_mat_q16_16);
+            render_camera_packet_tick_u64 = canonical_tick;
+        }
     }
 
     // ------------------------------------------------------------------
