@@ -2,7 +2,10 @@
 #include <cstdint>
 #include <vector>
 
-// Compute emergent realism carrier triple (x=leak Q16.16, y=doppler_k Q16.16, z=harm_mean Q0.15)
+// Compute emergent realism carrier triple
+//   x = leak/density proxy (Q16.16 in [0,1])
+//   y = doppler_k (Q16.16 in [-1,1])
+//   z = packed: low16=harm_mean Q0.15, high16=flux_gradient_proxy Q0.15
 // for a batch of anchor indices.
 //
 // Determinism contract:

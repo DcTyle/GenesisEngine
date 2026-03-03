@@ -19,6 +19,8 @@ layout(location=9) in float vClarity;
 layout(location=10) in float vDopplerK;
 layout(location=11) in float vLeak;
 layout(location=12) in float vHarmMean;
+layout(location=13) in float vFluxGrad;
+layout(location=14) in float vDensity;
 
 // Virtual texturing (production): atlas texture + page table SSBO.
 // Atlas is a packed tile cache. Page table maps (mip,tile_x,tile_y) -> atlas tile coord.
@@ -142,11 +144,32 @@ void main(){
     float edge = pow(clamp(1.0 - z, 0.0, 1.0), 1.25);
     float density = clamp(leak * (0.35 + 0.65 * edge), 0.0, 1.0);
 
+    // -------------------------------------------------------------------------
+    // D-noise factor (diffuse/noise):
+    // Use flux-gradient proxy as the "between objects" interference driver.
+    // Dense objects dominate: noise amplitude is suppressed as density increases.
+    // This modulates emissive/glow and slightly diffuses visibility on low-density
+    // objects while preserving determinism (no RNG, no trig).
+    // -------------------------------------------------------------------------
+    float fluxg = clamp(vFluxGrad, 0.0, 1.0);
+    float dens = clamp(vDensity, 0.0, 1.0);
+    // Deterministic interference pattern driven by flux gradient + harmonics.
+    float dn = tri(dot(vUV, vec2(37.0, 29.0)) * (1.0 + 4.0 * fluxg) + 11.0 * harm);
+    // Noise amplitude: flux increases it, density suppresses it.
+    float dn_amp = clamp(fluxg * (1.0 - dens), 0.0, 1.0);
+    // Energy diffusion factor: low-density objects get more diffusion.
+    float dn_diff = mix(1.0, 0.70 + 0.30 * dn, dn_amp);
+    // Dense objects dominate energy flux: scale energy terms up with density.
+    float dom = 0.35 + 0.65 * dens;
+
     // Emergent radiance: base reflected (visibility) + leakage glow + emissive breathing.
     float breathe = 0.65 + 0.35 * clamp(vEmissive, 0.0, 2.0);
-    vec3 col = rippleAlbedo * (0.10 + 0.90 * vis) * dopplerTint;
-    col += rippleAlbedo * density * (0.20 + 0.80 * breathe);
-    col += vAlbedo.rgb * max(0.0, vEmissive) * (0.25 + 0.75 * leak);
+    // Slightly diffuse visibility for low-density objects under high flux gradients.
+    float vis_dn = mix(vis, 0.55 * vis + 0.45 * dn, dn_amp);
+    vec3 col = rippleAlbedo * (0.10 + 0.90 * vis_dn) * dopplerTint;
+    // Apply D-noise diffusion to glow/emissive channels; dense objects dominate.
+    col += rippleAlbedo * density * (0.20 + 0.80 * breathe) * dn_diff * dom;
+    col += vAlbedo.rgb * max(0.0, vEmissive) * (0.25 + 0.75 * leak) * dn_diff * dom;
 
     // Atmosphere (Earth): rim scattering derived from leak proxy + geometry.
     if (vKind == 2u && vAtmThick > 0.0) {

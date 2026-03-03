@@ -33,12 +33,13 @@ static inline bool ge_extract_domain_backticks(const std::string& line, std::str
     const size_t b = line.find('`', a + 1);
     if (b == std::string::npos || b <= a + 1) return false;
     out_domain = ge_trim_ascii(line.substr(a + 1, b - (a + 1)));
-    out_domain = ew_ascii_lower(out_domain);
+    ew::ew_ascii_lower_inplace(out_domain);
     return !out_domain.empty();
 }
 
 const GE_CorpusDomainPolicy* GE_CorpusAllowlist::find_by_domain_ascii(const std::string& domain_ascii) const {
-    const std::string key = ew_ascii_lower(domain_ascii);
+    std::string key = domain_ascii;
+    ew::ew_ascii_lower_inplace(key);
     for (const auto& d : domains) {
         if (d.domain_ascii == key) return &d;
     }

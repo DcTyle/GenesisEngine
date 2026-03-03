@@ -23,10 +23,85 @@
 #include "substrate_harmonics.hpp"
 #include "ew_coherence_analyzer.hpp"
 
+#include "GE_shell_mesh.hpp"
+#include "GE_object_ancilla.hpp"
+#include "GE_planet_ancilla.hpp"
+
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+
 static inline int64_t q32_32_mul(int64_t a_q32_32, int64_t b_q32_32) {
     // (a*b)>>32, no rounding.
     __int128 p = (__int128)a_q32_32 * (__int128)b_q32_32;
     return (int64_t)(p >> 32);
+}
+
+// Build a view matrix (row-major 4x4) in Q16.16 from a camera pose expressed as
+// (pos_q16_16, quat_q16_16). Quaternion is interpreted as camera->world rotation.
+// View matrix is world->camera: R^T and -R^T * pos.
+static void ew_build_view_mat_q16_16(const int32_t pos_xyz_q16_16[3], const int32_t q_q16_16[4], int32_t out_m16_q16_16[16]) {
+    const int64_t x = (int64_t)q_q16_16[0];
+    const int64_t y = (int64_t)q_q16_16[1];
+    const int64_t z = (int64_t)q_q16_16[2];
+    const int64_t w = (int64_t)q_q16_16[3];
+
+    auto mul_q16 = [&](int64_t a, int64_t b) -> int64_t { return (a * b) >> 16; };
+    const int64_t xx = mul_q16(x, x);
+    const int64_t yy = mul_q16(y, y);
+    const int64_t zz = mul_q16(z, z);
+    const int64_t xy = mul_q16(x, y);
+    const int64_t xz = mul_q16(x, z);
+    const int64_t yz = mul_q16(y, z);
+    const int64_t xw = mul_q16(x, w);
+    const int64_t yw = mul_q16(y, w);
+    const int64_t zw = mul_q16(z, w);
+
+    const int64_t one = 65536;
+    const int64_t two = 2;
+
+    int32_t R[9];
+    R[0] = (int32_t)(one - two * (yy + zz));
+    R[1] = (int32_t)(two * (xy - zw));
+    R[2] = (int32_t)(two * (xz + yw));
+
+    R[3] = (int32_t)(two * (xy + zw));
+    R[4] = (int32_t)(one - two * (xx + zz));
+    R[5] = (int32_t)(two * (yz - xw));
+
+    R[6] = (int32_t)(two * (xz - yw));
+    R[7] = (int32_t)(two * (yz + xw));
+    R[8] = (int32_t)(one - two * (xx + yy));
+
+    const int32_t Rt00 = R[0];
+    const int32_t Rt01 = R[3];
+    const int32_t Rt02 = R[6];
+    const int32_t Rt10 = R[1];
+    const int32_t Rt11 = R[4];
+    const int32_t Rt12 = R[7];
+    const int32_t Rt20 = R[2];
+    const int32_t Rt21 = R[5];
+    const int32_t Rt22 = R[8];
+
+    const int64_t px = (int64_t)pos_xyz_q16_16[0];
+    const int64_t py = (int64_t)pos_xyz_q16_16[1];
+    const int64_t pz = (int64_t)pos_xyz_q16_16[2];
+
+    auto dot3_q16 = [&](int32_t a0, int32_t a1, int32_t a2, int64_t bx, int64_t by, int64_t bz) -> int32_t {
+        int64_t s = ((int64_t)a0 * bx + (int64_t)a1 * by + (int64_t)a2 * bz) >> 16;
+        if (s > 2147483647LL) s = 2147483647LL;
+        if (s < -2147483648LL) s = -2147483648LL;
+        return (int32_t)s;
+    };
+
+    const int32_t tx = (int32_t)(-dot3_q16(Rt00, Rt01, Rt02, px, py, pz));
+    const int32_t ty = (int32_t)(-dot3_q16(Rt10, Rt11, Rt12, px, py, pz));
+    const int32_t tz = (int32_t)(-dot3_q16(Rt20, Rt21, Rt22, px, py, pz));
+
+    out_m16_q16_16[0] = Rt00; out_m16_q16_16[1] = Rt01; out_m16_q16_16[2] = Rt02; out_m16_q16_16[3] = tx;
+    out_m16_q16_16[4] = Rt10; out_m16_q16_16[5] = Rt11; out_m16_q16_16[6] = Rt12; out_m16_q16_16[7] = ty;
+    out_m16_q16_16[8] = Rt20; out_m16_q16_16[9] = Rt21; out_m16_q16_16[10]= Rt22; out_m16_q16_16[11]= tz;
+    out_m16_q16_16[12]= 0;    out_m16_q16_16[13]= 0;    out_m16_q16_16[14]= 0;    out_m16_q16_16[15]= 65536;
 }
 
 
@@ -315,25 +390,6 @@ static void ew_synth_query_best(SubstrateManager* sm, const std::string& request
     }
 }
 
-static bool ew_synth_emit_function_stub_patch(SubstrateManager* sm, const std::string& rel_path, const std::string& func_name) {
-    if (!sm) return false;
-    if (rel_path.empty() || func_name.empty()) return false;
-
-    EwPatchSpec ps;
-    ps.mode_u16 = EW_PATCH_APPEND_EOF;
-    ps.text = "\n// EW_ANCHOR:EW_SYNTH_STUB_BEGIN\n";
-    ps.text += "// Synthesized stub (deterministic). Fill in logic under coherence gate.\n";
-    ps.text += "static int ";
-    ps.text += func_name;
-    ps.text += "(int argc, char** argv) {\n";
-    ps.text += "    (void)argc; (void)argv;\n";
-    ps.text += "    return 0;\n";
-    ps.text += "}\n";
-    ps.text += "// EW_ANCHOR:EW_SYNTH_STUB_END\n";
-
-    return code_apply_patch_coherence_gated(sm, rel_path, code_artifact_kind_from_rel_path(rel_path), ps, 0xE330u);
-}
-
 static bool ew_synth_emit_cli_tool(SubstrateManager* sm, const std::string& tool_name) {
     if (!sm) return false;
     if (tool_name.empty()) return false;
@@ -443,36 +499,10 @@ static bool ew_synthcode_execute(SubstrateManager* sm, const std::string& reques
         return true;
     }
 
-    // Add stub.
-    std::string explicit_path = ew_pick_explicit_path_or_empty(req);
-    std::string func;
-    {
-        const std::string key = "function ";
-        size_t p = lc.find(key);
-        if (p != std::string::npos) {
-            std::string tail = req.substr(p + key.size());
-            func = ew_extract_first_ident_ascii(tail);
-        }
-        if (func.empty()) func = ew_extract_first_ident_ascii(req);
-    }
-
-    if (!func.empty()) {
-        if (!explicit_path.empty()) {
-            const bool ok = ew_synth_emit_function_stub_patch(sm, explicit_path, func);
-            sm->emit_ui_line(std::string("SYNTHCODE_PATCH ") + explicit_path + " ok=" + (ok ? "1" : "0"));
-            return ok;
-        }
-
-        std::vector<std::pair<std::string, uint32_t>> ms;
-        ew_synth_query_best(sm, req, 8u, ms);
-        if (!ms.empty()) {
-            const std::string target = ms[0].first;
-            const bool ok = ew_synth_emit_function_stub_patch(sm, target, func);
-            sm->emit_ui_line(std::string("SYNTHCODE_PATCH ") + target + " ok=" + (ok ? "1" : "0"));
-            return ok;
-        }
-    }
-    sm->emit_ui_line("SYNTHCODE_NO_TARGET");
+    // No stubs. SYNTHCODE only emits complete, coherence-gated artifacts (modules/tools)
+    // or fails closed. If the request is not one of the implemented emitters,
+    // we refuse deterministically so the repo never accumulates incomplete logic.
+    sm->emit_ui_line("SYNTHCODE_REFUSED_NO_IMPLEMENTATION");
     return false;
 }
 // Game-engine bootstrap request. This is a substrate-managed process that seeds
@@ -487,21 +517,30 @@ static bool ew_gameboot_execute(SubstrateManager* sm, const std::string& request
     // Enqueue measurable checkpoint tasks for Stage 6 (game engine bootstrap).
     // These tasks are validated by the existing learning gate in the sandbox.
     {
-        MetricTask t{};
-        t.kind_u32 = (uint32_t)MetricKind::Game_RenderPipeline_Determinism;
-        t.label_utf8 = "Game_RenderPipeline_Determinism";
+        genesis::MetricTask t{};
+        t.target.kind = genesis::MetricKind::Game_RenderPipeline_Determinism;
+        t.context_anchor_id_u32 = genesis::EwObjectAncilla::LEDGER_ANCILLA_ID;
+        t.tries_remaining_u64 = 1024;
+        t.tries_per_step_u32 = 32;
+        t.ticks_remaining_u32 = 360;
         sm->learning_gate.registry().enqueue_task(t);
     }
     {
-        MetricTask t{};
-        t.kind_u32 = (uint32_t)MetricKind::Game_SceneGraph_TransformConsistency;
-        t.label_utf8 = "Game_SceneGraph_TransformConsistency";
+        genesis::MetricTask t{};
+        t.target.kind = genesis::MetricKind::Game_SceneGraph_TransformConsistency;
+        t.context_anchor_id_u32 = genesis::EwObjectAncilla::LEDGER_ANCILLA_ID;
+        t.tries_remaining_u64 = 1024;
+        t.tries_per_step_u32 = 32;
+        t.ticks_remaining_u32 = 360;
         sm->learning_gate.registry().enqueue_task(t);
     }
     {
-        MetricTask t{};
-        t.kind_u32 = (uint32_t)MetricKind::Game_EditorHook_CommandSurface;
-        t.label_utf8 = "Game_EditorHook_CommandSurface";
+        genesis::MetricTask t{};
+        t.target.kind = genesis::MetricKind::Game_EditorHook_CommandSurface;
+        t.context_anchor_id_u32 = genesis::EwObjectAncilla::LEDGER_ANCILLA_ID;
+        t.tries_remaining_u64 = 1024;
+        t.tries_per_step_u32 = 32;
+        t.ticks_remaining_u32 = 360;
         sm->learning_gate.registry().enqueue_task(t);
     }
 
@@ -631,6 +670,39 @@ for (size_t i = 0; i < count; ++i) anchors.emplace_back((uint32_t)i);
     // Initialize deterministic AI policy table.
     ai_policy.init(projection_seed);
 
+    // Load project settings (fail closed to defaults if missing, but report).
+    {
+        std::string err;
+        EwProjectSettings loaded;
+        if (ge_project_settings_load(loaded, "Draft Container/ProjectSettings/project_settings.ewcfg", err)) {
+            project_settings = loaded;
+            emit_ui_line(std::string("PROJECT_SETTINGS_LOADED ") + "Draft Container/ProjectSettings/project_settings.ewcfg");
+        } else {
+            // Keep defaults; emit observable.
+            emit_ui_line(std::string("PROJECT_SETTINGS_DEFAULTS ") + err);
+        }
+
+        // Load input bindings deterministically (fail closed but observable).
+        std::string berr;
+        if (!load_input_bindings_if_needed(&berr)) {
+            emit_ui_line(std::string("INPUT_BINDINGS_DEFAULTS ") + berr);
+        } else {
+            emit_ui_line(std::string("INPUT_BINDINGS_LOADED ") + project_settings.input.bindings_path_utf8);
+        }
+    }
+
+    // Ensure camera anchor exists and is initialized from project settings.
+    {
+        camera_anchor_id_u32 = next_anchor_id_u32;
+        const uint32_t id = alloc_anchor_id();
+        camera_anchor_id_u32 = id;
+        anchors[id].kind_u32 = EW_ANCHOR_KIND_CAMERA;
+        anchors[id].camera_state.focal_length_mm_q16_16 = project_settings.camera.default_focal_length_mm_q16_16;
+        anchors[id].camera_state.aperture_f_q16_16 = project_settings.camera.default_aperture_f_q16_16;
+        anchors[id].camera_state.exposure_ev_q16_16 = project_settings.camera.default_exposure_ev_q16_16;
+        anchors[id].camera_state.focus_mode_u8 = (uint8_t)EwFocusMode::ManualDistance;
+    }
+
     // ------------------------------------------------------------------
     // AnchorPack boot: embed selected process artifacts as carrier-encoded
     // anchors for substrate-native microprocessing.
@@ -731,6 +803,22 @@ for (size_t i = 0; i < count; ++i) anchors.emplace_back((uint32_t)i);
 
 }
 
+uint32_t SubstrateManager::alloc_anchor_id() {
+    const uint32_t id = next_anchor_id_u32++;
+    if (id >= anchors.size()) {
+        anchors.emplace_back(id);
+        ancilla.emplace_back(ancilla_particle{});
+        lanes.emplace_back(EwQubitLane{});
+        redirect_to.push_back(0u);
+        split_child_a.push_back(0u);
+        split_child_b.push_back(0u);
+    }
+    // default immutable object id binding
+    anchors[id].id = id;
+    anchors[id].object_id_u64 = (uint64_t)id;
+    return id;
+}
+
 uint32_t SubstrateManager::derived_crawler_chunk_bytes_u32() const {
     // Derive a stable DMA-friendly chunk size from the configured segment budget.
     // We target a power-of-two chunk so the GPU kernels can index deterministically.
@@ -826,25 +914,85 @@ void SubstrateManager::ensure_lattice_gpu_() {
     lattice_gpu_->upload_density_mask_u8(dens.data(), dens.size());
 }
 
+void SubstrateManager::apply_object_imprint_writeback_() {
+    // Bounded object→world writeback: accumulate the object-local phase/occupancy
+    // imprint for objects advanced this tick, then apply it once per cell.
+    // This method is called from tick() only when the authoritative lattice exists.
+    if (!lattice_gpu_) return;
+    if (object_updates_last_tick_u64.empty()) return;
+
+    lattice_gpu_->clear_object_imprint();
+
+    auto q32_32_to_i32_round = [](uint64_t q)->int32_t {
+        const int64_t s = (int64_t)q;
+        const int64_t r = (s >= 0) ? (s + (1ll << 31)) : (s - (1ll << 31));
+        return (int32_t)(r >> 32);
+    };
+
+    const uint32_t gxw = lattice_gpu_->grid_x();
+    const uint32_t gyw = lattice_gpu_->grid_y();
+    const uint32_t gzw = lattice_gpu_->grid_z();
+
+    for (size_t i = 0; i < object_updates_last_tick_u64.size(); ++i) {
+        const uint64_t oid = object_updates_last_tick_u64[i];
+        const EwObjectEntry* e = object_store.find(oid);
+        if (!e) continue;
+
+        EwVoxelVolumeView vv;
+        if (!object_store.view_voxel_volume(oid, vv)) continue;
+        if (vv.format_u32 != 1u || !vv.bytes || vv.byte_count == 0) continue;
+
+        uint32_t lgx=0,lgy=0,lgz=0,lfmt=0;
+        const int16_t* phi = nullptr;
+        size_t phi_bytes = 0;
+        if (!object_store.view_local_phi(oid, lgx, lgy, lgz, lfmt, phi, phi_bytes) ||
+            lfmt != 1u || !phi ||
+            lgx != vv.grid_x_u32 || lgy != vv.grid_y_u32 || lgz != vv.grid_z_u32 ||
+            phi_bytes != vv.byte_count * 2u) {
+            continue;
+        }
+
+        int32_t cx = q32_32_to_i32_round(e->geomcoord9_u64x9.u64x9[0]) + (int32_t)(gxw / 2u);
+        int32_t cy = q32_32_to_i32_round(e->geomcoord9_u64x9.u64x9[1]) + (int32_t)(gyw / 2u);
+        int32_t cz = q32_32_to_i32_round(e->geomcoord9_u64x9.u64x9[2]) + (int32_t)(gzw / 2u);
+        if (cx < 0) cx = 0; if (cx >= (int32_t)gxw) cx = (int32_t)gxw - 1;
+        if (cy < 0) cy = 0; if (cy >= (int32_t)gyw) cy = (int32_t)gyw - 1;
+        if (cz < 0) cz = 0; if (cz >= (int32_t)gzw) cz = (int32_t)gzw - 1;
+
+        // Deterministic bounded imprint accumulation. Scale factors are kept
+        // conservative in this branch (no additional tuning constants).
+        (void)lattice_gpu_->accumulate_object_imprint5_q15(vv.bytes, phi,
+                                                           vv.grid_x_u32, vv.grid_y_u32, vv.grid_z_u32,
+                                                           (uint32_t)cx, (uint32_t)cy, (uint32_t)cz,
+                                                           0.0f, 0.0f,
+                                                           0.0f, 0.0f, 0.0f);
+    }
+
+    lattice_gpu_->apply_object_imprint_to_fields();
+}
+
 void SubstrateManager::ensure_lattice_probe_gpu_() {
     if (!gpu_lattice_authoritative) return;
-    if (lattice_probe_gpu_) return;
+    // Default sandbox 0.
+    const uint32_t sandbox_id = 0u;
+    if (sandbox_id >= EW_LEARNING_SANDBOX_MAX) return;
+    if (lattice_probe_gpu_[sandbox_id]) return;
     // Deterministic learning sandbox lattice dimensions.
     // This lattice is used for parameter molding/evolution during metric fitting
     // and never perturbs the world lattice.
     const uint32_t gx = 32, gy = 32, gz = 32;
-    lattice_probe_gpu_.reset(new EwFieldLatticeGpu(gx, gy, gz));
-    lattice_probe_gpu_->init(projection_seed ^ 0xC0FFEEULL);
+    lattice_probe_gpu_[sandbox_id].reset(new EwFieldLatticeGpu(gx, gy, gz));
+    lattice_probe_gpu_[sandbox_id]->init(projection_seed ^ 0xC0FFEEULL);
     std::vector<uint8_t> dens((size_t)gx * (size_t)gy * (size_t)gz, 0u);
-    lattice_probe_gpu_->upload_density_mask_u8(dens.data(), dens.size());
+    lattice_probe_gpu_[sandbox_id]->upload_density_mask_u8(dens.data(), dens.size());
 
     // Bind probe lattice view for learning metric extraction.
     (void)genesis::ew_learning_bind_probe_lattice_cuda(
-        lattice_probe_gpu_->device_E_curr_f32(),
-        lattice_probe_gpu_->device_flux_f32(),
-        lattice_probe_gpu_->device_coherence_f32(),
-        lattice_probe_gpu_->device_curvature_f32(),
-        lattice_probe_gpu_->device_doppler_f32(),
+        lattice_probe_gpu_[sandbox_id]->device_E_curr_f32(),
+        lattice_probe_gpu_[sandbox_id]->device_flux_f32(),
+        lattice_probe_gpu_[sandbox_id]->device_coherence_f32(),
+        lattice_probe_gpu_[sandbox_id]->device_curvature_f32(),
+        lattice_probe_gpu_[sandbox_id]->device_doppler_f32(),
         (int)gx, (int)gy, (int)gz
     );
 }
@@ -864,11 +1012,17 @@ EwFieldLatticeGpu* SubstrateManager::world_lattice_gpu_for_learning() {
     return lattice_gpu_.get();
 }
 
-EwFieldLatticeGpu* SubstrateManager::probe_lattice_gpu_for_learning() {
+EwFieldLatticeGpu* SubstrateManager::probe_lattice_gpu_for_learning(uint32_t sandbox_id_u32) {
     if (!gpu_lattice_authoritative) return nullptr;
     ensure_lattice_gpu_();
-    ensure_lattice_probe_gpu_();
-    return lattice_probe_gpu_.get();
+    if (sandbox_id_u32 >= EW_LEARNING_SANDBOX_MAX) sandbox_id_u32 = 0u;
+    // Ensure the requested sandbox exists.
+    if (!lattice_probe_gpu_[sandbox_id_u32]) {
+        // For now, initialize only sandbox 0 deterministically; other ids alias to 0.
+        sandbox_id_u32 = 0u;
+        ensure_lattice_probe_gpu_();
+    }
+    return lattice_probe_gpu_[sandbox_id_u32].get();
 }
 
 void SubstrateManager::ai_log_event(const EwAiActionEvent& e) {
@@ -1014,6 +1168,126 @@ void SubstrateManager::submit_ai_commands_fixed(const EwAiCommand* cmds, uint32_
     ai_pulse_q63 = ai_total_weight_q63;
     if (ai_pulse_q63 < 0) ai_pulse_q63 = 0;
     if (ai_pulse_q63 > INT64_MAX) ai_pulse_q63 = INT64_MAX;
+}
+
+bool SubstrateManager::control_packet_push(const EwControlPacket& p) {
+    if (control_inbox_count_u32 >= CONTROL_INBOX_CAP) return false;
+    const uint32_t idx = (control_inbox_head_u32 + control_inbox_count_u32) % CONTROL_INBOX_CAP;
+    control_inbox[idx] = p;
+    control_inbox_count_u32++;
+    return true;
+}
+
+bool SubstrateManager::control_packet_pop(EwControlPacket& out) {
+    if (control_inbox_count_u32 == 0) return false;
+    out = control_inbox[control_inbox_head_u32];
+    control_inbox_head_u32 = (control_inbox_head_u32 + 1) % CONTROL_INBOX_CAP;
+    control_inbox_count_u32--;
+    return true;
+}
+
+
+bool SubstrateManager::load_input_bindings_if_needed(std::string* out_err) {
+    if (input_bindings_loaded) return true;
+
+    // Deterministic load of bindings file. Format (one per line):
+    //  action <raw_id_u32> <mapped_u32> <scale_q16_16>
+    //  axis   <raw_id_u32> <mapped_u32> <scale_q16_16>
+    // Lines may have comments starting with '#'. Whitespace-delimited.
+    const std::string path = project_settings.input.bindings_path_utf8;
+    std::ifstream f(path.c_str(), std::ios::in | std::ios::binary);
+    if (!f.good()) {
+        if (out_err) *out_err = std::string("input_bindings_open_failed ") + path;
+        return false;
+    }
+
+    input_action_bindings.clear();
+    input_axis_bindings.clear();
+
+    std::string line;
+    uint32_t line_no = 0;
+    while (std::getline(f, line)) {
+        line_no++;
+        // Strip comment.
+        const size_t hash = line.find('#');
+        if (hash != std::string::npos) line.resize(hash);
+        // Trim spaces.
+        while (!line.empty() && (line.back()=='\r' || line.back()=='\n' || line.back()==' ' || line.back()=='\t')) line.pop_back();
+        size_t st = 0;
+        while (st < line.size() && (line[st]==' ' || line[st]=='\t')) st++;
+        if (st >= line.size()) continue;
+        line = line.substr(st);
+
+        std::istringstream iss(line);
+        std::string kind;
+        uint32_t raw = 0, mapped = 0;
+        int32_t scale = (int32_t)(1 * 65536);
+        if (!(iss >> kind >> raw >> mapped >> scale)) {
+            // Fail closed deterministically: ignore malformed lines but report.
+            continue;
+        }
+        EwInputBinding b;
+        b.raw_id_u32 = raw;
+        b.mapped_u32 = mapped;
+        b.scale_q16_16 = scale;
+        if (kind == "action") input_action_bindings.push_back(b);
+        else if (kind == "axis") input_axis_bindings.push_back(b);
+    }
+
+    // Stable ordering: sort by raw_id then mapped.
+    auto cmp = [](const EwInputBinding& a, const EwInputBinding& b) {
+        if (a.raw_id_u32 != b.raw_id_u32) return a.raw_id_u32 < b.raw_id_u32;
+        return a.mapped_u32 < b.mapped_u32;
+    };
+    std::sort(input_action_bindings.begin(), input_action_bindings.end(), cmp);
+    std::sort(input_axis_bindings.begin(), input_axis_bindings.end(), cmp);
+
+    input_bindings_loaded = true;
+    if (out_err) *out_err = std::string();
+    return true;
+}
+
+bool SubstrateManager::save_input_bindings_if_dirty(std::string* out_err) {
+    if (!input_bindings_dirty) return true;
+    const std::string path = project_settings.input.bindings_path_utf8;
+    std::ofstream f(path.c_str(), std::ios::out | std::ios::binary | std::ios::trunc);
+    if (!f.good()) {
+        if (out_err) *out_err = std::string("input_bindings_write_failed ") + path;
+        return false;
+    }
+
+    // Deterministic header.
+    const char* hdr = "# Genesis Engine input bindings (deterministic)\n"
+                      "# Format: action|axis <raw_id_u32> <mapped_u32> <scale_q16_16>\n";
+    f.write(hdr, (std::streamsize)std::strlen(hdr));
+
+    auto write_vec = [&](const char* kind, const std::vector<EwInputBinding>& v) {
+        for (const auto& b : v) {
+            char line[128];
+            // snprintf is deterministic for integers.
+            const int n = std::snprintf(line, sizeof(line), "%s %u %u %d\n",
+                                        kind,
+                                        (unsigned)b.raw_id_u32,
+                                        (unsigned)b.mapped_u32,
+                                        (int)b.scale_q16_16);
+            if (n > 0) f.write(line, (std::streamsize)n);
+        }
+    };
+
+    // Ensure stable ordering prior to write.
+    auto cmp = [](const EwInputBinding& a, const EwInputBinding& b) {
+        if (a.raw_id_u32 != b.raw_id_u32) return a.raw_id_u32 < b.raw_id_u32;
+        return a.mapped_u32 < b.mapped_u32;
+    };
+    std::sort(input_action_bindings.begin(), input_action_bindings.end(), cmp);
+    std::sort(input_axis_bindings.begin(), input_axis_bindings.end(), cmp);
+
+    write_vec("action", input_action_bindings);
+    write_vec("axis", input_axis_bindings);
+
+    input_bindings_dirty = false;
+    if (out_err) *out_err = std::string();
+    return true;
 }
 
 
@@ -2131,6 +2405,10 @@ void SubstrateManager::observe_text_line(const std::string& utf8_line) {
     const uint32_t f_code_u32 = (uint32_t)f_code;
     const uint64_t artifact_id_u64 = (static_cast<uint64_t>(byte_len_u32) << 32) | static_cast<uint64_t>(f_code_u32);
 
+
+    // Phase-amplitude current: every observation emits an activation footprint.
+    phase_current.on_activation(genesis::EwPhaseCurrent::footprint_from_text(canonical_tick, artifact_id_u64));
+
     const uint32_t stream_id_u32 = 1u;
     const uint32_t extractor_id_u32 = 1u; // UTF8 text
     const uint32_t trust_class_u32 = 1u;  // local user observation
@@ -2211,6 +2489,79 @@ void SubstrateManager::ui_submit_user_text_line(const std::string& utf8_line) {
             live_crawler.enqueue_url(url);
             emit_ui_line("GE_LIVE_CRAWL:seed url=" + url);
         }
+        return;
+    }
+
+    // User-updatable allowlist.
+    //  - /allowlist_reload (loads Draft Container/Corpus/allowlist_user.md if present)
+    //  - /allowlist_update <markdown...>  (inline markdown; bounded)
+    //  - allowlist_update: <markdown...>
+    if (utf8_line.rfind("/allowlist_reload", 0) == 0 || utf8_line.rfind("allowlist_reload:", 0) == 0) {
+        const bool ok = corpus_allowlist_load_user_file_if_present();
+        emit_ui_line(ok ? "ALLOWLIST_RELOADED" : "ALLOWLIST_RELOAD_NOFILE");
+        return;
+    }
+    if (utf8_line.rfind("/allowlist_update", 0) == 0 || utf8_line.rfind("allowlist_update:", 0) == 0) {
+        // Inline update: everything after first space (or after colon) is treated as markdown.
+        std::string md;
+        const size_t psp = utf8_line.find(' ');
+        const size_t pco = utf8_line.find(':');
+        size_t p = std::string::npos;
+        if (psp != std::string::npos) p = psp + 1;
+        else if (pco != std::string::npos) p = pco + 1;
+        if (p != std::string::npos && p < utf8_line.size()) {
+            md = utf8_line.substr(p);
+            while (!md.empty() && (md[0] == ' ' || md[0] == '\t')) md.erase(md.begin());
+        }
+        if (md.empty()) {
+            emit_ui_line("ALLOWLIST_UPDATE_EMPTY");
+        } else {
+            (void)corpus_allowlist_update_from_user_text(md);
+        }
+        return;
+    }
+
+    // Simulation snapshot + playback/injection.
+    //  - /sim_save name=foo
+    //  - /sim_play_loop name=foo
+    //  - /sim_play_live name=foo
+    if (utf8_line.rfind("/sim_save", 0) == 0 || utf8_line.rfind("sim_save:", 0) == 0) {
+        std::vector<std::string> toks;
+        ew::ew_split_shell_ascii(utf8_line, toks);
+        std::string name;
+        for (size_t i = 1; i < toks.size(); ++i) {
+            std::string_view k_sv, v_sv;
+            if (ew::ew_split_kv_token_ascii(std::string_view(toks[i]), k_sv, v_sv)) {
+                if (k_sv == "name") name = std::string(v_sv);
+            }
+        }
+        (void)sim_save_to_file(name);
+        return;
+    }
+    if (utf8_line.rfind("/sim_play_loop", 0) == 0 || utf8_line.rfind("sim_play_loop:", 0) == 0) {
+        std::vector<std::string> toks;
+        ew::ew_split_shell_ascii(utf8_line, toks);
+        std::string name;
+        for (size_t i = 1; i < toks.size(); ++i) {
+            std::string_view k_sv, v_sv;
+            if (ew::ew_split_kv_token_ascii(std::string_view(toks[i]), k_sv, v_sv)) {
+                if (k_sv == "name") name = std::string(v_sv);
+            }
+        }
+        (void)sim_load_from_file(name, true);
+        return;
+    }
+    if (utf8_line.rfind("/sim_play_live", 0) == 0 || utf8_line.rfind("sim_play_live:", 0) == 0) {
+        std::vector<std::string> toks;
+        ew::ew_split_shell_ascii(utf8_line, toks);
+        std::string name;
+        for (size_t i = 1; i < toks.size(); ++i) {
+            std::string_view k_sv, v_sv;
+            if (ew::ew_split_kv_token_ascii(std::string_view(toks[i]), k_sv, v_sv)) {
+                if (k_sv == "name") name = std::string(v_sv);
+            }
+        }
+        (void)sim_load_from_file(name, false);
         return;
     }
 
@@ -2326,6 +2677,485 @@ void SubstrateManager::set_lattice_projection_tag_ex(uint32_t lattice_sel_u32,
 }
 
 
+uint32_t SubstrateManager::ui_create_chat_anchor_from_text(const std::string& utf8_line) {
+#if defined(EW_ENABLE_UI_PARTITION) && (EW_ENABLE_UI_PARTITION==1)
+    // Bounded ring buffer (drop oldest deterministically).
+    if (ui_chat_q.size() >= UI_CHAT_CAP) ui_chat_q.pop_front();
+    ui_chat_q.push_back(utf8_line);
+
+    // Create a UI chat anchor as a dedicated partitioned anchor.
+    Anchor a{};
+    a.id = next_anchor_id_u32++;
+    a.kind_u32 = EW_ANCHOR_KIND_DEFAULT;
+    a.flags_u32 = (EW_ANCHOR_FLAG_UI_PARTITION | EW_ANCHOR_FLAG_CHAT_MESSAGE);
+    a.context_id_u32 = 0u;
+    a.crawler_id_u32 = 0u;
+    a.object_id_u64 = (uint64_t)a.id;
+    a.object_phase_seed_u64 = (uint64_t)a.id;
+
+    // Start "low coherence": chi_q is the observable we already use for confidence gating.
+    // Use a small, deterministic baseline rather than zero to avoid divide-by-zero behavior.
+    a.chi_q = (TURN_SCALE / 256);
+    a.theta_q = 0;
+    a.m_q = 0;
+    a.tau_q = 0;
+    a.tau_turns_q = 0;
+    a.curvature_q = 0;
+    a.doppler_q = 0;
+    a.last_theta_q = 0;
+    a.last_f_code = 0;
+    a.last_a_code = 0;
+    a.last_v_code = 0;
+    a.last_i_code = 0;
+    for (uint32_t k = 0; k < Anchor::HARMONICS_N; ++k) a.harmonics_q15[k] = 0;
+    a.harmonics_mean_q15 = 0;
+    a.harmonics_epoch_u32 = 0;
+    a.last_lnA_q32_32 = 0;
+    a.last_lnF_q32_32 = 0;
+
+    const uint32_t idx = (uint32_t)anchors.size();
+    anchors.push_back(a);
+    ancilla.push_back(ancilla_particle{});
+    // Ensure lane count matches anchor count (Blueprint requirement).
+    if (lanes.size() < anchors.size()) {
+        EwQubitLane lane{};
+        lanes.push_back(lane);
+    }
+
+    ui_anchor_indices.push_back(idx);
+    ui_last_chat_anchor_idx_u32 = idx;
+
+    // Feed the text into the crawler encoder path as a local observation so it becomes harmonics.
+    // This keeps all "meaning extraction" GPU/substrate-side.
+    crawler.enqueue_observation_utf8(
+        /*artifact_id*/ (uint64_t)idx,
+        /*target_anchor_id*/ idx,
+        /*crawler_anchor_id*/ 0u,
+        /*context_anchor_id*/ 0u,
+        /*stream_id*/ 0u,
+        /*extractor_id*/ 0u,
+        /*trust_class*/ 1u,
+        /*causal_tag*/ 0u,
+        /*domain*/ "local",
+        /*url*/ std::string("chat:") + std::to_string((uint64_t)idx),
+        /*utf8*/ utf8_line
+    );
+
+    // Spike global coherence deterministically from user input (attention).
+    // Trust for UI input is high but not absolute; keep bounded.
+    global_coherence.spike_from_user_input(canonical_tick_u64(), (uint32_t)utf8_line.size(), (uint16_t)24576);
+
+    return idx;
+#else
+    (void)utf8_line;
+    return 0u;
+#endif
+}
+
+
+bool SubstrateManager::corpus_allowlist_update_from_user_text(const std::string& allowlist_md_utf8) {
+    // Deterministic validation: bounded size + strict parser.
+    std::string s = allowlist_md_utf8;
+    if (s.size() > (size_t)128 * 1024) s.resize((size_t)128 * 1024);
+
+    GE_CorpusAllowlist tmp;
+    if (!GE_load_corpus_allowlist_from_md_text(s, tmp)) {
+        if (ui_out_q.size() < UI_OUT_CAP) ui_out_q.push_back("ALLOWLIST_UPDATE_REJECTED");
+        return false;
+    }
+
+    corpus_allowlist = tmp;
+    corpus_allowlist_loaded = true;
+    corpus_allowlist_user_md_utf8 = s;
+    corpus_allowlist_user_loaded = true;
+    domain_policies.build_from_allowlist(corpus_allowlist);
+
+    // Persist to disk (deterministic relpath under Draft Container).
+    {
+        const std::string rel = "Draft Container/Corpus/allowlist_user.md";
+        std::ofstream f(rel.c_str(), std::ios::binary);
+        if (f.good()) {
+            f.write(s.data(), (std::streamsize)s.size());
+            f.flush();
+        }
+    }
+
+    // Also persist as an inspector artifact for UI inspection/copy.
+    EwInspectorArtifact out{};
+    out.coord_coord9_u64 = ((uint64_t)canonical_tick << 1) ^ 0x414C4C57U; // 'ALLW'
+    out.kind_u32 = EW_ARTIFACT_TEXT;
+    out.rel_path = "Draft Container/Corpus/allowlist_user.md";
+    out.producer_tick_u64 = canonical_tick;
+    out.payload = s;
+    inspector_fields.upsert(out);
+
+    if (ui_out_q.size() < UI_OUT_CAP) ui_out_q.push_back("ALLOWLIST_UPDATE_OK");
+    return true;
+}
+
+
+bool SubstrateManager::corpus_allowlist_load_user_file_if_present() {
+    const std::string rel = "Draft Container/Corpus/allowlist_user.md";
+    std::ifstream f(rel.c_str(), std::ios::binary);
+    if (!f.good()) return false;
+    std::string s;
+    f.seekg(0, std::ios::end);
+    std::streampos n = f.tellg();
+    f.seekg(0, std::ios::beg);
+    if (n > (std::streampos)(128 * 1024)) n = (std::streampos)(128 * 1024);
+    s.resize((size_t)n);
+    if (n > 0) f.read(&s[0], n);
+    if (s.empty()) return false;
+    return corpus_allowlist_update_from_user_text(s);
+}
+
+
+static inline bool ew_write_i64(std::ostream& out, int64_t v) {
+    out.write(reinterpret_cast<const char*>(&v), sizeof(v));
+    return out.good();
+}
+static inline bool ew_read_i64(std::istream& in, int64_t& v) {
+    in.read(reinterpret_cast<char*>(&v), sizeof(v));
+    return in.good();
+}
+
+bool SubstrateManager::sim_save_to_file(const std::string& name_ascii) {
+    // Snapshot current state (same struct used by candidate/commit path).
+    EwState st;
+    st.canonical_tick = canonical_tick;
+    st.reservoir = reservoir;
+    st.boundary_scale_q32_32 = boundary_scale_q32_32;
+    st.anchors = anchors;
+    st.ancilla = ancilla;
+    st.lanes = lanes;
+    st.object_store = object_store;
+    st.materials_calib_done = materials_calib_done;
+    sim_snapshot = st;
+    sim_snapshot_valid = true;
+
+    // Persist.
+    std::string nm = name_ascii;
+    if (nm.empty()) nm = "default";
+    for (size_t i = 0; i < nm.size(); ++i) {
+        const unsigned char b = (unsigned char)nm[i];
+        const bool ok = (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_' || b == '-';
+        if (!ok) nm[i] = '_';
+    }
+    const std::string rel = std::string("Draft Container/Sim/sim_") + nm + ".bin";
+
+    // Ensure directory exists (best-effort; on failure we still keep in-memory snapshot).
+    (void)std::system("mkdir -p \"Draft Container/Sim\" 2>nul");
+
+    std::ofstream out(rel.c_str(), std::ios::binary);
+    if (!out.good()) {
+        emit_ui_line("SIM_SAVE_FAIL");
+        return false;
+    }
+    const uint32_t magic = 0x47455349U; // 'GESI'
+    const uint32_t ver = 2u;
+    out.write(reinterpret_cast<const char*>(&magic), sizeof(magic));
+    out.write(reinterpret_cast<const char*>(&ver), sizeof(ver));
+    if (!out.good()) return false;
+    // Core scalars
+    out.write(reinterpret_cast<const char*>(&st.canonical_tick), sizeof(st.canonical_tick));
+    if (!ew_write_i64(out, st.reservoir)) return false;
+    if (!ew_write_i64(out, st.boundary_scale_q32_32)) return false;
+    const uint32_t mc = st.materials_calib_done ? 1u : 0u;
+    out.write(reinterpret_cast<const char*>(&mc), sizeof(mc));
+
+    // Anchors
+    uint32_t na = (uint32_t)st.anchors.size();
+    out.write(reinterpret_cast<const char*>(&na), sizeof(na));
+    for (uint32_t i = 0; i < na; ++i) {
+        const Anchor& a = st.anchors[i];
+        // Serialize a stable subset + neighbors.
+        out.write(reinterpret_cast<const char*>(&a.id), sizeof(a.id));
+        out.write(reinterpret_cast<const char*>(&a.kind_u32), sizeof(a.kind_u32));
+        out.write(reinterpret_cast<const char*>(&a.flags_u32), sizeof(a.flags_u32));
+        out.write(reinterpret_cast<const char*>(&a.context_id_u32), sizeof(a.context_id_u32));
+        out.write(reinterpret_cast<const char*>(&a.crawler_id_u32), sizeof(a.crawler_id_u32));
+        out.write(reinterpret_cast<const char*>(&a.object_id_u64), sizeof(a.object_id_u64));
+        out.write(reinterpret_cast<const char*>(&a.object_phase_seed_u64), sizeof(a.object_phase_seed_u64));
+        out.write(reinterpret_cast<const char*>(&a.theta_q), sizeof(a.theta_q));
+        out.write(reinterpret_cast<const char*>(&a.chi_q), sizeof(a.chi_q));
+        out.write(reinterpret_cast<const char*>(&a.m_q), sizeof(a.m_q));
+        out.write(reinterpret_cast<const char*>(&a.tau_q), sizeof(a.tau_q));
+        out.write(reinterpret_cast<const char*>(&a.curvature_q), sizeof(a.curvature_q));
+        out.write(reinterpret_cast<const char*>(&a.doppler_q), sizeof(a.doppler_q));
+        out.write(reinterpret_cast<const char*>(&a.world_flux_grad_mean_q15), sizeof(a.world_flux_grad_mean_q15));
+        out.write(reinterpret_cast<const char*>(&a.harmonics_mean_q15), sizeof(a.harmonics_mean_q15));
+        out.write(reinterpret_cast<const char*>(&a.harmonics_epoch_u32), sizeof(a.harmonics_epoch_u32));
+        out.write(reinterpret_cast<const char*>(&a.last_lnA_q32_32), sizeof(a.last_lnA_q32_32));
+        out.write(reinterpret_cast<const char*>(&a.last_lnF_q32_32), sizeof(a.last_lnF_q32_32));
+        // Harmonics
+        for (uint32_t k = 0; k < Anchor::HARMONICS_N; ++k) {
+            out.write(reinterpret_cast<const char*>(&a.harmonics_q15[k]), sizeof(a.harmonics_q15[k]));
+        }
+        // Neighbors
+        uint32_t nn = (uint32_t)a.neighbors.size();
+        if (nn > 1024u) nn = 1024u;
+        out.write(reinterpret_cast<const char*>(&nn), sizeof(nn));
+        for (uint32_t k = 0; k < nn; ++k) {
+            const uint32_t nid = a.neighbors[k];
+            out.write(reinterpret_cast<const char*>(&nid), sizeof(nid));
+        }
+        if (!out.good()) return false;
+    }
+
+    // Ancilla particles
+    uint32_t np = (uint32_t)st.ancilla.size();
+    out.write(reinterpret_cast<const char*>(&np), sizeof(np));
+    if (np) {
+        out.write(reinterpret_cast<const char*>(st.ancilla.data()), (std::streamsize)(np * sizeof(ancilla_particle)));
+        if (!out.good()) return false;
+    }
+
+    // Lanes
+    uint32_t nl = (uint32_t)st.lanes.size();
+    out.write(reinterpret_cast<const char*>(&nl), sizeof(nl));
+    if (nl) {
+        out.write(reinterpret_cast<const char*>(st.lanes.data()), (std::streamsize)(nl * sizeof(EwQubitLane)));
+        if (!out.good()) return false;
+    }
+
+    // Object store
+    if (!st.object_store.serialize_binary(out)) return false;
+
+    emit_ui_line(std::string("SIM_SAVED ") + rel);
+    return true;
+}
+
+bool SubstrateManager::sim_load_from_file(const std::string& name_ascii, bool play_loop) {
+    std::string nm = name_ascii;
+    if (nm.empty()) nm = "default";
+    for (size_t i = 0; i < nm.size(); ++i) {
+        const unsigned char b = (unsigned char)nm[i];
+        const bool ok = (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_' || b == '-';
+        if (!ok) nm[i] = '_';
+    }
+    const std::string rel = std::string("Draft Container/Sim/sim_") + nm + ".bin";
+    std::ifstream in(rel.c_str(), std::ios::binary);
+    if (!in.good()) {
+        emit_ui_line("SIM_LOAD_NOFILE");
+        return false;
+    }
+    uint32_t magic = 0, ver = 0;
+    in.read(reinterpret_cast<char*>(&magic), sizeof(magic));
+    in.read(reinterpret_cast<char*>(&ver), sizeof(ver));
+    if (!in.good() || magic != 0x47455349U || (ver != 1u && ver != 2u)) {
+        emit_ui_line("SIM_LOAD_BAD_HEADER");
+        return false;
+    }
+    EwState st;
+    in.read(reinterpret_cast<char*>(&st.canonical_tick), sizeof(st.canonical_tick));
+    if (!ew_read_i64(in, st.reservoir)) return false;
+    if (!ew_read_i64(in, st.boundary_scale_q32_32)) return false;
+    uint32_t mc = 0;
+    in.read(reinterpret_cast<char*>(&mc), sizeof(mc));
+    st.materials_calib_done = (mc != 0u);
+
+    uint32_t na = 0;
+    in.read(reinterpret_cast<char*>(&na), sizeof(na));
+    if (na > 200000u) return false;
+    st.anchors.resize(na);
+    for (uint32_t i = 0; i < na; ++i) {
+        Anchor a{};
+        in.read(reinterpret_cast<char*>(&a.id), sizeof(a.id));
+        in.read(reinterpret_cast<char*>(&a.kind_u32), sizeof(a.kind_u32));
+        in.read(reinterpret_cast<char*>(&a.flags_u32), sizeof(a.flags_u32));
+        in.read(reinterpret_cast<char*>(&a.context_id_u32), sizeof(a.context_id_u32));
+        in.read(reinterpret_cast<char*>(&a.crawler_id_u32), sizeof(a.crawler_id_u32));
+        in.read(reinterpret_cast<char*>(&a.object_id_u64), sizeof(a.object_id_u64));
+        in.read(reinterpret_cast<char*>(&a.object_phase_seed_u64), sizeof(a.object_phase_seed_u64));
+        in.read(reinterpret_cast<char*>(&a.theta_q), sizeof(a.theta_q));
+        in.read(reinterpret_cast<char*>(&a.chi_q), sizeof(a.chi_q));
+        in.read(reinterpret_cast<char*>(&a.m_q), sizeof(a.m_q));
+        in.read(reinterpret_cast<char*>(&a.tau_q), sizeof(a.tau_q));
+        in.read(reinterpret_cast<char*>(&a.curvature_q), sizeof(a.curvature_q));
+        in.read(reinterpret_cast<char*>(&a.doppler_q), sizeof(a.doppler_q));
+        if (ver >= 2u) {
+            in.read(reinterpret_cast<char*>(&a.world_flux_grad_mean_q15), sizeof(a.world_flux_grad_mean_q15));
+        } else {
+            a.world_flux_grad_mean_q15 = 0;
+        }
+        in.read(reinterpret_cast<char*>(&a.harmonics_mean_q15), sizeof(a.harmonics_mean_q15));
+        in.read(reinterpret_cast<char*>(&a.harmonics_epoch_u32), sizeof(a.harmonics_epoch_u32));
+        in.read(reinterpret_cast<char*>(&a.last_lnA_q32_32), sizeof(a.last_lnA_q32_32));
+        in.read(reinterpret_cast<char*>(&a.last_lnF_q32_32), sizeof(a.last_lnF_q32_32));
+        for (uint32_t k = 0; k < Anchor::HARMONICS_N; ++k) {
+            in.read(reinterpret_cast<char*>(&a.harmonics_q15[k]), sizeof(a.harmonics_q15[k]));
+        }
+        uint32_t nn = 0;
+        in.read(reinterpret_cast<char*>(&nn), sizeof(nn));
+        if (nn > 1024u) return false;
+        a.neighbors.resize(nn);
+        for (uint32_t k = 0; k < nn; ++k) {
+            uint32_t nid = 0;
+            in.read(reinterpret_cast<char*>(&nid), sizeof(nid));
+            a.neighbors[k] = nid;
+        }
+        if (!in.good()) return false;
+        a.sync_basis9_from_core();
+        st.anchors[i] = a;
+    }
+
+    uint32_t np = 0;
+    in.read(reinterpret_cast<char*>(&np), sizeof(np));
+    if (np > 200000u) return false;
+    st.ancilla.resize(np);
+    if (np) {
+        in.read(reinterpret_cast<char*>(st.ancilla.data()), (std::streamsize)(np * sizeof(ancilla_particle)));
+        if (!in.good()) return false;
+    }
+
+    uint32_t nl = 0;
+    in.read(reinterpret_cast<char*>(&nl), sizeof(nl));
+    if (nl > 200000u) return false;
+    st.lanes.resize(nl);
+    if (nl) {
+        in.read(reinterpret_cast<char*>(st.lanes.data()), (std::streamsize)(nl * sizeof(EwQubitLane)));
+        if (!in.good()) return false;
+    }
+
+    if (!st.object_store.deserialize_binary(in)) {
+        emit_ui_line("SIM_LOAD_OBJECT_STORE_FAIL");
+        return false;
+    }
+
+    // Apply to live runtime.
+    reservoir = st.reservoir;
+    boundary_scale_q32_32 = st.boundary_scale_q32_32;
+    anchors = st.anchors;
+    ancilla = st.ancilla;
+    lanes = st.lanes;
+    object_store = st.object_store;
+    materials_calib_done = st.materials_calib_done;
+    // Ensure topology vectors are sized.
+    const uint32_t need = (uint32_t)anchors.size();
+    if (redirect_to.size() < need) redirect_to.resize(need, 0u);
+    if (split_child_a.size() < need) split_child_a.resize(need, 0u);
+    if (split_child_b.size() < need) split_child_b.resize(need, 0u);
+    next_anchor_id_u32 = (uint32_t)anchors.size();
+
+    // Snapshot for loop playback.
+    sim_snapshot = st;
+    sim_snapshot_valid = true;
+    sim_play_loop_enabled = play_loop;
+    sim_play_loop_start_tick_u64 = canonical_tick_u64();
+
+    emit_ui_line(play_loop ? "SIM_PLAY_LOOP" : "SIM_PLAY_LIVE");
+    return true;
+}
+
+
+uint32_t SubstrateManager::ui_create_anchor_from_chat_seed(uint32_t chat_anchor_idx_u32, uint16_t resonance_q15) {
+#if defined(EW_ENABLE_UI_PARTITION) && (EW_ENABLE_UI_PARTITION==1)
+    if (chat_anchor_idx_u32 >= anchors.size()) return 0u;
+
+    Anchor a{};
+    a.id = next_anchor_id_u32++;
+    a.kind_u32 = EW_ANCHOR_KIND_CONTEXT_ROOT;
+    a.flags_u32 = EW_ANCHOR_FLAG_UI_PARTITION;
+    a.context_id_u32 = anchors[chat_anchor_idx_u32].id;
+    a.crawler_id_u32 = 0u;
+    a.object_id_u64 = (uint64_t)a.id;
+    a.object_phase_seed_u64 = (uint64_t)a.id;
+
+    // Start at low coherence, then bump based on resonance.
+    // resonance_q15 is [0..32768].
+    const int64_t base = (TURN_SCALE / 256);
+    const int64_t bump = (int64_t)(((__int128)TURN_SCALE * (int64_t)resonance_q15) / (int64_t)32768 / 64); // max ~TURN/64
+    a.chi_q = base + bump;
+    a.theta_q = 0;
+    a.m_q = 0;
+    a.tau_q = 0;
+    a.tau_turns_q = 0;
+    a.curvature_q = 0;
+    a.doppler_q = 0;
+    a.last_theta_q = 0;
+    a.last_f_code = 0;
+    a.last_a_code = 0;
+    a.last_v_code = 0;
+    a.last_i_code = 0;
+    for (uint32_t k = 0; k < Anchor::HARMONICS_N; ++k) a.harmonics_q15[k] = 0;
+    a.harmonics_mean_q15 = 0;
+    a.harmonics_epoch_u32 = 0;
+    a.last_lnA_q32_32 = 0;
+    a.last_lnF_q32_32 = 0;
+
+    const uint32_t idx = (uint32_t)anchors.size();
+    anchors.push_back(a);
+    ancilla.push_back(ancilla_particle{});
+    if (lanes.size() < anchors.size()) {
+        EwQubitLane lane{};
+        lanes.push_back(lane);
+    }
+
+    ui_anchor_indices.push_back(idx);
+    // Target subsequent live crawl observations to this new training anchor.
+    ui_livecrawl_target_anchor_idx_u32 = idx;
+
+    // Also seed a plan packet so automation can chain immediately.
+    genesis::AutoArtifact plan{};
+    plan.kind = genesis::AutoArtifactKind::PlanPacket;
+    plan.created_tick_u64 = canonical_tick_u64();
+    plan.lane_u32 = 0u;
+    plan.payload_utf8 = "{\"plan\":\"ui_seed\",\"source\":\"chat\",\"tol_percent\":6}";
+    learning_automation.bus().push(plan);
+
+    return idx;
+#else
+    (void)chat_anchor_idx_u32; (void)resonance_q15;
+    return 0u;
+#endif
+}
+
+
+void SubstrateManager::ui_maybe_enqueue_crawl_seeds_from_text(const std::string& utf8_line) {
+    // Only act when live crawl is enabled and consent is granted.
+    if (crawler_enable_live_u32 == 0u || crawler_live_consent_required_u32 != 0u) {
+        emit_ui_line("AUTO_CRAWL_BLOCKED: live crawl disabled or consent required");
+        return;
+    }
+    // Extract any explicit http://... tokens first.
+    std::vector<std::string> toks;
+    ew::ew_split_shell_ascii(utf8_line, toks);
+    bool saw = false;
+    for (const auto& t : toks) {
+        if (t.rfind("http://", 0) == 0) {
+            live_crawler.enqueue_url(t);
+            saw = true;
+        }
+    }
+    if (saw) return;
+
+    // No explicit URL provided; deterministically choose one allowed domain root
+    // from domain policies as a "topic-general" seed.
+    // This keeps automation moving without guessing arbitrary external sites.
+    uint64_t acc = 1469598103934665603ULL;
+    for (size_t i = 0; i < utf8_line.size(); ++i) {
+        acc ^= (uint8_t)utf8_line[i];
+        acc *= 1099511628211ULL;
+    }
+    const size_t n = domain_policies.rows.size();
+    if (n == 0) {
+        emit_ui_line("AUTO_CRAWL_BLOCKED: no domain policies loaded");
+        return;
+    }
+    const size_t start = (size_t)(acc % (uint64_t)n);
+    for (size_t k = 0; k < n; ++k) {
+        const size_t idx = (start + k) % n;
+        const auto& r = domain_policies.rows[idx];
+        if (r.offline_only) continue;
+        if (!r.allow_http) continue;
+        live_crawler.enqueue_url(std::string("http://") + r.domain_ascii + "/");
+        emit_ui_line(std::string("AUTO_CRAWL_SEED: domain=") + r.domain_ascii);
+        return;
+    }
+    emit_ui_line("AUTO_CRAWL_BLOCKED: no http-allowed domains");
+}
+
+
 void SubstrateManager::emit_ui_line(const std::string& utf8_line) {
     if (ui_out_q.size() < UI_OUT_CAP) {
         ui_out_q.push_back(utf8_line);
@@ -2336,6 +3166,171 @@ bool SubstrateManager::ui_pop_output_text(std::string& out_utf8) {
     if (ui_out_q.empty()) return false;
     out_utf8 = ui_out_q.front();
     ui_out_q.pop_front();
+    return true;
+}
+
+bool SubstrateManager::export_object_bundle(uint64_t object_id_u64,
+                                            const std::string& out_dir_utf8,
+                                            std::string* out_report_utf8) const {
+    auto rep = [&](const std::string& s){ if (out_report_utf8) { out_report_utf8->append(s); out_report_utf8->push_back('\n'); } };
+
+    const EwObjectEntry* e = object_store.find(object_id_u64);
+    if (!e) {
+        rep("EXPORT:missing_object");
+        return false;
+    }
+
+    EwVoxelVolumeView vv;
+    if (!object_store.view_voxel_volume(object_id_u64, vv) || !vv.bytes || vv.byte_count == 0) {
+        rep("EXPORT:missing_voxel_volume");
+        return false;
+    }
+
+    // Ensure output directory exists.
+    std::error_code ec;
+    std::filesystem::create_directories(out_dir_utf8, ec);
+    if (ec) {
+        rep(std::string("EXPORT:mkdir_failed:") + ec.message());
+        return false;
+    }
+
+    // Build standard shell mesh from voxels (auto-topologize).
+    genesis::EwMeshV1 shell;
+    if (!genesis::ge_build_shell_mesh_from_voxels(/*subdiv*/5u,
+                                                  vv.grid_x_u32, vv.grid_y_u32, vv.grid_z_u32,
+                                                  vv.bytes,
+                                                  /*thr*/16u,
+                                                  shell)) {
+        rep("EXPORT:shell_build_failed");
+        return false;
+    }
+
+    const std::string mesh_path = (std::filesystem::path(out_dir_utf8) / "mesh_shell.ewmesh").u8string();
+    if (!genesis::ewmesh_write_v1(mesh_path, shell)) {
+        rep("EXPORT:write_mesh_failed");
+        return false;
+    }
+
+    // UV atlas
+    uint32_t aw=0, ah=0, af=0;
+    const uint8_t* atlas_bytes = nullptr;
+    size_t atlas_n = 0;
+    if (!object_store.view_uv_atlas(object_id_u64, aw, ah, af, atlas_bytes, atlas_n) || !atlas_bytes || atlas_n == 0) {
+        rep("EXPORT:missing_uv_atlas");
+        return false;
+    }
+    const std::string atlas_path = (std::filesystem::path(out_dir_utf8) / "uv_atlas.rgba8").u8string();
+    {
+        std::ofstream f(atlas_path, std::ios::binary);
+        if (!f) { rep("EXPORT:write_uv_atlas_failed"); return false; }
+        f.write((const char*)atlas_bytes, (std::streamsize)atlas_n);
+    }
+
+    // Also export a viewable diffuse texture derived from the UV atlas for universal formats.
+    // Deterministic: uncompressed 32bpp TGA (BGRA) named uv_atlas.tga.
+    const std::string atlas_tga_rel = "uv_atlas.tga";
+    const std::string atlas_tga_path = (std::filesystem::path(out_dir_utf8) / atlas_tga_rel).u8string();
+    {
+        // TGA header.
+        uint8_t hdr[18];
+        std::memset(hdr, 0, sizeof(hdr));
+        hdr[2] = 2; // uncompressed true-color
+        hdr[12] = (uint8_t)(aw & 0xFF);
+        hdr[13] = (uint8_t)((aw >> 8) & 0xFF);
+        hdr[14] = (uint8_t)(ah & 0xFF);
+        hdr[15] = (uint8_t)((ah >> 8) & 0xFF);
+        hdr[16] = 32;
+        hdr[17] = 8;
+
+        std::ofstream f(atlas_tga_path, std::ios::binary | std::ios::trunc);
+        if (!f) { rep("EXPORT:write_uv_tga_failed"); return false; }
+        f.write((const char*)hdr, 18);
+        // Convert RGBA->BGRA.
+        for (size_t i = 0; i + 3 < atlas_n; i += 4) {
+            uint8_t bgra[4];
+            bgra[0] = atlas_bytes[i + 2];
+            bgra[1] = atlas_bytes[i + 1];
+            bgra[2] = atlas_bytes[i + 0];
+            bgra[3] = atlas_bytes[i + 3];
+            f.write((const char*)bgra, 4);
+        }
+        if (!f.good()) { rep("EXPORT:write_uv_tga_failed"); return false; }
+    }
+
+    // Universal export: write FBX using Assimp, using the shell mesh and atlas texture.
+    // This makes exported assets portable while keeping the substrate-native UV atlas variables.
+    const std::string fbx_path = (std::filesystem::path(out_dir_utf8) / "mesh_shell.fbx").u8string();
+    {
+        std::string repx;
+        if (!genesis::assimp_export_ewmesh_v1_single_material(shell, fbx_path, "fbx", atlas_tga_rel, &repx)) {
+            rep("EXPORT:fbx_export_failed");
+            if (out_report_utf8) out_report_utf8->append(repx);
+            return false;
+        }
+        if (out_report_utf8) out_report_utf8->append(repx);
+    }
+    const std::string atlas_meta_path = (std::filesystem::path(out_dir_utf8) / "uv_atlas.json").u8string();
+    {
+        std::ofstream f(atlas_meta_path, std::ios::binary);
+        if (!f) { rep("EXPORT:write_uv_meta_failed"); return false; }
+        f << "{\n";
+        f << "  \"width\": " << aw << ",\n";
+        f << "  \"height\": " << ah << ",\n";
+        f << "  \"format\": \"RGBA8_UNORM\",\n";
+        f << "  \"channels\": {\n";
+        f << "    \"R\": \"density_occupancy_u8\",\n";
+        f << "    \"G\": \"coherence_proxy_u8\",\n";
+        f << "    \"B\": \"curvature_proxy_u8\",\n";
+        f << "    \"A\": \"object_id_lo_u8\"\n";
+        f << "  }\n";
+        f << "}\n";
+    }
+
+    // Material animation: single keyframe (deterministic baseline).
+    // When deformation clips are later recorded, this file extends to a sequence.
+    const std::string mat_anim_path = (std::filesystem::path(out_dir_utf8) / "material_anim.json").u8string();
+    {
+        // Derive a stable emissive scalar from mean density.
+        uint64_t sum = 0;
+        for (size_t i = 0; i < atlas_n; i += 4) sum += atlas_bytes[i];
+        const double mean = (atlas_n > 0) ? ((double)sum / (double)(atlas_n/4u)) : 0.0;
+        const double emiss = mean / 255.0;
+        std::ofstream f(mat_anim_path, std::ios::binary);
+        if (!f) { rep("EXPORT:write_mat_anim_failed"); return false; }
+        f << "{\n";
+        f << "  \"object_id_u64\": " << (unsigned long long)object_id_u64 << ",\n";
+        f << "  \"track\": [\n";
+        f << "    { \"t\": 0.0, \"emissive\": " << emiss << " }\n";
+        f << "  ]\n";
+        f << "}\n";
+    }
+
+    const std::string manifest_path = (std::filesystem::path(out_dir_utf8) / "export_manifest.json").u8string();
+    {
+        std::ofstream f(manifest_path, std::ios::binary);
+        if (!f) { rep("EXPORT:write_manifest_failed"); return false; }
+        f << "{\n";
+        f << "  \"object_id_u64\": " << (unsigned long long)object_id_u64 << ",\n";
+        f << "  \"label_utf8\": \"";
+        for (char c : e->label_utf8) {
+            if (c == '"') f << "\\\"";
+            else if (c == '\\') f << "\\\\";
+            else if ((unsigned char)c < 0x20) f << "?";
+            else f << c;
+        }
+        f << "\",\n";
+        f << "  \"files\": {\n";
+        f << "    \"mesh\": \"mesh_shell.ewmesh\",\n";
+        f << "    \"mesh_fbx\": \"mesh_shell.fbx\",\n";
+        f << "    \"uv_atlas\": \"uv_atlas.rgba8\",\n";
+        f << "    \"uv_atlas_tga\": \"uv_atlas.tga\",\n";
+        f << "    \"uv_atlas_meta\": \"uv_atlas.json\",\n";
+        f << "    \"material_anim\": \"material_anim.json\"\n";
+        f << "  }\n";
+        f << "}\n";
+    }
+
+    rep("EXPORT:OK");
     return true;
 }
 
@@ -2905,13 +3900,23 @@ UE marketplace (not necessarily free/open):
 - `gutenberg.org`, `si.edu`, `3d.si.edu`, `science.nasa.gov/3d-resources/`
 )EW_ALLOWLISTX";
 void SubstrateManager::corpus_crawl_start_neuralis_corpus_default() {
+    // Prefer user-updated allowlist if present.
+    // This keeps the allowlist user-updatable without weakening enforcement.
+    if (!corpus_allowlist_user_loaded) {
+        (void)corpus_allowlist_load_user_file_if_present();
+    }
+
     // Start strictly allowlisted crawls in parallel sessions.
     // Session layout:
     //  0: general allowlist hosts
     //  1: publisher targets (license-gated ingestion profile)
     //  2: US patent targets
     //  3: US trademark + copyright targets (separate endpoints, same scheduling caps)
-    corpus_crawl_start_from_allowlist_text(std::string(EW_NEURALIS_CORPUS_ALLOWLIST_MD_UTF8));
+    if (corpus_allowlist_user_loaded && !corpus_allowlist_user_md_utf8.empty()) {
+        corpus_crawl_start_from_allowlist_text(corpus_allowlist_user_md_utf8);
+    } else {
+        corpus_crawl_start_from_allowlist_text(std::string(EW_NEURALIS_CORPUS_ALLOWLIST_MD_UTF8));
+    }
 
     auto start_session = [&](uint32_t slot, uint32_t profile_u32, const std::vector<std::pair<std::string,std::string>>& host_paths, const char* label) {
         if (slot >= EW_CRAWL_SESSION_MAX) return;
@@ -3622,7 +4627,334 @@ static inline void ew_execute_operator_packets_v1(SubstrateManager* sm) {
             case 0x00000003u: return 8u;   // OPK_PROJECT_COH_DOT
             case 0x00000004u: return 160u; // OPK_CONSTRAIN_PI_G
             case 0x00000005u: return 256u; // OPK_CHAIN_APPLY
+            case 0x00000009u: return 72u;  // OPK_COMPUTE_BUS_DISPATCH
             default: return 0xFFFFFFFFu;
+        }
+    };
+
+    auto i64_abs_local = [](int64_t v)->int64_t { return v < 0 ? -v : v; };
+
+    auto smooth_focus_q32_32 = [&](
+        int64_t current_q32_32,
+        int64_t target_q32_32,
+        int32_t tau_q16_16,
+        int32_t max_vel_q16_16,
+        int32_t deadband_m_q16_16,
+        int32_t dt_ms_s32)->int64_t
+    {
+        const int64_t deadband_q32_32 = ((int64_t)deadband_m_q16_16) << 16;
+        const int64_t diff_q32_32 = target_q32_32 - current_q32_32;
+        if (i64_abs_local(diff_q32_32) <= deadband_q32_32) return current_q32_32;
+
+        const int64_t dt_q16_16 = ((int64_t)dt_ms_s32 * 65536) / 1000;
+        int64_t alpha_q16_16 = 0;
+        if (tau_q16_16 > 0) alpha_q16_16 = (dt_q16_16 << 16) / (int64_t)tau_q16_16;
+        if (alpha_q16_16 < 0) alpha_q16_16 = 0;
+        if (alpha_q16_16 > 65536) alpha_q16_16 = 65536;
+
+        int64_t delta_q32_32 = (diff_q32_32 * alpha_q16_16) >> 16;
+        const int64_t max_delta_q32_32 = (((int64_t)max_vel_q16_16) * dt_q16_16);
+        if (delta_q32_32 > max_delta_q32_32) delta_q32_32 = max_delta_q32_32;
+        if (delta_q32_32 < -max_delta_q32_32) delta_q32_32 = -max_delta_q32_32;
+        return current_q32_32 + delta_q32_32;
+    };
+
+    auto opk_compute_bus_dispatch = [&](const uint8_t* payload72) {
+        // Payload layout (72 bytes):
+        //  0..3   u32 subop
+        //  4..19  SpiderCode4 transport fields (for audit/debug)
+        //  20..47 EwCarrierWaveQ32_32 (carrier-coded request)
+        //  48..71 reserved
+        //
+        // IMPORTANT: No raw struct/scalar compute inputs are accepted in the
+        // payload. The payload is a carrier-coded request marker; the
+        // operator reads authoritative scalar state from anchors / ctx.
+        const uint32_t subop = ew_read_u32_le(payload72 + 0);
+
+        // Sub-ops:
+        //  1: camera focus update (autofocus)
+        //  2: project settings apply (validate + mutate settings anchor/state)
+        //  3: input mapping effects (raw input -> anchor mutation)
+        //  4: input binding set (validate + mutate bindings table)
+
+        // Resolve canonical camera anchor once for ops that need it.
+        Anchor* cam_ptr = nullptr;
+        if (sm->camera_anchor_id_u32 != 0u && sm->camera_anchor_id_u32 < sm->anchors.size()) {
+            Anchor& a = sm->anchors[sm->camera_anchor_id_u32];
+            if (a.kind_u32 == EW_ANCHOR_KIND_CAMERA) cam_ptr = &a;
+        }
+
+        auto clamp_i32 = [&](int32_t v, int32_t lo, int32_t hi)->int32_t {
+            if (v < lo) return lo;
+            if (v > hi) return hi;
+            return v;
+        };
+
+        // Q16.16 quaternion helpers (deterministic integer math).
+        auto qmul_q16 = [&](int32_t a, int32_t b)->int32_t {
+            return (int32_t)(((int64_t)a * (int64_t)b) >> 16);
+        };
+        auto quat_mul = [&](const int32_t qA[4], const int32_t qB[4], int32_t out[4]) {
+            // (x,y,z,w)
+            const int32_t ax=qA[0], ay=qA[1], az=qA[2], aw=qA[3];
+            const int32_t bx=qB[0], by=qB[1], bz=qB[2], bw=qB[3];
+            out[0] = qmul_q16(aw,bx) + qmul_q16(ax,bw) + qmul_q16(ay,bz) - qmul_q16(az,by);
+            out[1] = qmul_q16(aw,by) - qmul_q16(ax,bz) + qmul_q16(ay,bw) + qmul_q16(az,bx);
+            out[2] = qmul_q16(aw,bz) + qmul_q16(ax,by) - qmul_q16(ay,bx) + qmul_q16(az,bw);
+            out[3] = qmul_q16(aw,bw) - qmul_q16(ax,bx) - qmul_q16(ay,by) - qmul_q16(az,bz);
+        };
+        auto quat_norm_approx = [&](int32_t q[4]) {
+            // One-step normalization using reciprocal sqrt approximation.
+            // Deterministic: use Q16.16 length^2, Newton step.
+            int64_t s = 0;
+            for (int i=0;i<4;++i) s += (int64_t)q[i]*(int64_t)q[i];
+            // s is Q32.32. Target is 1.0 in Q32.32 => 1<<32.
+            if (s <= 0) { q[0]=q[1]=q[2]=0; q[3]=65536; return; }
+            // invsqrt approx in Q16.16: start with 1.0.
+            int32_t x = 65536;
+            // Convert s to Q16.16 by >>16.
+            int32_t s_q16 = (int32_t)(s >> 16);
+            // Newton-Raphson: x = x*(3 - s*x*x)/2
+            // All in Q16.16.
+            int32_t xx = qmul_q16(x, x);
+            int32_t sxx = qmul_q16(s_q16, xx);
+            int32_t three = (int32_t)(3 * 65536);
+            int32_t term = three - sxx;
+            x = qmul_q16(x, term);
+            x = (int32_t)((int64_t)x >> 1);
+            for (int i=0;i<4;++i) q[i] = qmul_q16(q[i], x);
+        };
+        auto sincos_half_angle_q16 = [&](int32_t theta_rad_q16, int32_t* out_sin_half, int32_t* out_cos_half) {
+            // Compute sin(theta/2), cos(theta/2) with small-angle Taylor in Q16.16.
+            const int32_t half = (int32_t)((int64_t)theta_rad_q16 >> 1);
+            // x in Q16.16. Use sin x ≈ x - x^3/6, cos x ≈ 1 - x^2/2.
+            const int32_t x = half;
+            const int32_t x2 = qmul_q16(x, x);
+            const int32_t x3 = qmul_q16(x2, x);
+            const int32_t inv6 = (int32_t)(65536 / 6);
+            const int32_t inv2 = (int32_t)(65536 / 2);
+            const int32_t sinx = x - qmul_q16(x3, inv6);
+            const int32_t cosx = 65536 - qmul_q16(x2, inv2);
+            *out_sin_half = sinx;
+            *out_cos_half = cosx;
+        };
+
+        if (subop == 1u) {
+            // Camera autofocus update.
+            if (!cam_ptr) return;
+            Anchor& a = *cam_ptr;
+
+            const int32_t dt_ms = sm->project_settings.simulation.fixed_dt_ms_s32;
+            const uint32_t mode_u32 = (uint32_t)a.camera_state.focus_mode_u8;
+            const int64_t cur = a.camera_state.focus_distance_m_q32_32;
+            const int64_t manual = a.camera_state.manual_focus_distance_m_q32_32;
+            // Median depth is provided as normalized depth in Q16.16; convert to
+            // linear meters inside the substrate using camera near/far settings.
+            const int32_t dnorm_q16 = sm->camera_sensor.median_depth_norm_q16_16;
+            const int32_t near_m_q16 = sm->project_settings.camera.near_m_q16_16;
+            const int32_t far_m_q16 = sm->project_settings.camera.far_m_q16_16;
+            int64_t median = manual;
+            {
+                const int32_t far_minus_near = far_m_q16 - near_m_q16;
+                const int32_t scaled = qmul_q16(far_minus_near, dnorm_q16);
+                const int32_t denom_q16 = far_m_q16 - scaled;
+                // numerator Q32.32
+                const int64_t num_q32 = (int64_t)near_m_q16 * (int64_t)far_m_q16;
+                if (denom_q16 > (int32_t)(0.0001f * 65536.0f)) {
+                    // (Q32.32 / Q16.16) => Q16.16
+                    const int64_t lin_q16 = (num_q32 / (int64_t)denom_q16);
+                    median = (lin_q16 << 16); // Q32.32
+                }
+            }
+            const int32_t tau_q16_16 = a.camera_state.tau_seconds_q16_16;
+            const int32_t max_vel_q16_16 = a.camera_state.max_refocus_vel_mps_q16_16;
+            const int32_t deadband_m_q16_16 = a.camera_state.deadband_m_q16_16;
+
+            int64_t target = manual;
+            if (mode_u32 == (uint32_t)EwFocusMode::MedianDepth) target = median;
+            else if (mode_u32 == (uint32_t)EwFocusMode::ManualDistance) target = manual;
+
+            const int64_t next = smooth_focus_q32_32(cur, target, tau_q16_16, max_vel_q16_16, deadband_m_q16_16, dt_ms);
+            a.camera_state.focus_distance_m_q32_32 = next;
+            return;
+        }
+
+        if (subop == 2u) {
+            // Project settings apply: validate + mutate inside substrate.
+            if (sm->pending_settings_set.valid_u32 == 0u) return;
+            const auto req = sm->pending_settings_set;
+            sm->pending_settings_set.valid_u32 = 0u;
+
+            // Stable ids (tab/field) are defined by GE_project_settings.*
+            if (req.tab_u32 == 0u) { // Rendering
+                if (req.field_u32 == 1u) {
+                    int32_t v = (int32_t)(req.value_q32_32 >> 16);
+                    // gain in [0..8]
+                    v = clamp_i32(v, 0, (int32_t)(8 * 65536));
+                    sm->project_settings.rendering.dnoise_gain_q16_16 = v;
+                } else if (req.field_u32 == 2u) {
+                    int32_t v = (int32_t)(req.value_q32_32 >> 16);
+                    // bias in [-8..8]
+                    v = clamp_i32(v, (int32_t)(-8 * 65536), (int32_t)(8 * 65536));
+                    sm->project_settings.rendering.dnoise_bias_q16_16 = v;
+                }
+            } else if (req.tab_u32 == 2u) { // Camera
+                if (req.field_u32 == 1u) {
+                    int32_t v = (int32_t)(req.value_q32_32 >> 16);
+                    // focal length mm in [5..300]
+                    v = clamp_i32(v, (int32_t)(5 * 65536), (int32_t)(300 * 65536));
+                    sm->project_settings.camera.default_focal_length_mm_q16_16 = v;
+                } else if (req.field_u32 == 10u) {
+                    int32_t v = (int32_t)(req.value_q32_32 >> 16);
+                    v = clamp_i32(v, 0, (int32_t)(20 * 65536));
+                    sm->project_settings.camera.move_speed_mps_q16_16 = v;
+                } else if (req.field_u32 == 11u) {
+                    int32_t v = (int32_t)(req.value_q32_32 >> 16);
+                    v = clamp_i32(v, 0, (int32_t)(5 * 65536));
+                    sm->project_settings.camera.move_step_m_q16_16 = v;
+                } else if (req.field_u32 == 12u) {
+                    int32_t v = (int32_t)(req.value_q32_32 >> 16);
+                    v = clamp_i32(v, 0, (int32_t)(1 * 65536));
+                    sm->project_settings.camera.look_sens_rad_per_unit_q16_16 = v;
+                }
+            }
+
+            sm->project_settings_revision_u64++;
+            return;
+        }
+
+        if (subop == 3u) {
+            // Input mapping effects: raw OS/event codes -> anchor mutation.
+            if (!cam_ptr) return;
+            if (sm->pending_input_event.valid_u32 == 0u) return;
+            const auto ev = sm->pending_input_event;
+            sm->pending_input_event.valid_u32 = 0u;
+
+            // Ensure bindings are present (fail closed if missing).
+            if (!sm->input_bindings_loaded) return;
+
+            auto lookup = [&](const std::vector<SubstrateManager::EwInputBinding>& v, uint32_t raw)->SubstrateManager::EwInputBinding {
+                for (const auto& b : v) if (b.raw_id_u32 == raw) return b;
+                return SubstrateManager::EwInputBinding{};
+            };
+
+            const bool is_action = (ev.kind_u16 == 1u);
+            const auto b = is_action ? lookup(sm->input_action_bindings, ev.id_u32) : lookup(sm->input_axis_bindings, ev.id_u32);
+            const uint32_t mapped = b.mapped_u32;
+            if (mapped == 0u) return;
+
+            Anchor& cam = *cam_ptr;
+            const int32_t dt_ms = sm->project_settings.simulation.fixed_dt_ms_s32;
+
+            auto step_delta_q16 = [&](int32_t base_step_q16, int32_t sign)->int32_t {
+                (void)dt_ms;
+                return (sign >= 0) ? base_step_q16 : -base_step_q16;
+            };
+
+            if (mapped == (uint32_t)SubstrateManager::EwMappedInputAction::MoveForward) {
+                if (is_action && ev.pressed_u8) cam.camera_state.pos_xyz_q16_16[2] += step_delta_q16(sm->project_settings.camera.move_step_m_q16_16, +1);
+            } else if (mapped == (uint32_t)SubstrateManager::EwMappedInputAction::MoveBackward) {
+                if (is_action && ev.pressed_u8) cam.camera_state.pos_xyz_q16_16[2] += step_delta_q16(sm->project_settings.camera.move_step_m_q16_16, -1);
+            } else if (mapped == (uint32_t)SubstrateManager::EwMappedInputAction::MoveRight) {
+                if (is_action && ev.pressed_u8) cam.camera_state.pos_xyz_q16_16[0] += step_delta_q16(sm->project_settings.camera.move_step_m_q16_16, +1);
+            } else if (mapped == (uint32_t)SubstrateManager::EwMappedInputAction::MoveLeft) {
+                if (is_action && ev.pressed_u8) cam.camera_state.pos_xyz_q16_16[0] += step_delta_q16(sm->project_settings.camera.move_step_m_q16_16, -1);
+            } else if (mapped == (uint32_t)SubstrateManager::EwMappedInputAction::MoveUp) {
+                if (is_action && ev.pressed_u8) cam.camera_state.pos_xyz_q16_16[1] += step_delta_q16(sm->project_settings.camera.move_step_m_q16_16, +1);
+            } else if (mapped == (uint32_t)SubstrateManager::EwMappedInputAction::MoveDown) {
+                if (is_action && ev.pressed_u8) cam.camera_state.pos_xyz_q16_16[1] += step_delta_q16(sm->project_settings.camera.move_step_m_q16_16, -1);
+            } else if (mapped == (uint32_t)SubstrateManager::EwMappedInputAction::ZoomIn) {
+                if (is_action) {
+                    if (ev.pressed_u8) cam.camera_state.focus_distance_m_q32_32 -= ((int64_t)sm->project_settings.camera.zoom_step_m_q16_16 << 16);
+                } else {
+                    // Axis value: sign determines direction.
+                    if (ev.value_q16_16 > 0) cam.camera_state.focus_distance_m_q32_32 -= ((int64_t)sm->project_settings.camera.zoom_step_m_q16_16 << 16);
+                    if (ev.value_q16_16 < 0) cam.camera_state.focus_distance_m_q32_32 += ((int64_t)sm->project_settings.camera.zoom_step_m_q16_16 << 16);
+                }
+            } else if (mapped == (uint32_t)SubstrateManager::EwMappedInputAction::ZoomOut) {
+                if (is_action) {
+                    if (ev.pressed_u8) cam.camera_state.focus_distance_m_q32_32 += ((int64_t)sm->project_settings.camera.zoom_step_m_q16_16 << 16);
+                } else {
+                    if (ev.value_q16_16 > 0) cam.camera_state.focus_distance_m_q32_32 += ((int64_t)sm->project_settings.camera.zoom_step_m_q16_16 << 16);
+                    if (ev.value_q16_16 < 0) cam.camera_state.focus_distance_m_q32_32 -= ((int64_t)sm->project_settings.camera.zoom_step_m_q16_16 << 16);
+                }
+            } else if (mapped == (uint32_t)SubstrateManager::EwMappedInputAction::LookYaw) {
+                // Axis event: value_q16_16 is delta units.
+                if (!is_action) {
+                    int32_t dtheta = (int32_t)(((int64_t)ev.value_q16_16 * (int64_t)sm->project_settings.camera.look_sens_rad_per_unit_q16_16) >> 16);
+                    dtheta = qmul_q16(dtheta, b.scale_q16_16);
+                    int32_t sh, ch;
+                    sincos_half_angle_q16(dtheta, &sh, &ch);
+                    int32_t dq[4] = {0, sh, 0, ch};
+                    int32_t out[4];
+                    quat_mul(dq, cam.camera_state.rot_quat_q16_16, out);
+                    for (int i=0;i<4;++i) cam.camera_state.rot_quat_q16_16[i] = out[i];
+                    quat_norm_approx(cam.camera_state.rot_quat_q16_16);
+                }
+            } else if (mapped == (uint32_t)SubstrateManager::EwMappedInputAction::LookPitch) {
+                if (!is_action) {
+                    int32_t dtheta = (int32_t)(((int64_t)ev.value_q16_16 * (int64_t)sm->project_settings.camera.look_sens_rad_per_unit_q16_16) >> 16);
+                    dtheta = qmul_q16(dtheta, b.scale_q16_16);
+                    int32_t sh, ch;
+                    sincos_half_angle_q16(dtheta, &sh, &ch);
+                    int32_t dq[4] = {sh, 0, 0, ch};
+                    int32_t out[4];
+                    quat_mul(dq, cam.camera_state.rot_quat_q16_16, out);
+                    for (int i=0;i<4;++i) cam.camera_state.rot_quat_q16_16[i] = out[i];
+                    quat_norm_approx(cam.camera_state.rot_quat_q16_16);
+                }
+            }
+            return;
+        }
+
+        if (subop == 4u) {
+            // Input binding set: validate and apply deterministically.
+            if (sm->pending_binding_set.valid_u32 == 0u) return;
+            const auto req = sm->pending_binding_set;
+            sm->pending_binding_set.valid_u32 = 0u;
+
+            // Basic validation: raw id must be non-zero.
+            if (req.raw_id_u32 == 0u) return;
+
+            // Clamp scale to a sane deterministic range [-16..16] in Q16.16.
+            const int32_t scale = clamp_i32(req.scale_q16_16,
+                                           (int32_t)(-16 * 65536),
+                                           (int32_t)(16 * 65536));
+
+            // Clamp mapped id to known enum range.
+            const uint32_t mapped = req.mapped_u32;
+            if (mapped > 4096u) return; // fail closed on nonsense ids
+
+            auto upsert = [&](std::vector<SubstrateManager::EwInputBinding>& v) {
+                bool found = false;
+                for (auto& b : v) {
+                    if (b.raw_id_u32 == req.raw_id_u32) {
+                        b.mapped_u32 = mapped;
+                        b.scale_q16_16 = scale;
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    SubstrateManager::EwInputBinding b;
+                    b.raw_id_u32 = req.raw_id_u32;
+                    b.mapped_u32 = mapped;
+                    b.scale_q16_16 = scale;
+                    v.push_back(b);
+                }
+                auto cmp = [](const SubstrateManager::EwInputBinding& a, const SubstrateManager::EwInputBinding& b) {
+                    if (a.raw_id_u32 != b.raw_id_u32) return a.raw_id_u32 < b.raw_id_u32;
+                    return a.mapped_u32 < b.mapped_u32;
+                };
+                std::sort(v.begin(), v.end(), cmp);
+            };
+
+            if (req.is_axis_u8) upsert(sm->input_axis_bindings);
+            else upsert(sm->input_action_bindings);
+
+            sm->input_bindings_loaded = true;
+            sm->input_bindings_dirty = true;
+            return;
         }
     };
 
@@ -3678,12 +5010,309 @@ static inline void ew_execute_operator_packets_v1(SubstrateManager* sm) {
             // Chain apply executes stable core templates only.
             ew_opk_chain_apply(sm->op_lanes, tr, sm->ctx_snapshot, p_in_lanes, n_in, p_out_lanes, n_out, payload);
         }
+        else if (op_kind == 0x00000009u) {
+            // Compute-bus dispatch: payload-only operator. Writes to anchors/state.
+            // This is the hard gate that forbids direct CPU computation paths for
+            // camera focus, settings application, and input mapping effects.
+            opk_compute_bus_dispatch(payload);
+        }
     }
 }
 
 
 void SubstrateManager::tick() {
     const uint64_t prev_tick_u64 = canonical_tick;
+
+    // ------------------------------------------------------------------
+    // Compute-bus submission helper (carrier-coded payload marker)
+    // ------------------------------------------------------------------
+    auto submit_compute_bus = [&](uint32_t subop_u32, uint64_t tick_u64) {
+        // Build a tiny canonical request buffer and encode it through the
+        // same SpiderCode4->carrier collapse path used by corpus ingestion.
+        uint8_t req[32];
+        for (int i=0;i<32;++i) req[i] = 0;
+        // "CBUS" marker.
+        req[0]='C'; req[1]='B'; req[2]='U'; req[3]='S';
+        ge_wr_u32_le(req, 4, subop_u32);
+        ge_wr_u64_le(req, 8, tick_u64);
+        ge_wr_u64_le(req, 16, (uint64_t)camera_anchor_id_u32);
+
+        SpiderCode4 sc{};
+        if (!ew_encode_spidercode4_from_bytes_chunked_cuda(req, sizeof(req), 16, &sc)) {
+            return; // fail closed deterministically
+        }
+
+        // Map to 4 freq components and collapse.
+        EwFrequencyComponentQ32_32 fc[4];
+        fc[0].f_hz_q32_32 = (int64_t)sc.f_code * (1LL<<16);
+        fc[0].A_q32_32 = (int64_t)sc.a_code * (1LL<<16);
+        fc[0].phi_turns_q32_32 = (int64_t)sc.v_code * (1LL<<16);
+        fc[0].count_u32 = 1;
+        fc[1].f_hz_q32_32 = (int64_t)sc.v_code * (1LL<<16);
+        fc[1].A_q32_32 = (int64_t)sc.i_code * (1LL<<16);
+        fc[1].phi_turns_q32_32 = (int64_t)sc.f_code * (1LL<<16);
+        fc[1].count_u32 = 1;
+        fc[2].f_hz_q32_32 = (int64_t)sc.i_code * (1LL<<16);
+        fc[2].A_q32_32 = (int64_t)sc.f_code * (1LL<<16);
+        fc[2].phi_turns_q32_32 = (int64_t)sc.a_code * (1LL<<16);
+        fc[2].count_u32 = 1;
+        fc[3].f_hz_q32_32 = (int64_t)sc.a_code * (1LL<<16);
+        fc[3].A_q32_32 = (int64_t)sc.v_code * (1LL<<16);
+        fc[3].phi_turns_q32_32 = (int64_t)sc.i_code * (1LL<<16);
+        fc[3].count_u32 = 1;
+
+        EwCarrierWaveQ32_32 carrier{};
+        ew_collapse_frequency_components_q32_32(fc, 4, &carrier);
+
+        uint8_t payload72[72];
+        for (int i=0;i<72;++i) payload72[i]=0;
+        ge_wr_u32_le(payload72, 0, subop_u32);
+        ge_wr_i32_le(payload72, 4, sc.f_code);
+        ge_wr_u32_le(payload72, 8, (uint32_t)sc.a_code);
+        ge_wr_u32_le(payload72, 12, (uint32_t)sc.v_code);
+        ge_wr_u32_le(payload72, 16, (uint32_t)sc.i_code);
+        ge_wr_u64_le(payload72, 20, (uint64_t)carrier.f_carrier_turns_q32_32);
+        ge_wr_u64_le(payload72, 28, (uint64_t)carrier.A_carrier_q32_32);
+        ge_wr_u64_le(payload72, 36, (uint64_t)carrier.phi_carrier_turns_q32_32);
+        ge_wr_u32_le(payload72, 44, carrier.component_count_u32);
+
+        std::vector<uint64_t> args;
+        args.reserve(1 + (72u/8u));
+        args.push_back((uint64_t)canonical_tick);
+        for (uint32_t off = 0; off < 72u; off += 8u) {
+            uint64_t u = 0;
+            for (int k = 0; k < 8; ++k) u |= ((uint64_t)payload72[off + (uint32_t)k]) << (8*k);
+            args.push_back(u);
+        }
+        (void)ew_eq_exec_packet(this, 0x00000009u, args);
+    };
+
+    // Loop playback: restore snapshot before any evolution so the world repeats deterministically.
+    if (sim_play_loop_enabled && sim_snapshot_valid) {
+        reservoir = sim_snapshot.reservoir;
+        boundary_scale_q32_32 = sim_snapshot.boundary_scale_q32_32;
+        anchors = sim_snapshot.anchors;
+        ancilla = sim_snapshot.ancilla;
+        lanes = sim_snapshot.lanes;
+        object_store = sim_snapshot.object_store;
+        materials_calib_done = sim_snapshot.materials_calib_done;
+        // Keep topology vectors sized.
+        const uint32_t need = (uint32_t)anchors.size();
+        if (redirect_to.size() < need) redirect_to.resize(need, 0u);
+        if (split_child_a.size() < need) split_child_a.resize(need, 0u);
+        if (split_child_b.size() < need) split_child_b.resize(need, 0u);
+        next_anchor_id_u32 = (uint32_t)anchors.size();
+    }
+
+    // ------------------------------------------------------------------
+    // Consume control packets (input/editor/UI) deterministically.
+    // These packets are the only permitted control surface.
+    // ------------------------------------------------------------------
+    {
+        EwControlPacket p;
+        while (control_packet_pop(p)) {
+            if (p.kind == EwControlPacketKind::CameraSet || p.kind == EwControlPacketKind::CameraSetFocusMode) {
+                if (camera_anchor_id_u32 != 0u && camera_anchor_id_u32 < anchors.size()) {
+                    Anchor& cam = anchors[camera_anchor_id_u32];
+                    if (cam.kind_u32 == EW_ANCHOR_KIND_CAMERA) {
+                        cam.camera_state.focus_mode_u8 = p.payload.camera_set.focus_mode_u8;
+                        cam.camera_state.manual_focus_distance_m_q32_32 = p.payload.camera_set.manual_focus_distance_m_q32_32;
+                        cam.camera_state.focal_length_mm_q16_16 = p.payload.camera_set.focal_length_mm_q16_16;
+                        cam.camera_state.aperture_f_q16_16 = p.payload.camera_set.aperture_f_q16_16;
+                        cam.camera_state.exposure_ev_q16_16 = p.payload.camera_set.exposure_ev_q16_16;
+                        cam.camera_state.pos_xyz_q16_16[0] = p.payload.camera_set.pos_xyz_q16_16[0];
+                        cam.camera_state.pos_xyz_q16_16[1] = p.payload.camera_set.pos_xyz_q16_16[1];
+                        cam.camera_state.pos_xyz_q16_16[2] = p.payload.camera_set.pos_xyz_q16_16[2];
+                        for (int i = 0; i < 4; ++i) cam.camera_state.rot_quat_q16_16[i] = p.payload.camera_set.rot_quat_q16_16[i];
+                    }
+                }
+            } else if (p.kind == EwControlPacketKind::ProjectSettingsSet) {
+                // HARD RULE: no validation/clamping/mutation here.
+                // Stage the request and submit a compute-bus op; the substrate
+                // applies settings deterministically inside op dispatch.
+                pending_settings_set.valid_u32 = 1u;
+                pending_settings_set.tick_u64 = canonical_tick;
+                pending_settings_set.source_u16 = p.source_u16;
+                pending_settings_set.tab_u32 = p.payload.settings_set.tab_u32;
+                pending_settings_set.field_u32 = p.payload.settings_set.field_u32;
+                pending_settings_set.value_q32_32 = p.payload.settings_set.value_q32_32;
+                submit_compute_bus(2u, canonical_tick);
+            } else if (p.kind == EwControlPacketKind::InputAction) {
+                // Raw input event only. Substrate maps it into anchor effects.
+                pending_input_event.valid_u32 = 1u;
+                pending_input_event.tick_u64 = canonical_tick;
+                pending_input_event.source_u16 = p.source_u16;
+                pending_input_event.kind_u16 = 1u;
+                pending_input_event.id_u32 = p.payload.input_action.action_id_u32;
+                pending_input_event.value_q16_16 = p.payload.input_action.pressed_u8 ? (int32_t)(1 * 65536) : 0;
+                pending_input_event.pressed_u8 = p.payload.input_action.pressed_u8;
+                submit_compute_bus(3u, canonical_tick);
+            } else if (p.kind == EwControlPacketKind::InputAxis) {
+                pending_input_event.valid_u32 = 1u;
+                pending_input_event.tick_u64 = canonical_tick;
+                pending_input_event.source_u16 = p.source_u16;
+                pending_input_event.kind_u16 = 2u;
+                pending_input_event.id_u32 = p.payload.input_axis.axis_id_u32;
+                pending_input_event.value_q16_16 = p.payload.input_axis.value_q16_16;
+                pending_input_event.pressed_u8 = 0;
+                submit_compute_bus(3u, canonical_tick);
+            } else if (p.kind == EwControlPacketKind::InputBindingSet) {
+                // Stage binding set and apply via compute-bus. UI does not
+                // validate; substrate validates/clamps deterministically.
+                pending_binding_set.valid_u32 = 1u;
+                pending_binding_set.tick_u64 = canonical_tick;
+                pending_binding_set.is_axis_u8 = p.payload.binding_set.is_axis_u8;
+                pending_binding_set.raw_id_u32 = p.payload.binding_set.raw_id_u32;
+                pending_binding_set.mapped_u32 = p.payload.binding_set.mapped_u32;
+                pending_binding_set.scale_q16_16 = p.payload.binding_set.scale_q16_16;
+                submit_compute_bus(4u, canonical_tick);
+            } else if (p.kind == EwControlPacketKind::InputBindingsReload) {
+                // Reload from file is a projection/I/O step, not computation.
+                input_bindings_loaded = false;
+            } else if (p.kind == EwControlPacketKind::AllowlistReload) {
+                const bool ok = corpus_allowlist_load_user_file_if_present();
+                emit_ui_line(ok ? "ALLOWLIST_RELOADED" : "ALLOWLIST_RELOAD_NOFILE");
+            } else if (p.kind == EwControlPacketKind::ObjectRegister) {
+                // Authoritative object transforms live in object anchors.
+                const uint64_t obj_id = p.payload.object_register.object_id_u64;
+                uint32_t found = 0u;
+                for (uint32_t ai = 1u; ai < (uint32_t)anchors.size(); ++ai) {
+                    if (anchors[ai].kind_u32 == EW_ANCHOR_KIND_OBJECT && anchors[ai].object_id_u64 == obj_id) {
+                        found = ai;
+                        break;
+                    }
+                }
+                if (found == 0u) {
+                    Anchor a(next_anchor_id_u32);
+                    a.kind_u32 = EW_ANCHOR_KIND_OBJECT;
+                    a.object_id_u64 = obj_id;
+                    anchors.push_back(a);
+                    found = next_anchor_id_u32;
+                    next_anchor_id_u32 = (uint32_t)anchors.size();
+                    if (redirect_to.size() < anchors.size()) redirect_to.resize(anchors.size(), 0u);
+                    if (split_child_a.size() < anchors.size()) split_child_a.resize(anchors.size(), 0u);
+                    if (split_child_b.size() < anchors.size()) split_child_b.resize(anchors.size(), 0u);
+                }
+                if (found < anchors.size()) {
+                    Anchor& a = anchors[found];
+                    for (int i = 0; i < 3; ++i) a.object_state.pos_q16_16[i] = p.payload.object_register.pos_q16_16[i];
+                    for (int i = 0; i < 4; ++i) a.object_state.rot_q16_16[i] = p.payload.object_register.rot_quat_q16_16[i];
+                }
+            } else if (p.kind == EwControlPacketKind::ObjectSetTransform) {
+                const uint64_t obj_id = p.payload.object_xform.object_id_u64;
+                for (uint32_t ai = 1u; ai < (uint32_t)anchors.size(); ++ai) {
+                    if (anchors[ai].kind_u32 == EW_ANCHOR_KIND_OBJECT && anchors[ai].object_id_u64 == obj_id) {
+                        Anchor& a = anchors[ai];
+                        for (int i = 0; i < 3; ++i) a.object_state.pos_q16_16[i] = p.payload.object_xform.pos_q16_16[i];
+                        for (int i = 0; i < 4; ++i) a.object_state.rot_q16_16[i] = p.payload.object_xform.rot_quat_q16_16[i];
+                        break;
+                    }
+                }
+            } else if (p.kind == EwControlPacketKind::EditorSetSelection ||
+                       p.kind == EwControlPacketKind::EditorToggleSelection ||
+                       p.kind == EwControlPacketKind::EditorSetGizmo ||
+                       p.kind == EwControlPacketKind::EditorSetSnap ||
+                       p.kind == EwControlPacketKind::EditorSetAxisConstraint ||
+                       p.kind == EwControlPacketKind::EditorCommitTransformTxn ||
+                       p.kind == EwControlPacketKind::EditorUndo ||
+                       p.kind == EwControlPacketKind::EditorRedo) {
+                // Editor interaction contract lives in substrate as an editor anchor.
+                // This is authoritative for selection/gizmo/snap settings.
+                const uint64_t kEditorObjectId = 0x315F524F54494445ULL; // 'EDITOR_1' little-endian
+
+                uint32_t editor_anchor_id = 0u;
+                bool editor_anchor_found = false;
+                for (uint32_t i = 0u; i < (uint32_t)anchors.size(); ++i) {
+                    if (anchors[i].kind_u32 == EW_ANCHOR_KIND_EDITOR && anchors[i].object_id_u64 == kEditorObjectId) {
+                        editor_anchor_id = i;
+                        editor_anchor_found = true;
+                        break;
+                    }
+                }
+                if (!editor_anchor_found) {
+                    Anchor a(next_anchor_id_u32);
+                    a.kind_u32 = EW_ANCHOR_KIND_EDITOR;
+                    a.object_id_u64 = kEditorObjectId;
+                    // Payload already zeroed in constructor.
+                    anchors.push_back(a);
+                    next_anchor_id_u32 = (uint32_t)anchors.size();
+                    const uint32_t need = (uint32_t)anchors.size();
+                    if (redirect_to.size() < need) redirect_to.resize(need, 0u);
+                    if (split_child_a.size() < need) split_child_a.resize(need, 0u);
+                    if (split_child_b.size() < need) split_child_b.resize(need, 0u);
+                    editor_anchor_id = (uint32_t)anchors.size() - 1u;
+                }
+
+                if (editor_anchor_id < anchors.size()) {
+                    Anchor& ed = anchors[editor_anchor_id];
+                    if (ed.kind_u32 == EW_ANCHOR_KIND_EDITOR) {
+                        
+if (p.kind == EwControlPacketKind::EditorSetSelection) {
+    const uint64_t oid = p.payload.editor_set_selection.selected_object_id_u64;
+    ed.editor_state.selected_object_id_u64 = oid;
+    // Replace selection list with [oid] (or clear if oid==0).
+    ed.editor_state.selection_count_u32 = 0u;
+    for (uint32_t k = 0u; k < EW_EDITOR_MAX_SELECTION; ++k) ed.editor_state.selection_object_id_u64[k] = 0u;
+    if (oid != 0u) {
+        ed.editor_state.selection_object_id_u64[0] = oid;
+        ed.editor_state.selection_count_u32 = 1u;
+    }
+
+} else if (p.kind == EwControlPacketKind::PlanetRegister) {
+                const uint64_t obj_id = p.payload.planet_register.object_id_u64;
+                const uint64_t parent_obj_id = p.payload.planet_register.parent_object_id_u64;
+                uint32_t found = 0u;
+                for (uint32_t ai = 1u; ai < (uint32_t)anchors.size(); ++ai) {
+                    if (anchors[ai].kind_u32 == EW_ANCHOR_KIND_PLANET && anchors[ai].object_id_u64 == obj_id) {
+                        found = ai;
+                        break;
+                    }
+                }
+                if (found == 0u) {
+                    Anchor a(next_anchor_id_u32);
+                    a.kind_u32 = EW_ANCHOR_KIND_PLANET;
+                    a.object_id_u64 = obj_id;
+                    anchors.push_back(a);
+                    found = next_anchor_id_u32;
+                    next_anchor_id_u32 = (uint32_t)anchors.size();
+                    if (redirect_to.size() < anchors.size()) redirect_to.resize(anchors.size(), 0u);
+                    if (split_child_a.size() < anchors.size()) split_child_a.resize(anchors.size(), 0u);
+                    if (split_child_b.size() < anchors.size()) split_child_b.resize(anchors.size(), 0u);
+                }
+
+                // Resolve parent anchor id from parent object id.
+                uint32_t parent_anchor_id = 0u;
+                if (parent_obj_id != 0u) {
+                    for (uint32_t ai = 1u; ai < (uint32_t)anchors.size(); ++ai) {
+                        if (anchors[ai].kind_u32 == EW_ANCHOR_KIND_PLANET && anchors[ai].object_id_u64 == parent_obj_id) {
+                            parent_anchor_id = ai;
+                            break;
+                        }
+                    }
+                }
+
+                if (found < anchors.size()) {
+                    Anchor& a = anchors[found];
+                    EwPlanetAnchorState& ps = a.planet_state;
+                    for (int i = 0; i < 3; ++i) ps.pos_q16_16[i] = p.payload.planet_register.pos_q16_16[i];
+                    for (int i = 0; i < 3; ++i) ps.vel_q16_16[i] = p.payload.planet_register.vel_q16_16[i];
+                    ps.radius_m_q16_16 = p.payload.planet_register.radius_m_q16_16;
+                    ps.mass_kg_q16_16 = p.payload.planet_register.mass_kg_q16_16;
+                    ps.parent_anchor_id_u32 = parent_anchor_id;
+                    ps.orbit_radius_m_q32_32 = p.payload.planet_register.orbit_radius_m_q32_32;
+                    ps.orbit_omega_turns_per_sec_q32_32 = p.payload.planet_register.orbit_omega_turns_per_sec_q32_32;
+                    ps.orbit_phase_turns_q32_32 = p.payload.planet_register.orbit_phase_turns_q32_32;
+                    ps.albedo_rgba8 = p.payload.planet_register.albedo_rgba8;
+                    ps.atmosphere_rgba8 = p.payload.planet_register.atmosphere_rgba8;
+                    ps.atmosphere_thickness_m_q16_16 = p.payload.planet_register.atmosphere_thickness_m_q16_16;
+                    ps.emissive_q16_16 = p.payload.planet_register.emissive_q16_16;
+                }
+            }
+        }
+    }
+
+    // Planet ancilla update (cosmological bodies). Must run inside substrate.
+    genesis::ew_tick_planet_ancilla(this);
     // Optional live crawler: emits observations into crawler queue (http-only).
     if (crawler_enable_live_u32 != 0u && crawler_live_consent_required_u32 == 0u) {
         live_crawler.enabled = true;
@@ -3710,6 +5339,62 @@ void SubstrateManager::tick() {
     learning_gate.tick(this);
 
     // ------------------------------------------------------------------
+    // Global coherence update (deterministic)
+    //
+    // Global coherence is the only gate for AI output. It aggregates:
+    //  - language/intention learning progress (stage0 checkpoints)
+    //  - physics substrate coherence (lattice probe device coherence)
+    //  - crawl evidence stability (manifest records present)
+    //  - experiment/metric acceptance stability (learning gate)
+    // ------------------------------------------------------------------
+    {
+        // Language coherence: fraction of required stage0 bits completed.
+        uint16_t lang_q15 = 0;
+        const uint64_t need0 = learning_stage_required_mask_u64[0];
+        const uint64_t have0 = learning_stage_completed_mask_u64[0];
+        if (need0 != 0ULL) {
+            const uint32_t need_cnt = (uint32_t)__builtin_popcountll(need0);
+            const uint32_t have_cnt = (uint32_t)__builtin_popcountll(have0 & need0);
+            if (need_cnt > 0) {
+                lang_q15 = (uint16_t)((int32_t)32768 * (int32_t)have_cnt / (int32_t)need_cnt);
+            }
+        }
+
+        // Physics coherence: a deterministic availability proxy.
+        // A full device-side coherence reduction is bound by the learning
+        // probe metric path when CUDA is enabled.
+        uint16_t phys_q15 = lattice_probe_gpu_[0] ? (uint16_t)16384 : 0;
+
+        // Crawl coherence: whether we have any admitted records in manifest.
+        uint16_t crawl_q15 = 0;
+        if (manifest_records.size() >= 4) crawl_q15 = 16384;
+        if (manifest_records.size() >= 16) crawl_q15 = 24576;
+        if (manifest_records.size() >= 64) crawl_q15 = 32768;
+
+        // Experiment coherence: acceptance ratio over recent tasks (bounded window).
+        uint16_t exp_q15 = 0;
+        {
+            const auto& done = learning_gate.registry().completed();
+            const size_t win = 32;
+            size_t a = (done.size() > win) ? (done.size() - win) : 0;
+            uint32_t tot = 0, acc = 0;
+            for (size_t i = a; i < done.size(); ++i) {
+                tot++;
+                if (done[i].accepted) acc++;
+            }
+            if (tot > 0) exp_q15 = (uint16_t)((int32_t)32768 * (int32_t)acc / (int32_t)tot);
+        }
+
+        global_coherence.update(canonical_tick_u64(), lang_q15, phys_q15, crawl_q15, exp_q15);
+        // Leak slowly each tick to prevent runaway. 1/4096 per tick.
+        global_coherence.leak(canonical_tick_u64(), (uint16_t)8);
+    }
+
+    // Canonical object ancilla update (bounded fan-out) BEFORE physics evolution.
+    // This is the only authority path for object registry/coupling updates.
+    genesis::EwObjectAncilla::tick_object_updates(this, 2u);
+
+    // ------------------------------------------------------------------
     // Curriculum stage advancement (deterministic)
     //
     // Process newly completed metric tasks and advance the curriculum stage
@@ -3728,6 +5413,10 @@ void SubstrateManager::tick() {
         while (learning_completed_cursor_u32 < (uint32_t)done.size()) {
             const genesis::MetricTask& t = done[(size_t)learning_completed_cursor_u32++];
             if (!t.accepted) continue;
+
+
+            // Phase-amplitude current: accepted measurable results reinforce region current.
+            phase_current.on_activation(genesis::EwPhaseCurrent::footprint_from_metric(canonical_tick, (uint32_t)t.target.kind));
 
             // Map accepted metric kind -> curriculum stage bucket deterministically.
             // Stage buckets align with GENESIS_CURRICULUM_STAGE_COUNT.
@@ -3781,6 +5470,73 @@ void SubstrateManager::tick() {
     }
 
     // ------------------------------------------------------------------
+    // Learning automation (artifact-driven, event-based)
+    // ------------------------------------------------------------------
+    learning_automation.init_once(this);
+    learning_automation.tick(this);
+
+
+// ------------------------------------------------------------------
+// Phase-amplitude current actuation (bounded)
+//
+// Current accumulates from activation resonance and discharges into
+// measurable substrate experiments (no hidden side effects).
+// ------------------------------------------------------------------
+{
+    uint32_t top_keys[8] = {};
+    uint16_t top_amp[8] = {};
+    const uint32_t n = phase_current.top_regions(8u, top_keys, top_amp);
+
+    // Hard caps: at most 1 experiment launch per tick.
+    const uint16_t AMP_LAUNCH_THRESH_Q15 = (uint16_t)(32767 / 8); // 12.5%
+    bool launched = false;
+
+    for (uint32_t i = 0; i < n && !launched; ++i) {
+        const uint32_t rk = top_keys[i];
+        const uint16_t a = top_amp[i];
+        if (a < AMP_LAUNCH_THRESH_Q15) continue;
+
+        // Respect curriculum gates: require at least Stage 0 (language) for experiments.
+        if (learning_curriculum_stage_u32 < 0u) break;
+
+        // Map region key to a stable probe origin (small deterministic mapping).
+        EigenWare::EwExperimentRequest req;
+        req.name = "probe_isolate";
+        req.micro_ticks_u32 = 64u;
+        req.tag_render = false;
+
+        req.origin_x_u32 = (rk      ) & 63u;
+        req.origin_y_u32 = (rk >> 6 ) & 63u;
+        req.origin_z_u32 = (rk >> 12) & 63u;
+
+        // Pattern kind/radius derived from current bins via region state.
+        const auto& rr = phase_current.region(rk);
+        req.pattern_kind_u32 = (uint32_t)(1u + (rr.ring_bins_u16[0] % 3u)); // 1..3
+        req.pattern_radius_u32 = (uint32_t)(2u + (rr.ring_bins_u16[1] % 6u)); // 2..7
+
+        // Deterministic amplitude from current.
+        req.amp_q32_32 = (int64_t)((uint64_t)a << 17); // q15 -> q32.32-ish scale
+
+        std::vector<std::vector<uint8_t>> packets;
+        if (EigenWare::ew_compile_experiment_to_operator_packets(req, packets)) {
+            for (size_t pi = 0; pi < packets.size(); ++pi) {
+                submit_operator_packet_v1(packets[pi].data(), packets[pi].size());
+            }
+            // Discharge proportional to work launched.
+            phase_current.discharge(rk, (uint16_t)(a >> 1));
+            launched = true;
+
+            // Observability
+            emit_ui_line(std::string("PHASE_CURRENT_LAUNCH probe_isolate region=") + std::to_string((unsigned long long)rk) +
+                         " amp_q15=" + std::to_string((unsigned long long)a));
+        } else {
+            // If compile fails, cool the region to avoid oscillation.
+            phase_current.discharge(rk, (uint16_t)(a >> 2));
+        }
+    }
+}
+
+// ------------------------------------------------------------------
     // Global carrier hum: re-admit last tick's emitted carrier pulses as
     // inbound pulses for this tick.
     //
@@ -4462,6 +6218,11 @@ if (have_in) {
 
     // Spec/Blueprint: neural phase dynamics controller.
     // Pre-tick control emits only standard pulses and bounded frame shifts.
+
+    // Camera anchor tick (read-only sampling; no world impulses).
+    if (camera_anchor_id_u32 != 0u && camera_anchor_id_u32 < anchors.size()) {
+        ge_camera_anchor_tick(*this, anchors[camera_anchor_id_u32], canonical_tick);
+    }
 
 neural_ai.pre_tick(this);
 
@@ -5433,8 +7194,16 @@ ctx.envelope_headroom_q32_32 = clamp01_q32_32(ctx.envelope_headroom_q32_32);
     // Execute any ΩA operator packets inside the substrate microprocessor.
     // This uses viewport-derived inputs and runs before candidate evolution.
     opk_runtime_evolution_requested = false;
+    this->ctx_snapshot = ctx;
     ctx_snapshot = ctx;
     ew_execute_operator_packets_v1(this);
+
+    // Deterministic projection/I/O: persist input bindings if they were
+    // mutated by substrate ops this tick.
+    {
+        std::string berr;
+        (void)save_input_bindings_if_dirty(&berr);
+    }
 
     EwState candidate_next_state;
     if (gpu_lattice_authoritative) {
@@ -5448,6 +7217,68 @@ ctx.envelope_headroom_q32_32 = clamp01_q32_32(ctx.envelope_headroom_q32_32);
         // Set lattice dt from canonical tick dt.
         const float dt_s = (float)((double)tick_dt_seconds_q32_32 / 4294967296.0);
         if (lattice_gpu_) lattice_gpu_->set_dt_seconds(dt_s);
+// Rebuild world density mask from synthesized object voxel volumes.
+// This makes object↔global coupling spatial (same lattice), not just anchor-id addressing.
+if (lattice_gpu_) {
+    const uint32_t gx = lattice_gpu_->grid_x();
+    const uint32_t gy = lattice_gpu_->grid_y();
+    const uint32_t gz = lattice_gpu_->grid_z();
+    const size_t n = (size_t)gx * (size_t)gy * (size_t)gz;
+    std::vector<uint8_t> dens;
+    dens.assign(n, 0u);
+
+    auto q32_32_to_i32_round = [](uint64_t q)->int32_t {
+        const int64_t s = (int64_t)q;
+        // Round toward nearest: add 0.5 in Q32.32 then shift.
+        const int64_t r = (s >= 0) ? (s + (1ll << 31)) : (s - (1ll << 31));
+        return (int32_t)(r >> 32);
+    };
+
+    std::vector<uint64_t> ids;
+    object_store.list_object_ids_sorted(ids);
+    for (size_t oi = 0; oi < ids.size(); ++oi) {
+        const uint64_t oid = ids[oi];
+        const EwObjectEntry* e = object_store.find(oid);
+        if (!e) continue;
+
+        EwVoxelVolumeView vv;
+        if (!object_store.view_voxel_volume(oid, vv)) continue;
+        if (vv.format_u32 != 1u || !vv.bytes || vv.byte_count == 0) continue;
+
+        // Deterministic placement: center at geomcoord9[0..2] (Q32.32), mapped 1 cell per 1 unit.
+        const int32_t cx = q32_32_to_i32_round(e->geomcoord9_u64x9.u64x9[0]) + (int32_t)(gx / 2u);
+        const int32_t cy = q32_32_to_i32_round(e->geomcoord9_u64x9.u64x9[1]) + (int32_t)(gy / 2u);
+        const int32_t cz = q32_32_to_i32_round(e->geomcoord9_u64x9.u64x9[2]) + (int32_t)(gz / 2u);
+
+        const int32_t ox0 = cx - (int32_t)(vv.grid_x_u32 / 2u);
+        const int32_t oy0 = cy - (int32_t)(vv.grid_y_u32 / 2u);
+        const int32_t oz0 = cz - (int32_t)(vv.grid_z_u32 / 2u);
+
+        for (uint32_t z = 0; z < vv.grid_z_u32; ++z) {
+            const int32_t zt = oz0 + (int32_t)z;
+            if (zt < 0 || zt >= (int32_t)gz) continue;
+            for (uint32_t y = 0; y < vv.grid_y_u32; ++y) {
+                const int32_t yt = oy0 + (int32_t)y;
+                if (yt < 0 || yt >= (int32_t)gy) continue;
+                const size_t src_row = ((size_t)z * (size_t)vv.grid_y_u32 + (size_t)y) * (size_t)vv.grid_x_u32;
+                const size_t dst_row = ((size_t)zt * (size_t)gy + (size_t)yt) * (size_t)gx;
+                for (uint32_t x = 0; x < vv.grid_x_u32; ++x) {
+                    const int32_t xt = ox0 + (int32_t)x;
+                    if (xt < 0 || xt >= (int32_t)gx) continue;
+                    const uint8_t v = vv.bytes[src_row + (size_t)x];
+                    uint8_t& d = dens[dst_row + (size_t)xt];
+                    d = (v > d) ? v : d; // deterministic combine
+                }
+            }
+        }
+    }
+    lattice_gpu_->upload_density_mask_u8(dens.data(), dens.size());
+}
+
+        // Object→world writeback (bounded, deterministic): apply object imprint
+        // after density mask rebuild and before pulse injection.
+        apply_object_imprint_writeback_();
+
 
         struct TmpCmd {
             uint32_t x, y, z;
@@ -5478,10 +7309,34 @@ ctx.envelope_headroom_q32_32 = clamp01_q32_32(ctx.envelope_headroom_q32_32);
             for (size_t pi = 0; pi < inbound.size(); ++pi) {
                 const Pulse& p = inbound[pi];
                 const uint64_t aid = (uint64_t)p.anchor_id;
-                const uint32_t x = (uint32_t)(aid % (uint64_t)gx);
-                const uint32_t y = (uint32_t)((aid / (uint64_t)gx) % (uint64_t)gy);
-                const uint32_t z = (uint32_t)((aid / gxy) % (uint64_t)gz);
-                const Anchor* ap = (p.anchor_id < anchors.size()) ? &anchors[p.anchor_id] : nullptr;
+
+// Spatial addressing: for per-object anchors, inject at the object's
+// lattice-mapped center derived from its geomcoord9 position. This
+// makes object↔global coupling act on the same lattice.
+uint32_t x = (uint32_t)(aid % (uint64_t)gx);
+uint32_t y = (uint32_t)((aid / (uint64_t)gx) % (uint64_t)gy);
+uint32_t z = (uint32_t)((aid / gxy) % (uint64_t)gz);
+
+const Anchor* ap = (p.anchor_id < anchors.size()) ? &anchors[p.anchor_id] : nullptr;
+if (ap && ap->object_id_u64 != 0u) {
+    const EwObjectEntry* oe = object_store.find(ap->object_id_u64);
+    if (oe) {
+        auto q32_32_to_i32_round = [](uint64_t q)->int32_t {
+            const int64_t s = (int64_t)q;
+            const int64_t r = (s >= 0) ? (s + (1ll << 31)) : (s - (1ll << 31));
+            return (int32_t)(r >> 32);
+        };
+        const int32_t cx = q32_32_to_i32_round(oe->geomcoord9_u64x9.u64x9[0]) + (int32_t)(gx / 2u);
+        const int32_t cy = q32_32_to_i32_round(oe->geomcoord9_u64x9.u64x9[1]) + (int32_t)(gy / 2u);
+        const int32_t cz = q32_32_to_i32_round(oe->geomcoord9_u64x9.u64x9[2]) + (int32_t)(gz / 2u);
+        if (cx >= 0 && cy >= 0 && cz >= 0) {
+            x = (uint32_t)clamp_u32((uint32_t)cx, 0u, gx - 1u);
+            y = (uint32_t)clamp_u32((uint32_t)cy, 0u, gy - 1u);
+            z = (uint32_t)clamp_u32((uint32_t)cz, 0u, gz - 1u);
+        }
+    }
+}
+
                 const float amp = amp_from_pulse(p, ap);
                 float t = 0.0f, im = 0.0f, au = 0.0f;
                 // Profile mapping: 0->text, 1->image, 2->audio; otherwise split.
@@ -5614,6 +7469,202 @@ ctx.envelope_headroom_q32_32 = clamp01_q32_32(ctx.envelope_headroom_q32_32);
         anchors[i].basis9 = projected_for(anchors[i]);
     }
 
+    // ------------------------------------------------------------------
+    // Render packet projection (anchors -> renderer)
+    // Renderer must not derive camera basis from local controller state.
+    // The substrate projects a render-camera packet each tick.
+    // ------------------------------------------------------------------
+    if (camera_anchor_id_u32 != 0u && camera_anchor_id_u32 < anchors.size()) {
+        const Anchor& cam = anchors[camera_anchor_id_u32];
+        if (cam.kind_u32 == EW_ANCHOR_KIND_CAMERA) {
+            render_camera_packet.focal_length_mm_q16_16 = cam.camera_state.focal_length_mm_q16_16;
+            render_camera_packet.aperture_f_q16_16 = cam.camera_state.aperture_f_q16_16;
+            render_camera_packet.exposure_ev_q16_16 = cam.camera_state.exposure_ev_q16_16;
+            render_camera_packet.focus_distance_m_q32_32 = cam.camera_state.focus_distance_m_q32_32;
+            render_camera_packet.focus_mode_u8 = cam.camera_state.focus_mode_u8;
+            render_camera_packet.pos_xyz_q16_16[0] = cam.camera_state.pos_xyz_q16_16[0];
+            render_camera_packet.pos_xyz_q16_16[1] = cam.camera_state.pos_xyz_q16_16[1];
+            render_camera_packet.pos_xyz_q16_16[2] = cam.camera_state.pos_xyz_q16_16[2];
+            for (int qi = 0; qi < 4; ++qi) render_camera_packet.rot_quat_q16_16[qi] = cam.camera_state.rot_quat_q16_16[qi];
+
+            ew_build_view_mat_q16_16(cam.camera_state.pos_xyz_q16_16, cam.camera_state.rot_quat_q16_16, render_camera_packet.view_mat_q16_16);
+            render_camera_packet_tick_u64 = canonical_tick;
+
+            // Render assist packet: pre-derived focus/LOD coefficients.
+            render_assist_packet.focus_distance_m_q32_32 = cam.camera_state.focus_distance_m_q32_32;
+            // Focus band derived from settings (Q16.16 -> Q32.32)
+            render_assist_packet.focus_band_m_q32_32 = ((int64_t)project_settings.camera.focus_band_m_q16_16) << 16;
+
+            // Compute squared bounds in meters^2 (Q32.32).
+            auto sq_q32_32 = [&](int64_t v_q32)->uint64_t {
+                // (Q32.32 * Q32.32) >> 32 => Q32.32
+                __int128 prod = ( (__int128)v_q32 * (__int128)v_q32 );
+                uint64_t out = (uint64_t)(prod >> 32);
+                return out;
+            };
+            const int64_t d = render_assist_packet.focus_distance_m_q32_32;
+            const int64_t w = render_assist_packet.focus_band_m_q32_32;
+            int64_t near_d = d - w;
+            int64_t far_d  = d + w;
+            if (near_d < 0) near_d = 0;
+            if (far_d < near_d + (1ll<<16)) far_d = near_d + (1ll<<16);
+            render_assist_packet.focus_near_m2_q32_32 = sq_q32_32(near_d);
+            render_assist_packet.focus_far_m2_q32_32  = sq_q32_32(far_d);
+
+            const uint64_t range_m2 = (render_assist_packet.focus_far_m2_q32_32 > render_assist_packet.focus_near_m2_q32_32)
+                ? (render_assist_packet.focus_far_m2_q32_32 - render_assist_packet.focus_near_m2_q32_32)
+                : 1ull;
+            // inv_range (Q16.16) ~= (1<<48)/range_q32_32
+            render_assist_packet.inv_focus_range_m2_q16_16 = (int32_t)(((__int128)1 << 48) / ( (__int128)range_m2 ));
+
+            // Near boost window: [0.25ft, 1ft] default, but driven by settings.
+            const int64_t nmin = ((int64_t)project_settings.camera.near_boost_min_m_q16_16) << 16;
+            const int64_t nmax = ((int64_t)project_settings.camera.near_boost_max_m_q16_16) << 16;
+            render_assist_packet.near_min_m2_q32_32 = sq_q32_32(nmin);
+            render_assist_packet.near_max_m2_q32_32 = sq_q32_32(nmax);
+            const uint64_t nrange = (render_assist_packet.near_max_m2_q32_32 > render_assist_packet.near_min_m2_q32_32)
+                ? (render_assist_packet.near_max_m2_q32_32 - render_assist_packet.near_min_m2_q32_32)
+                : 1ull;
+            render_assist_packet.inv_near_range_m2_q16_16 = (int32_t)(((__int128)1 << 48) / ( (__int128)nrange ));
+
+            render_assist_packet.screen_proxy_scale_q16_16 = project_settings.rendering.screen_proxy_scale_q16_16;
+            render_assist_packet.lod_boost_max_q16_16 = project_settings.rendering.lod_boost_max_q16_16;
+            render_assist_packet_tick_u64 = canonical_tick;
+
+            // ------------------------------------------------------------------
+            // XR per-eye view packet projection (observation pose -> fixed view)
+            // The viewport submits raw eye poses; the substrate projects view matrices.
+            // ------------------------------------------------------------------
+            auto f32_to_q16 = [&](float v)->int32_t {
+                // Deterministic rounding to nearest.
+                double dv = (double)v;
+                double q = dv * 65536.0;
+                long long r = (long long)llround(q);
+                if (r > 2147483647LL) r = 2147483647LL;
+                if (r < -2147483648LL) r = -2147483648LL;
+                return (int32_t)r;
+            };
+
+            auto build_view_from_pose = [&](const float pos_f32[3], const float quat_f32[4], int32_t out_view_q16[16]) {
+                // Convert pose to fixed-point.
+                const int32_t px = f32_to_q16(pos_f32[0]);
+                const int32_t py = f32_to_q16(pos_f32[1]);
+                const int32_t pz = f32_to_q16(pos_f32[2]);
+                const int32_t qx = f32_to_q16(quat_f32[0]);
+                const int32_t qy = f32_to_q16(quat_f32[1]);
+                const int32_t qz = f32_to_q16(quat_f32[2]);
+                const int32_t qw = f32_to_q16(quat_f32[3]);
+
+                const int64_t one = 65536LL;
+                const int64_t two = 131072LL;
+
+                auto mul_q16 = [&](int32_t a, int32_t b)->int64_t { return ((int64_t)a * (int64_t)b) >> 16; };
+
+                const int64_t xx = mul_q16(qx,qx);
+                const int64_t yy = mul_q16(qy,qy);
+                const int64_t zz = mul_q16(qz,qz);
+                const int64_t xy = mul_q16(qx,qy);
+                const int64_t xz = mul_q16(qx,qz);
+                const int64_t yz = mul_q16(qy,qz);
+                const int64_t wx = mul_q16(qw,qx);
+                const int64_t wy = mul_q16(qw,qy);
+                const int64_t wz = mul_q16(qw,qz);
+
+                // Rotation matrix (world from local), Q16.16
+                const int64_t r00 = one - ((two * (yy + zz)) >> 16);
+                const int64_t r01 = ((two * (xy - wz)) >> 16);
+                const int64_t r02 = ((two * (xz + wy)) >> 16);
+
+                const int64_t r10 = ((two * (xy + wz)) >> 16);
+                const int64_t r11 = one - ((two * (xx + zz)) >> 16);
+                const int64_t r12 = ((two * (yz - wx)) >> 16);
+
+                const int64_t r20 = ((two * (xz - wy)) >> 16);
+                const int64_t r21 = ((two * (yz + wx)) >> 16);
+                const int64_t r22 = one - ((two * (xx + yy)) >> 16);
+
+                // View matrix = inverse pose = R^T and -R^T p
+                const int64_t vt0 = -(((r00 * px + r10 * py + r20 * pz) >> 16));
+                const int64_t vt1 = -(((r01 * px + r11 * py + r21 * pz) >> 16));
+                const int64_t vt2 = -(((r02 * px + r12 * py + r22 * pz) >> 16));
+
+                // Row-major: [ R^T | t ]
+                out_view_q16[0] = (int32_t)r00; out_view_q16[1] = (int32_t)r10; out_view_q16[2] = (int32_t)r20; out_view_q16[3] = (int32_t)vt0;
+                out_view_q16[4] = (int32_t)r01; out_view_q16[5] = (int32_t)r11; out_view_q16[6] = (int32_t)r21; out_view_q16[7] = (int32_t)vt1;
+                out_view_q16[8] = (int32_t)r02; out_view_q16[9] = (int32_t)r12; out_view_q16[10]= (int32_t)r22; out_view_q16[11]= (int32_t)vt2;
+                out_view_q16[12]= 0; out_view_q16[13]= 0; out_view_q16[14]= 0; out_view_q16[15]= (int32_t)one;
+            };
+
+            for (uint32_t ei = 0; ei < 2u; ++ei) {
+                EwRenderXrEyePacket& outp = render_xr_eye_packet[ei];
+                if (xr_eye_pose_f32[ei].valid_u32 != 0u) {
+                    build_view_from_pose(xr_eye_pose_f32[ei].pos_xyz_f32, xr_eye_pose_f32[ei].rot_xyzw_f32, outp.view_mat_q16_16);
+                    outp.tick_u64 = canonical_tick;
+                    render_xr_eye_packet_tick_u64[ei] = canonical_tick;
+                } else {
+                    // Fail closed deterministically: identity view
+                    for (int k=0;k<16;++k) outp.view_mat_q16_16[k] = 0;
+                    outp.view_mat_q16_16[0] = 65536; outp.view_mat_q16_16[5] = 65536; outp.view_mat_q16_16[10] = 65536; outp.view_mat_q16_16[15] = 65536;
+                    outp.tick_u64 = canonical_tick;
+                    render_xr_eye_packet_tick_u64[ei] = canonical_tick;
+                }
+            }
+
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Object export texture refresh (boundary-coupling observable)
+    //
+    // The engine treats the UV atlas as a substrate-resident carrier of
+    // object variables (density/coherence/curvature/id). To ensure OBJ/MTL
+    // parameters (textures) are exportable and reflect the object update
+    // law and coupling observables, we refresh the atlas channels from the
+    // current anchor frame each tick under a bounded budget.
+    //
+    // Deterministic policy:
+    //  - update at most 2 objects per tick
+    //  - object list is ascending id
+    //  - per-pixel update is a pure function of (existing atlas, anchor state)
+    // ------------------------------------------------------------------
+    {
+        std::vector<uint64_t> obj_ids;
+        object_store.list_object_ids_sorted(obj_ids);
+        const uint32_t max_updates = 2u;
+        uint32_t updated = 0;
+        const uint32_t n = (uint32_t)obj_ids.size();
+        const uint32_t start = (n == 0u) ? 0u : (uint32_t)(canonical_tick % (uint64_t)n);
+        for (uint32_t k = 0; k < n && updated < max_updates; ++k) {
+            const uint32_t idx = (start + k) % n;
+            const uint64_t oid = obj_ids[idx];
+            uint32_t aw=0, ah=0, af=0;
+            const uint8_t* bytes = nullptr;
+            size_t bn = 0;
+            if (!object_store.view_uv_atlas(oid, aw, ah, af, bytes, bn) || !bytes || bn == 0) continue;
+
+            // Anchor observable: use the object id as anchor id when in range.
+            const uint32_t aid = (oid < (uint64_t)anchors.size()) ? (uint32_t)oid : 0u;
+            const Anchor* a = (aid < anchors.size()) ? &anchors[aid] : nullptr;
+            const uint64_t curv = a ? (uint64_t)((a->curvature_q < 0) ? -a->curvature_q : a->curvature_q) : 0u;
+            const uint64_t dop  = a ? (uint64_t)((a->doppler_q < 0) ? -a->doppler_q : a->doppler_q) : 0u;
+            // Scale down TURN_SCALE-ish values to 0..255.
+            const uint64_t mix = (curv >> 20) + (dop >> 20);
+            const uint8_t s = (uint8_t)((mix > 255u) ? 255u : mix);
+            const uint8_t idlo = (uint8_t)(oid & 0xFFu);
+
+            std::vector<uint8_t> out;
+            out.assign(bytes, bytes + bn);
+            for (size_t i = 0; i + 3 < out.size(); i += 4) {
+                // R = density remains
+                out[i + 1] = (uint8_t)(out[i + 1] ^ s);      // G: coherence proxy modulated by coupling
+                out[i + 2] = (uint8_t)(out[i + 2] ^ (s ^ idlo)); // B: curvature proxy modulated
+                // A = id tag remains
+            }
+            (void)object_store.upsert_uv_atlas_rgba8(oid, aw, ah, out.data(), out.size());
+            updated++;
+        }
+    }
+
     // Post-tick cognition: update attractor memory and classification from
     // committed state. This does not modify the physics state directly.
     neural_ai.post_tick(this);
@@ -5664,6 +7715,68 @@ ctx.envelope_headroom_q32_32 = clamp01_q32_32(ctx.envelope_headroom_q32_32);
     }
 
     // Inputs are consumed only on successful tick boundary.
+    // ------------------------------------------------------------------
+    // Render object packets (anchors -> renderer)
+    // Renderer must not own authoritative object transforms.
+    // ------------------------------------------------------------------
+    {
+        render_object_packets.clear();
+        render_object_packets.reserve(64);
+        for (uint32_t ai = 1u; ai < (uint32_t)anchors.size(); ++ai) {
+            const Anchor& a = anchors[ai];
+            if (a.kind_u32 == EW_ANCHOR_KIND_OBJECT) {
+                EwRenderObjectPacket p{};
+                p.object_id_u64 = a.object_id_u64;
+                p.anchor_id_u32 = a.id;
+                p.pos_q16_16[0] = a.object_state.pos_q16_16[0];
+                p.pos_q16_16[1] = a.object_state.pos_q16_16[1];
+                p.pos_q16_16[2] = a.object_state.pos_q16_16[2];
+                p.radius_q16_16 = 0;
+                p.albedo_rgba8 = 0xFFFFFFFFu;
+                p.atmosphere_rgba8 = 0u;
+                p.atmosphere_thickness_q16_16 = 0;
+                p.emissive_q16_16 = 0;
+                render_object_packets.push_back(p);
+            } else if (a.kind_u32 == EW_ANCHOR_KIND_PLANET) {
+                EwRenderObjectPacket p{};
+                p.object_id_u64 = a.object_id_u64;
+                p.anchor_id_u32 = a.id;
+                p.pos_q16_16[0] = a.planet_state.pos_q16_16[0];
+                p.pos_q16_16[1] = a.planet_state.pos_q16_16[1];
+                p.pos_q16_16[2] = a.planet_state.pos_q16_16[2];
+                p.radius_q16_16 = a.planet_state.radius_m_q16_16;
+                p.albedo_rgba8 = a.planet_state.albedo_rgba8;
+                p.atmosphere_rgba8 = a.planet_state.atmosphere_rgba8;
+                p.atmosphere_thickness_q16_16 = a.planet_state.atmosphere_thickness_m_q16_16;
+                p.emissive_q16_16 = a.planet_state.emissive_q16_16;
+                render_object_packets.push_back(p);
+            }
+        }
+        render_object_packets_tick_u64 = canonical_tick;
+    }
+
+    // ------------------------------------------------------------------
+    // Determinism guardrail: 9D state fingerprint.
+    // If a reference trace exists, fail closed on first mismatch.
+    // ------------------------------------------------------------------
+    if (!determinism_ref_loaded) {
+        (void)ge_load_fingerprint_reference("Draft Container/Determinism/fingerprint_ref.txt", determinism_ref_fingerprints);
+        determinism_ref_loaded = true;
+    }
+    state_fingerprint_u64 = ge_compute_state_fingerprint_9d(this);
+    state_fingerprint_tick_u64 = canonical_tick;
+    if (!determinism_ref_fingerprints.empty()) {
+        const uint64_t idx = canonical_tick;
+        if (idx < determinism_ref_fingerprints.size()) {
+            const uint64_t expect = determinism_ref_fingerprints[(size_t)idx];
+            if (expect != 0u && expect != state_fingerprint_u64) {
+                emit_ui_line("DETERMINISM_FINGERPRINT_MISMATCH");
+                // Fail closed deterministically.
+                std::abort();
+            }
+        }
+    }
+
     inbound.clear();
     pending_text_x_q = 0;
     pending_image_y_q = 0;
@@ -5743,7 +7856,7 @@ void SubstrateManager::build_viz_points(std::vector<EwVizPoint>& out) const {
     EwFieldLatticeGpu* viz_lat = nullptr;
     if (lattice_proj_tag_.enabled) {
         const uint32_t sel = lattice_proj_tag_.lattice_sel_u32;
-        if (sel == 1u && lattice_probe_gpu_) viz_lat = lattice_probe_gpu_.get();
+        if (sel == 1u && lattice_probe_gpu_[0]) viz_lat = lattice_probe_gpu_[0].get();
         else if (lattice_gpu_) viz_lat = lattice_gpu_.get();
     }
 
@@ -6057,6 +8170,47 @@ for (size_t i = 0; i < hits.size(); ++i) {
 void SubstrateManager::corpus_answer_emit(const std::string& query_utf8, uint32_t context_anchor_id_u32) {
     (void)context_anchor_id_u32;
 
+    // Global coherence gate: AI output must be restricted by the *global* coherence,
+    // not merely local resonance. If coherence is low, fail closed and
+    // deterministically request evidence (allowlist crawl / experiments) instead.
+    if (global_coherence.global_q15 < global_coherence_gate_min_q15) {
+        if (ui_out_q.size() < UI_OUT_CAP) ui_out_q.push_back("AI_GATE_LOW_GLOBAL_COHERENCE");
+
+        // Deterministic behavior:
+        // - emit a PlanPacket to nudge automation
+        // - emit a CrawlRequest to gather allowlisted evidence (if allowed)
+        genesis::AutoArtifact plan{};
+        plan.kind = genesis::AutoArtifactKind::PlanPacket;
+        plan.created_tick_u64 = canonical_tick_u64();
+        plan.lane_u32 = 0u;
+        plan.payload_utf8 = "{\"plan\":\"evidence_needed\",\"reason\":\"low_global_coherence\",\"tol_percent\":6}";
+        learning_automation.bus().push(plan);
+
+        // If allowlist not loaded yet, start default allowlist crawl deterministically.
+        if (!corpus_allowlist_loaded) {
+            corpus_crawl_start_neuralis_corpus_default();
+        }
+
+        // Issue a bounded CrawlRequest referencing the query. Scheduler will pick canonical ordering.
+        genesis::AutoArtifact cr{};
+        cr.kind = genesis::AutoArtifactKind::CrawlRequest;
+        cr.created_tick_u64 = canonical_tick_u64();
+        cr.lane_u32 = 0u;
+        // Payload is small JSON-ish and ASCII-safe.
+        std::string q = query_utf8;
+        if (q.size() > 196) q.resize(196);
+        for (size_t i = 0; i < q.size(); ++i) {
+            unsigned char b = (unsigned char)q[i];
+            if (b < 0x20 || b == 0x7F) q[i] = ' ';
+        }
+        cr.payload_utf8 = std::string("{\"crawl\":\"query_seed\",\"q\":\"") + q + "\",\"lane_max\":" + std::to_string((unsigned long long)crawl_allowlist_lane_max_u32) + "}";
+        learning_automation.bus().push(cr);
+
+        // Deterministic UI guidance (no speculative answer).
+        if (ui_out_q.size() < UI_OUT_CAP) ui_out_q.push_back("AI_NEEDS_EVIDENCE:run_allowlist_crawl_or_provide_more_context");
+        return;
+    }
+
     // Deterministic, extractive "answer": pick best-matching corpus artifacts and
     // emit bounded ASCII snippets around query term matches.
     std::string qlc;
@@ -6293,3 +8447,33 @@ void SubstrateManager::corpus_answer_emit(const std::string& query_utf8, uint32_
 }
 
 
+
+
+// ------------------------------------------------------------------
+// XR eye pose ingress and projected view packets
+// ------------------------------------------------------------------
+
+void SubstrateManager::submit_xr_eye_pose_f32(uint32_t eye_index_u32, const float pos_xyz_f32[3], const float rot_xyzw_f32[4], uint64_t tick_u64) {
+    if (eye_index_u32 >= 2u) return;
+    EwXrEyePoseF32& ep = xr_eye_pose_f32[eye_index_u32];
+    if (pos_xyz_f32) {
+        ep.pos_xyz_f32[0] = pos_xyz_f32[0];
+        ep.pos_xyz_f32[1] = pos_xyz_f32[1];
+        ep.pos_xyz_f32[2] = pos_xyz_f32[2];
+    }
+    if (rot_xyzw_f32) {
+        ep.rot_xyzw_f32[0] = rot_xyzw_f32[0];
+        ep.rot_xyzw_f32[1] = rot_xyzw_f32[1];
+        ep.rot_xyzw_f32[2] = rot_xyzw_f32[2];
+        ep.rot_xyzw_f32[3] = rot_xyzw_f32[3];
+    }
+    ep.tick_u64 = tick_u64;
+    ep.valid_u32 = 1u;
+}
+
+bool SubstrateManager::get_render_xr_eye_packet(uint32_t eye_index_u32, EwRenderXrEyePacket* out) const {
+    if (!out || eye_index_u32 >= 2u) return false;
+    if (render_xr_eye_packet_tick_u64[eye_index_u32] == 0u) return false;
+    *out = render_xr_eye_packet[eye_index_u32];
+    return true;
+}

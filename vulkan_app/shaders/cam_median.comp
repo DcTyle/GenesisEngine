@@ -1,0 +1,33 @@
+#version 450
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 1) buffer HistBuf {
+    uint bins[256];
+} hist;
+
+layout(std430, binding = 2) buffer OutBuf {
+    uint median_norm_q16_16;
+    uint total_count;
+} outv;
+
+// Single-workgroup deterministic reduction.
+void main() {
+    uint tid = gl_LocalInvocationID.x;
+
+    // Compute total count deterministically (sum in one thread)
+    if (tid == 0u) {
+        uint total = 0u;
+        for (uint i = 0u; i < 256u; ++i) total += hist.bins[i];
+        outv.total_count = total;
+        uint half = total / 2u;
+        uint acc = 0u;
+        uint med = 0u;
+        for (uint i = 0u; i < 256u; ++i) {
+            acc += hist.bins[i];
+            if (acc >= half) { med = i; break; }
+        }
+        // median normalized in Q16.16
+        uint q = (med << 16) / 255u;
+        outv.median_norm_q16_16 = q;
+    }
+}

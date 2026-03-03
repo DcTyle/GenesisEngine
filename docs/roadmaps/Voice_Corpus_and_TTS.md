@@ -10,7 +10,7 @@ What is implemented (CPU reference):
   - Common Voice TSV + clips directory prefix (`GE_speech_alignment`)
   - Simple two-column manifest: `wav_path<TAB>text` (`GE_speech_alignment`)
 - Deterministic minimal English TTS scaffold:
-  - Fallback text->phones rules (placeholder until CMUdict bootstrapped)
+  - Fallback text->phones rules (deterministic lexicon + OOV grapheme rules (engine-owned))
   - Simple source-filter-ish synthesizer producing PCM16 mono (`GE_voice_synth`)
 - Tools:
   - `ge_speech_ingest` (loads corpus manifest/tsv, validates WAVs, extracts features)

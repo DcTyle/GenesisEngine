@@ -18,6 +18,8 @@ class SubstrateManager;
 
 namespace genesis {
 
+struct EwMeshV1;
+
 
 // Load an FBX (or any Assimp-supported) file and convert it to a single EWM1 mesh.
 // Meshes are concatenated in scene mesh order, with indices offset accordingly.
@@ -44,5 +46,14 @@ bool assimp_export_with_external_textures(const std::string& src_path_utf8,
                                          const std::string& dst_format_id_utf8,
                                          const std::string& texture_dump_dir_utf8,
                                          std::string* out_report_utf8);
+
+// Export an in-memory EWM1 mesh to an Assimp-supported format (e.g. "fbx")
+// using a single material whose diffuse texture points at a file on disk.
+// Deterministic: the scene graph has a single node and single mesh.
+bool assimp_export_ewmesh_v1_single_material(const EwMeshV1& mesh,
+                                            const std::string& dst_path_utf8,
+                                            const std::string& dst_format_id_utf8,
+                                            const std::string& diffuse_texture_rel_utf8,
+                                            std::string* out_report_utf8);
 
 } // namespace genesis

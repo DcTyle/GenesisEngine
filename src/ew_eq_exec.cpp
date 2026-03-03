@@ -33,6 +33,7 @@ static inline uint32_t expected_n_in_for_kind(uint32_t kind) {
         case 0x00000004u: return 1u; // constrain Pi_G consumes one buffer
         case 0x00000005u: return 1u; // chain apply consumes one lane
         case 0x00000006u: return 1u; // observable project consumes one lane
+        case 0x00000009u: return 0u; // compute-bus dispatch uses payload only
         case 0x00000007u: return 0u; // effective constants uses ctx
         case 0x00000008u: return 1u; // sink omega consumes one lane
         default: return 0u;
@@ -47,6 +48,7 @@ static inline uint32_t expected_n_out_for_kind(uint32_t kind) {
         case 0x00000004u: return 1u;
         case 0x00000005u: return 1u;
         case 0x00000006u: return 1u;
+        case 0x00000009u: return 0u; // compute-bus dispatch writes to anchors/state
         case 0x00000007u: return 1u;
         case 0x00000008u: return 1u;
         default: return 0u;
@@ -63,6 +65,7 @@ static inline uint32_t expected_payload_bytes_for_kind(uint32_t kind) {
         case 0x00000006u: return 72u;
         case 0x00000007u: return 72u;
         case 0x00000008u: return 76u;
+        case 0x00000009u: return 72u; // compute-bus dispatch (camera/settings/input)
         default: return 0u;
     }
 }

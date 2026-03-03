@@ -44,6 +44,212 @@ extern "C" __global__ void ew_kernel_emergent_bloom_add(const float* L0, const f
                                                         int gx, int gy, int slice_z,
                                                         float bloom_gain);
 
+// Deterministic integer reduction for sampling centered Q15-ish means from
+// multiple world fields.
+// We clamp each float to [-1,1], convert to centered signed Q15-ish integers
+// using a fixed scale, and reduce with atomicAdd on int64.
+__global__ void ew_kernel_sample_means_q15_box(const float* E_curr,
+                                               const float* flux,
+                                               const float* coherence,
+                                               const float* curvature,
+                                               const float* doppler,
+                                               int gx, int gy, int gz,
+                                               int cx, int cy, int cz,
+                                               int rx, int ry, int rz,
+                                               int64_t* out_sums_i64_6,
+                                               uint64_t* out_cnt_u64) {
+    const int tid = (int)blockIdx.x * (int)blockDim.x + (int)threadIdx.x;
+    const int sx0 = cx - rx;
+    const int sx1 = cx + rx;
+    const int sy0 = cy - ry;
+    const int sy1 = cy + ry;
+    const int sz0 = cz - rz;
+    const int sz1 = cz + rz;
+    const int nx = sx1 - sx0 + 1;
+    const int ny = sy1 - sy0 + 1;
+    const int nz = sz1 - sz0 + 1;
+    const int n = nx * ny * nz;
+    if (tid >= n) return;
+    const int lx = tid % nx;
+    const int ly = (tid / nx) % ny;
+    const int lz = (tid / (nx * ny));
+    int x = sx0 + lx;
+    int y = sy0 + ly;
+    int z = sz0 + lz;
+    if (x < 0) x = 0; if (x >= gx) x = gx - 1;
+    if (y < 0) y = 0; if (y >= gy) y = gy - 1;
+    if (z < 0) z = 0; if (z >= gz) z = gz - 1;
+    const int idx = (z * gy + y) * gx + x;
+    auto clamp_q15ish = [](float v) -> int32_t {
+        float c = v;
+        if (c > 1.0f) c = 1.0f;
+        if (c < -1.0f) c = -1.0f;
+        return (int32_t)(c * 16384.0f);
+    };
+
+    const int32_t q0 = clamp_q15ish(E_curr[idx]);
+    const int32_t q1 = clamp_q15ish(flux[idx]);
+
+    // Flux gradient magnitude proxy (centered diffs). Clamp per-axis diffs to [-1,1]
+    // and accumulate abs contributions.
+    const int xp = (x + 1 < gx) ? (x + 1) : x;
+    const int xm = (x - 1 >= 0) ? (x - 1) : x;
+    const int yp = (y + 1 < gy) ? (y + 1) : y;
+    const int ym = (y - 1 >= 0) ? (y - 1) : y;
+    const int zp = (z + 1 < gz) ? (z + 1) : z;
+    const int zm = (z - 1 >= 0) ? (z - 1) : z;
+    const int idx_xp = (z * gy + y) * gx + xp;
+    const int idx_xm = (z * gy + y) * gx + xm;
+    const int idx_yp = (z * gy + yp) * gx + x;
+    const int idx_ym = (z * gy + ym) * gx + x;
+    const int idx_zp = (zp * gy + y) * gx + x;
+    const int idx_zm = (zm * gy + y) * gx + x;
+    float dfx = flux[idx_xp] - flux[idx_xm];
+    float dfy = flux[idx_yp] - flux[idx_ym];
+    float dfz = flux[idx_zp] - flux[idx_zm];
+    if (dfx > 1.0f) dfx = 1.0f; if (dfx < -1.0f) dfx = -1.0f;
+    if (dfy > 1.0f) dfy = 1.0f; if (dfy < -1.0f) dfy = -1.0f;
+    if (dfz > 1.0f) dfz = 1.0f; if (dfz < -1.0f) dfz = -1.0f;
+    float gmag = fabsf(dfx) + fabsf(dfy) + fabsf(dfz);
+    if (gmag > 1.0f) gmag = 1.0f;
+    const int32_t qfg = (int32_t)(gmag * 16384.0f);
+
+    const int32_t q2 = clamp_q15ish(coherence[idx]);
+    const int32_t q3 = clamp_q15ish(curvature[idx]);
+    const int32_t q4 = clamp_q15ish(doppler[idx]);
+
+    atomicAdd(&out_sums_i64_6[0], (int64_t)q0);
+    atomicAdd(&out_sums_i64_6[1], (int64_t)q1);
+    atomicAdd(&out_sums_i64_6[2], (int64_t)qfg);
+    atomicAdd(&out_sums_i64_6[3], (int64_t)q2);
+    atomicAdd(&out_sums_i64_6[4], (int64_t)q3);
+    atomicAdd(&out_sums_i64_6[5], (int64_t)q4);
+    atomicAdd(out_cnt_u64, (uint64_t)1ull);
+}
+
+// Clear int32 buffers (deterministic).
+__global__ void ew_kernel_clear_i32(int32_t* a, int n, int32_t v) {
+    const int i = (int)blockIdx.x * (int)blockDim.x + (int)threadIdx.x;
+    if (i < n) a[i] = v;
+}
+
+// Accumulate object-local imprint into world-sized int32 buffers.
+// occ_u8: [0..255], phi_q15_s16: [-32768..32767].
+// The imprint is accumulated in world coordinates centered at (cx,cy,cz).
+__global__ void ew_kernel_accum_object_imprint(const uint8_t* occ_u8,
+                                              const int16_t* phi_q15_s16,
+                                              int ogx, int ogy, int ogz,
+                                              int gx, int gy, int gz,
+                                              int cx, int cy, int cz,
+                                              int16_t w_e_q15, int16_t w_flux_q15, int16_t w_coh_q15, int16_t w_curv_q15, int16_t w_dopp_q15,
+                                              int32_t* out_e_i32,
+                                              int32_t* out_coh_i32,
+                                              int32_t* out_flux_i32,
+                                              int32_t* out_curv_i32,
+                                              int32_t* out_dopp_i32) {
+    const int tid = (int)blockIdx.x * (int)blockDim.x + (int)threadIdx.x;
+    const int nvox = ogx * ogy * ogz;
+    if (tid >= nvox) return;
+    const int ox = tid % ogx;
+    const int oy = (tid / ogx) % ogy;
+    const int oz = (tid / (ogx * ogy));
+    const uint8_t o = occ_u8[tid];
+    if (o == 0) return;
+
+    // Boundary-only imprint: only writeback where the object meets empty space.
+    // This makes coupling more "boundary exchange" than "bulk overwrite" and
+    // reduces bandwidth while keeping interactions sharp.
+    bool boundary = false;
+    // 6-neighbor occupancy check in object-local space.
+    // If any neighbor is empty (or out of bounds), this voxel is boundary.
+    if (ox == 0 || occ_u8[tid - 1] == 0) boundary = true;
+    else if (ox == ogx - 1 || occ_u8[tid + 1] == 0) boundary = true;
+    else if (oy == 0 || occ_u8[tid - ogx] == 0) boundary = true;
+    else if (oy == ogy - 1 || occ_u8[tid + ogx] == 0) boundary = true;
+    else if (oz == 0 || occ_u8[tid - (ogx * ogy)] == 0) boundary = true;
+    else if (oz == ogz - 1 || occ_u8[tid + (ogx * ogy)] == 0) boundary = true;
+    if (!boundary) return;
+
+    // Map object voxel to world voxel.
+    const int wx = (cx - ogx / 2) + ox;
+    const int wy = (cy - ogy / 2) + oy;
+    const int wz = (cz - ogz / 2) + oz;
+    if (wx < 0 || wy < 0 || wz < 0 || wx >= gx || wy >= gy || wz >= gz) return;
+    const int widx = (wz * gy + wy) * gx + wx;
+
+    // Deterministic integer contributions.
+    // Energy imprint uses phase * occupancy.
+    const int32_t phi = (int32_t)phi_q15_s16[tid];
+    const int32_t occ_q15 = (int32_t)o * 128; // 0..32640 (~Q15)
+    const int32_t e = (phi * occ_q15) >> 15;  // centered Q15-ish
+    const int32_t coh = occ_q15 - 16384;      // centered occupancy coherence
+
+    // Flux imprint: boundary gradient magnitude proxy from local phase.
+    // Uses abs(phi - neighbor_phi) summed over 6 neighbors.
+    int32_t grad = 0;
+    const int16_t p = phi_q15_s16[tid];
+    grad += abs((int)p - (int)phi_q15_s16[tid - 1]);
+    grad += abs((int)p - (int)phi_q15_s16[tid + 1]);
+    grad += abs((int)p - (int)phi_q15_s16[tid - ogx]);
+    grad += abs((int)p - (int)phi_q15_s16[tid + ogx]);
+    grad += abs((int)p - (int)phi_q15_s16[tid - (ogx * ogy)]);
+    grad += abs((int)p - (int)phi_q15_s16[tid + (ogx * ogy)]);
+    // Center around a nominal value to avoid constant positive drift.
+    const int32_t flux = (grad >> 1) - 8192;
+
+    // Curvature imprint: reuse grad as curvature proxy (centered).
+    const int32_t curv = (grad >> 2) - 4096;
+
+    // Doppler imprint: signed phase itself (centered).
+    const int32_t dopp = (phi >> 1);
+
+    // Response coupling: imprint deltas relative to world boundary means (Q15-ish).
+    // This makes writeback behave like an interface response rather than a bulk state dump.
+    const int32_t de = e - (int32_t)w_e_q15;
+    const int32_t dcoh = coh - (int32_t)w_coh_q15;
+    const int32_t dflux = flux - (int32_t)w_flux_q15;
+    const int32_t dcurv = curv - (int32_t)w_curv_q15;
+    const int32_t ddopp = dopp - (int32_t)w_dopp_q15;
+
+
+    atomicAdd(&out_e_i32[widx], de);
+    atomicAdd(&out_coh_i32[widx], dcoh);
+    atomicAdd(&out_flux_i32[widx], dflux);
+    atomicAdd(&out_curv_i32[widx], dcurv);
+    atomicAdd(&out_dopp_i32[widx], ddopp);
+}
+
+// Apply imprint buffers into floating world fields in a single per-cell pass.
+__global__ void ew_kernel_apply_object_imprint(float* E_curr,
+                                               float* flux,
+                                               float* coherence,
+                                               float* curvature,
+                                               float* doppler,
+                                               const int32_t* in_e_i32,
+                                               const int32_t* in_coh_i32,
+                                               const int32_t* in_flux_i32,
+                                               const int32_t* in_curv_i32,
+                                               const int32_t* in_dopp_i32,
+                                               int n,
+                                               float e_scale,
+                                               float coherence_scale,
+                                               float flux_scale,
+                                               float curvature_scale,
+                                               float doppler_scale) {
+    const int i = (int)blockIdx.x * (int)blockDim.x + (int)threadIdx.x;
+    if (i >= n) return;
+    const int32_t ei = in_e_i32[i];
+    const int32_t ci = in_coh_i32[i];
+    const int32_t fi = in_flux_i32[i];
+    const int32_t ui = in_curv_i32[i];
+    const int32_t di = in_dopp_i32[i];
+    if (ei != 0) E_curr[i] += (float)ei * e_scale;
+    if (ci != 0) coherence[i] += (float)ci * coherence_scale;
+    if (fi != 0) flux[i] += (float)fi * flux_scale;
+    if (ui != 0) curvature[i] += (float)ui * curvature_scale;
+    if (di != 0) doppler[i] += (float)di * doppler_scale;
+}
+
 static inline void ew_cuda_check(cudaError_t e, const char* what) {
     if (e != cudaSuccess) {
         throw std::runtime_error(std::string("CUDA error: ") + what + ": " + cudaGetErrorString(e));
@@ -125,6 +331,148 @@ void EwFieldLatticeGpu::alloc_buffers_() {
     ew_cuda_check(cudaMalloc(&d_pulse_cmds_, max_cmd * sizeof(EwPulseInjectCmd)), "malloc pulse cmds");
     pulse_cmd_cap_ = (uint32_t)max_cmd;
     pulse_cmd_count_ = 0u;
+
+    // Persistent sampling scratch for boundary exchange (int64 sums + u64 count).
+    // sums: [E_curr, flux, flux_grad, coherence, curvature, doppler]
+    ew_cuda_check(cudaMalloc(&d_sample_sums_i64_, sizeof(int64_t) * 6u), "malloc sample sums");
+    ew_cuda_check(cudaMalloc(&d_sample_cnt_u64_, sizeof(uint64_t)), "malloc sample cnt");
+
+    // Persistent object imprint scratch (int32 per cell).
+    ew_cuda_check(cudaMalloc(&d_obj_imprint_e_i32_, n * sizeof(int32_t)), "malloc obj imprint e");
+    ew_cuda_check(cudaMalloc(&d_obj_imprint_coh_i32_, n * sizeof(int32_t)), "malloc obj imprint coh");
+    ew_cuda_check(cudaMalloc(&d_obj_imprint_flux_i32_, n * sizeof(int32_t)), "malloc obj imprint flux");
+    ew_cuda_check(cudaMalloc(&d_obj_imprint_curv_i32_, n * sizeof(int32_t)), "malloc obj imprint curv");
+    ew_cuda_check(cudaMalloc(&d_obj_imprint_dopp_i32_, n * sizeof(int32_t)), "malloc obj imprint dopp");
+    // Initialize to zero.
+    ew_cuda_check(cudaMemset(d_obj_imprint_e_i32_, 0, n * sizeof(int32_t)), "memset obj imprint e");
+    ew_cuda_check(cudaMemset(d_obj_imprint_coh_i32_, 0, n * sizeof(int32_t)), "memset obj imprint coh");
+    ew_cuda_check(cudaMemset(d_obj_imprint_flux_i32_, 0, n * sizeof(int32_t)), "memset obj imprint flux");
+    ew_cuda_check(cudaMemset(d_obj_imprint_curv_i32_, 0, n * sizeof(int32_t)), "memset obj imprint curv");
+    ew_cuda_check(cudaMemset(d_obj_imprint_dopp_i32_, 0, n * sizeof(int32_t)), "memset obj imprint dopp");
+}
+
+EwBoundarySampleQ15 EwFieldLatticeGpu::sample_boundary_means_q15_box(uint32_t center_x, uint32_t center_y, uint32_t center_z,
+                                                                     uint32_t radius_x, uint32_t radius_y, uint32_t radius_z) const {
+    EwBoundarySampleQ15 out{};
+    if (!d_E_curr_ || !d_flux_ || !d_coherence_ || !d_curvature_ || !d_doppler_) return out;
+    if (!d_sample_sums_i64_ || !d_sample_cnt_u64_) return out;
+
+    const int cx = (int)center_x;
+    const int cy = (int)center_y;
+    const int cz = (int)center_z;
+    const int rx = (int)radius_x;
+    const int ry = (int)radius_y;
+    const int rz = (int)radius_z;
+    const int nx = rx * 2 + 1;
+    const int ny = ry * 2 + 1;
+    const int nz = rz * 2 + 1;
+    const int n = nx * ny * nz;
+
+    int64_t h_sums[6] = {0,0,0,0,0,0};
+    uint64_t h_cnt = 0;
+    ew_cuda_check(cudaMemcpy(d_sample_sums_i64_, h_sums, sizeof(h_sums), cudaMemcpyHostToDevice), "init sample sums");
+    ew_cuda_check(cudaMemcpy(d_sample_cnt_u64_, &h_cnt, sizeof(h_cnt), cudaMemcpyHostToDevice), "init sample cnt");
+
+    const int block = 256;
+    const int grid = (n + block - 1) / block;
+    ew_kernel_sample_means_q15_box<<<grid, block>>>(reinterpret_cast<const float*>(d_E_curr_),
+                                                    reinterpret_cast<const float*>(d_flux_),
+                                                    reinterpret_cast<const float*>(d_coherence_),
+                                                    reinterpret_cast<const float*>(d_curvature_),
+                                                    reinterpret_cast<const float*>(d_doppler_),
+                                                    (int)gx_, (int)gy_, (int)gz_,
+                                                    cx, cy, cz, rx, ry, rz,
+                                                    reinterpret_cast<int64_t*>(d_sample_sums_i64_),
+                                                    reinterpret_cast<uint64_t*>(d_sample_cnt_u64_));
+    ew_cuda_check(cudaDeviceSynchronize(), "sync sample means");
+    ew_cuda_check(cudaMemcpy(h_sums, d_sample_sums_i64_, sizeof(h_sums), cudaMemcpyDeviceToHost), "copy sample sums");
+    ew_cuda_check(cudaMemcpy(&h_cnt, d_sample_cnt_u64_, sizeof(h_cnt), cudaMemcpyDeviceToHost), "copy sample cnt");
+    if (h_cnt == 0) return out;
+
+    auto clamp_i16 = [](int64_t v) -> int16_t {
+        if (v < -32768) v = -32768;
+        if (v > 32767) v = 32767;
+        return (int16_t)v;
+    };
+    out.e_curr_q15 = clamp_i16(h_sums[0] / (int64_t)h_cnt);
+    out.flux_q15 = clamp_i16(h_sums[1] / (int64_t)h_cnt);
+    out.flux_grad_q15 = clamp_i16(h_sums[2] / (int64_t)h_cnt);
+    out.coherence_q15 = clamp_i16(h_sums[3] / (int64_t)h_cnt);
+    out.curvature_q15 = clamp_i16(h_sums[4] / (int64_t)h_cnt);
+    out.doppler_q15 = clamp_i16(h_sums[5] / (int64_t)h_cnt);
+    return out;
+}
+
+void EwFieldLatticeGpu::clear_object_imprint() {
+    const int n = (int)((size_t)gx_ * (size_t)gy_ * (size_t)gz_);
+    if (!d_obj_imprint_e_i32_ || !d_obj_imprint_coh_i32_ || !d_obj_imprint_flux_i32_ || !d_obj_imprint_curv_i32_ || !d_obj_imprint_dopp_i32_) return;
+    const int block = 256;
+    const int grid = (n + block - 1) / block;
+    ew_kernel_clear_i32<<<grid, block>>>((int32_t*)d_obj_imprint_e_i32_, n, 0);
+    ew_kernel_clear_i32<<<grid, block>>>((int32_t*)d_obj_imprint_coh_i32_, n, 0);
+    ew_kernel_clear_i32<<<grid, block>>>((int32_t*)d_obj_imprint_flux_i32_, n, 0);
+    ew_kernel_clear_i32<<<grid, block>>>((int32_t*)d_obj_imprint_curv_i32_, n, 0);
+    ew_kernel_clear_i32<<<grid, block>>>((int32_t*)d_obj_imprint_dopp_i32_, n, 0);
+}
+
+bool EwFieldLatticeGpu::accumulate_object_imprint5_q15(const uint8_t* occ_u8, const int16_t* phi_q15_s16,
+                                                       uint32_t ogx, uint32_t ogy, uint32_t ogz,
+                                                       uint32_t world_center_x, uint32_t world_center_y, uint32_t world_center_z,
+                                                       float /*e_scale*/, float /*coherence_scale*/,
+                                                       float /*flux_scale*/, float /*curvature_scale*/, float /*doppler_scale*/) {
+    if (!occ_u8 || !phi_q15_s16) return false;
+    if (!d_obj_imprint_e_i32_ || !d_obj_imprint_coh_i32_ || !d_obj_imprint_flux_i32_ || !d_obj_imprint_curv_i32_ || !d_obj_imprint_dopp_i32_) return false;
+
+    // Upload object grids to temporary device buffers (bounded per call).
+    // This is intentionally simple and deterministic; caller bounds object count per tick.
+    const size_t nvox = (size_t)ogx * (size_t)ogy * (size_t)ogz;
+    if (nvox == 0) return false;
+
+    uint8_t* d_occ = nullptr;
+    int16_t* d_phi = nullptr;
+    ew_cuda_check(cudaMalloc(&d_occ, nvox * sizeof(uint8_t)), "malloc obj occ");
+    ew_cuda_check(cudaMalloc(&d_phi, nvox * sizeof(int16_t)), "malloc obj phi");
+    ew_cuda_check(cudaMemcpy(d_occ, occ_u8, nvox * sizeof(uint8_t), cudaMemcpyHostToDevice), "copy obj occ");
+    ew_cuda_check(cudaMemcpy(d_phi, phi_q15_s16, nvox * sizeof(int16_t), cudaMemcpyHostToDevice), "copy obj phi");
+
+    const int n = (int)nvox;
+    const int block = 256;
+    const int grid = (n + block - 1) / block;
+    ew_kernel_accum_object_imprint<<<grid, block>>>(d_occ, d_phi,
+                                                    (int)ogx, (int)ogy, (int)ogz,
+                                                    (int)gx_, (int)gy_, (int)gz_,
+                                                    (int)world_center_x, (int)world_center_y, (int)world_center_z,
+                                                    (int16_t)world_bc_q15.e_curr_q15, (int16_t)world_bc_q15.flux_q15, (int16_t)world_bc_q15.coherence_q15, (int16_t)world_bc_q15.curvature_q15, (int16_t)world_bc_q15.doppler_q15,
+                                                    (int32_t*)d_obj_imprint_e_i32_,
+                                                    (int32_t*)d_obj_imprint_coh_i32_,
+                                                    (int32_t*)d_obj_imprint_flux_i32_,
+                                                    (int32_t*)d_obj_imprint_curv_i32_,
+                                                    (int32_t*)d_obj_imprint_dopp_i32_);
+    ew_cuda_check(cudaDeviceSynchronize(), "sync obj imprint accum");
+    cudaFree(d_occ);
+    cudaFree(d_phi);
+    return true;
+}
+
+void EwFieldLatticeGpu::apply_object_imprint_to_fields() {
+    if (!d_obj_imprint_e_i32_ || !d_obj_imprint_coh_i32_ || !d_obj_imprint_flux_i32_ || !d_obj_imprint_curv_i32_ || !d_obj_imprint_dopp_i32_) return;
+    if (!d_E_curr_ || !d_flux_ || !d_coherence_ || !d_curvature_ || !d_doppler_) return;
+    const int n = (int)((size_t)gx_ * (size_t)gy_ * (size_t)gz_);
+    const int block = 256;
+    const int grid = (n + block - 1) / block;
+    // Fixed deterministic scales (small) to avoid instability.
+    const float e_scale = 1.0f / 65536.0f;
+    const float coh_scale = 1.0f / 131072.0f;
+    const float flux_scale = 1.0f / 262144.0f;
+    const float curv_scale = 1.0f / 262144.0f;
+    const float dopp_scale = 1.0f / 262144.0f;
+    ew_kernel_apply_object_imprint<<<grid, block>>>((float*)d_E_curr_, (float*)d_flux_, (float*)d_coherence_, (float*)d_curvature_, (float*)d_doppler_,
+                                                    (const int32_t*)d_obj_imprint_e_i32_,
+                                                    (const int32_t*)d_obj_imprint_coh_i32_,
+                                                    (const int32_t*)d_obj_imprint_flux_i32_,
+                                                    (const int32_t*)d_obj_imprint_curv_i32_,
+                                                    (const int32_t*)d_obj_imprint_dopp_i32_,
+                                                    n, e_scale, coh_scale, flux_scale, curv_scale, dopp_scale);
 }
 
 void EwFieldLatticeGpu::free_buffers_() {
@@ -147,6 +495,13 @@ void EwFieldLatticeGpu::free_buffers_() {
     fre(d_slice_bgra8_);
     fre(d_reduce_scratch_);
     fre(d_pulse_cmds_);
+    fre(d_sample_sums_i64_);
+    fre(d_sample_cnt_u64_);
+    fre(d_obj_imprint_e_i32_);
+    fre(d_obj_imprint_coh_i32_);
+    fre(d_obj_imprint_flux_i32_);
+    fre(d_obj_imprint_curv_i32_);
+    fre(d_obj_imprint_dopp_i32_);
     d_E_prev_ = d_E_curr_ = d_E_next_ = nullptr;
     d_flux_ = d_coherence_ = d_curvature_ = d_doppler_ = nullptr;
     d_density_u8_ = nullptr;
@@ -156,6 +511,13 @@ void EwFieldLatticeGpu::free_buffers_() {
     d_slice_bgra8_ = nullptr;
     d_reduce_scratch_ = nullptr;
     d_pulse_cmds_ = nullptr;
+    d_sample_sums_i64_ = nullptr;
+    d_sample_cnt_u64_ = nullptr;
+    d_obj_imprint_e_i32_ = nullptr;
+    d_obj_imprint_coh_i32_ = nullptr;
+    d_obj_imprint_flux_i32_ = nullptr;
+    d_obj_imprint_curv_i32_ = nullptr;
+    d_obj_imprint_dopp_i32_ = nullptr;
     pulse_cmd_cap_ = 0u;
     pulse_cmd_count_ = 0u;
 }

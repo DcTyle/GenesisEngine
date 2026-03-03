@@ -1,6 +1,7 @@
 #pragma once
 #include <vector>
 #include <cstddef>
+#include <cstring>
 #include "fixed_point.hpp"
 
 // Anchor kind tags (deterministic, non-versioned).
@@ -10,6 +11,15 @@ static const uint32_t EW_ANCHOR_KIND_SYLLABUS_ROOT = 2;
 static const uint32_t EW_ANCHOR_KIND_CRAWLER_ROOT = 3;
 static const uint32_t EW_ANCHOR_KIND_DOMAIN_ROOT = 4;
 static const uint32_t EW_ANCHOR_KIND_DOC_ROOT = 5;
+static const uint32_t EW_ANCHOR_KIND_CAMERA = 6;
+static const uint32_t EW_ANCHOR_KIND_OBJECT = 7;
+static const uint32_t EW_ANCHOR_KIND_PLANET = 8;
+static const uint32_t EW_ANCHOR_KIND_EDITOR = 9;
+
+#include "GE_camera_anchor.hpp"
+#include "GE_object_anchor.hpp"
+#include "GE_planet_anchor.hpp"
+#include "GE_editor_anchor.hpp"
 
 // Spider carrier bounds (deterministic, non-versioned).
 // These are carrier observables used for gating and tensor-gradient coupling.
@@ -51,6 +61,10 @@ public:
     uint32_t id;
     // Anchor kind tag (deterministic). This is a runtime semantic label.
     uint32_t kind_u32;
+
+    // Anchor flags (bitfield). Used for UI partitioning and runtime routing.
+    // Default is 0.
+    uint32_t flags_u32 = 0;
     // Owning context anchor id (0 means global/default).
     uint32_t context_id_u32;
     // Owning crawler anchor id (0 means none).
@@ -82,6 +96,23 @@ public:
     // Derived channels (TURN_SCALE units) for visualization and operator input.
     int64_t curvature_q;
     int64_t doppler_q;
+
+    // World-sampled flux-gradient magnitude (Q0.15 in [0..32767]).
+    // This is populated by object↔world boundary exchange and used for
+    // deterministic diffusion/noise shaping and energy dominance rules.
+    uint16_t world_flux_grad_mean_q15;
+
+    // Camera anchor payload. Valid only when kind_u32 == EW_ANCHOR_KIND_CAMERA.
+    EwCameraAnchorState camera_state;
+
+    // Object anchor payload. Valid only when kind_u32 == EW_ANCHOR_KIND_OBJECT.
+    EwObjectAnchorState object_state;
+
+    // Planet anchor payload. Valid only when kind_u32 == EW_ANCHOR_KIND_PLANET.
+    EwPlanetAnchorState planet_state;
+
+    // Editor anchor payload. Valid only when kind_u32 == EW_ANCHOR_KIND_EDITOR.
+    EwEditorAnchorState editor_state;
 
     // Previous-step phase for deterministic doppler estimation.
     int64_t last_theta_q;
@@ -128,17 +159,23 @@ public:
     Basis9 basis9;
     std::vector<uint32_t> neighbors;
 
+    Anchor() : Anchor(0u) {}
+
     Anchor(uint32_t id_)
         : id(id_), kind_u32(0), context_id_u32(0), crawler_id_u32(0), object_id_u64(static_cast<uint64_t>(id_)), object_phase_seed_u64(0),
           object_influence_mask9(0), object_influence_pad0(0),
           object_theta_scale_turns_q32_32(0),
           theta_q(0), chi_q(TURN_SCALE / 10),
           m_q(TURN_SCALE), tau_q(0), tau_turns_q(0),
-          curvature_q(0), doppler_q(0), last_theta_q(0) {
+          curvature_q(0), doppler_q(0), world_flux_grad_mean_q15(0), last_theta_q(0) {
         last_f_code = 0;
         last_a_code = 0;
         last_v_code = 0;
         last_i_code = 0;
+
+        // Explicit zeroing of planet payload for bytewise determinism.
+        std::memset(&planet_state, 0, sizeof(planet_state));
+        std::memset(&editor_state, 0, sizeof(editor_state));
         last_lnA_q32_32 = 0;
         last_lnF_q32_32 = 0;
         dt_star_seconds_q32_32 = 0;

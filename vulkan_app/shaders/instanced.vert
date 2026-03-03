@@ -44,6 +44,8 @@ layout(location=9) out float vClarity;
 layout(location=10) out float vDopplerK;
 layout(location=11) out float vLeak;
 layout(location=12) out float vHarmMean;
+layout(location=13) out float vFluxGrad;
+layout(location=14) out float vDensity;
 
 vec3 q16_16_to_f3(ivec3 v){
     return vec3(v) / 65536.0;
@@ -95,5 +97,11 @@ void main(){
     // Emergent carrier triple (compact, fixed-point)
     vLeak = float(int(I.carrier_x_u32)) / 65536.0;
     vDopplerK = float(int(I.carrier_y_u32)) / 65536.0;
-    vHarmMean = float(I.carrier_z_u32 & 65535u) / 32768.0; // Q0.15
+    vHarmMean = float(I.carrier_z_u32 & 65535u) / 32768.0; // Q0.15 (low16)
+    vFluxGrad = float((I.carrier_z_u32 >> 16) & 65535u) / 32768.0; // Q0.15 (high16)
+
+    // Density dominance: treat leak/density proxy as density for shading control.
+    // This preserves the existing carrier meaning while enabling deterministic
+    // priority of dense objects in energy flux visuals.
+    vDensity = clamp(vLeak, 0.0, 1.0);
 }

@@ -54,6 +54,12 @@ inline uint16_t clamp_u16(uint32_t v) {
     return (v > A_MAX) ? A_MAX : static_cast<uint16_t>(v);
 }
 
+inline uint32_t clamp_u32(uint32_t v, uint32_t lo, uint32_t hi) {
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
 // Q32.32 helpers (deterministic fixed-point).
 inline int64_t mul_q32_32(int64_t a_q32_32, int64_t b_q32_32) {
     __int128 p = (__int128)a_q32_32 * (__int128)b_q32_32;

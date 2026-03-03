@@ -24,6 +24,10 @@ public:
     void step_one_tick();
     void get_radiance_slice_bgra8(uint32_t slice_z, std::vector<uint8_t>& out_bgra8, EwFieldFrameHeader& out_hdr);
 
+    // Observability hooks for deterministic test harnesses.
+    const std::vector<float>& E_curr() const { return E_curr_; }
+    const std::vector<float>& flux() const { return flux_; }
+
     uint64_t tick_index() const { return tick_index_; }
 
 private:

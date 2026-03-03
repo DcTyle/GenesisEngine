@@ -13,16 +13,31 @@
 #include "GE_object_memory.hpp"
 #include "crawler_subsystem.hpp"
 #include "GE_learning_checkpoint_gate.hpp"
+#include "GE_learning_automation.hpp"
 #include "GE_language_foundation.hpp"
 #include "GE_math_foundation.hpp"
 #include "GE_experiment_templates.hpp"
 #include "GE_neural_phase_ai.hpp"
+
+#include "GE_camera_anchor.hpp"
+
+#include "GE_global_coherence.hpp"
+
+#include "GE_phase_current.hpp"
 
 #include "GE_corpus_allowlist.hpp"
 
 #include "GE_domain_policy.hpp"
 #include "GE_rate_limiter.hpp"
 #include "GE_live_crawler.hpp"
+
+#include "GE_project_settings.hpp"
+#include "GE_asset_substrate.hpp"
+#include "GE_control_packets.hpp"
+
+#include "GE_planet_anchor.hpp"
+#include "GE_state_fingerprint.hpp"
+
 #include "GE_curriculum_manager.hpp"
 #include "GE_ai_policy.hpp"
 #include "GE_ai_anticipation.hpp"
@@ -175,6 +190,29 @@ struct EwEnvelopeSample {
 struct EwInputs {
     // Pulses and modality displacements for the tick.
     std::vector<Pulse> inbound;
+
+    // -----------------------------------------------------------------
+        // Sandbox environment (level container)
+        // -----------------------------------------------------------------
+        // A sandbox is a bounded environment the AI can scale and use for
+        // measurable experiments, object synthesis, and task-scoped simulation.
+        // The viewport may render it as a boundary volume and optionally hide
+        // the broader world when replace_world_u32==1.
+        struct EwSandboxEnv {
+            uint32_t active_u32 = 0;
+            uint32_t replace_world_u32 = 0;
+            uint64_t created_tick_u64 = 0;
+            // Center in world units (Q32.32).
+            int64_t center_xyz_q32_32[3] = {0,0,0};
+            // Full size/extents in world units (Q32.32).
+            int64_t size_xyz_q32_32[3] = {0,0,0};
+            // Optional target object that motivated the scale choice.
+            uint64_t target_object_id_u64 = 0;
+        } sandbox_env;
+    
+        // Deterministically derive a sandbox scale from an object id hint and/or
+        // current object store. Returns a full extent in Q32.32.
+        int64_t derived_sandbox_scale_m_q32_32(uint64_t target_object_id_u64) const;
 
     // Read-path execution envelope sample for the tick (may be all zeros).
     EwEnvelopeSample envelope;
@@ -380,6 +418,153 @@ public:
     uint64_t canonical_tick = 0;
     int64_t reservoir = 0;
 
+    // -----------------------------------------------------------------
+    // Project settings (loaded at boot, deterministic, snapshot-included)
+    // -----------------------------------------------------------------
+    EwProjectSettings project_settings;
+
+    // -----------------------------------------------------------------
+        // Asset library substrate (per-project + global cache)
+        // -----------------------------------------------------------------
+        genesis::GeAssetSubstrate asset_substrate;
+
+    // -----------------------------------------------------------------
+    // Camera sensor sample (world->camera sampling only)
+    // The viewport submits these read-only samples to the substrate.
+    // -----------------------------------------------------------------
+    struct EwCameraSensorSample {
+        // Median depth sample from Vulkan depth histogram pipeline.
+        // This is a normalized depth in [0,1] encoded as Q16.16.
+        // Conversion to meters (linear depth) happens inside the substrate.
+        int32_t median_depth_norm_q16_16 = (int32_t)(0.5f * 65536.0f);
+        uint64_t tick_u64 = 0;
+    } camera_sensor;
+
+    // -----------------------------------------------------------------
+    // Projected render packets (substate -> renderer). These are computed
+    // inside the substrate tick, not in the renderer.
+    // -----------------------------------------------------------------
+    EwRenderCameraPacket render_camera_packet;
+    uint64_t render_camera_packet_tick_u64 = 0;
+
+    EwRenderAssistPacket render_assist_packet;
+    uint64_t render_assist_packet_tick_u64 = 0;
+
+    // Render object packets projected inside substrate (objects + planets).
+    std::vector<EwRenderObjectPacket> render_object_packets;
+    uint64_t render_object_packets_tick_u64 = 0;
+
+    // Deterministic state fingerprint (9D fingerprint harness).
+    uint64_t state_fingerprint_u64 = 0;
+    uint64_t state_fingerprint_tick_u64 = 0;
+    bool determinism_ref_loaded = false;
+    std::vector<uint64_t> determinism_ref_fingerprints;
+
+    // XR per-eye projected view packets. The viewport submits raw eye poses as observations,
+    // but the substrate computes and projects view matrices deterministically.
+    struct EwXrEyePoseF32 {
+        float pos_xyz_f32[3] = {0.f,0.f,0.f};
+        float rot_xyzw_f32[4] = {0.f,0.f,0.f,1.f};
+        uint64_t tick_u64 = 0;
+        uint32_t valid_u32 = 0;
+    } xr_eye_pose_f32[2];
+
+    EwRenderXrEyePacket render_xr_eye_packet[2];
+    uint64_t render_xr_eye_packet_tick_u64[2] = {0,0};
+
+    // -----------------------------------------------------------------
+    // Control packet inbox (UI/editor/input -> AI substrate)
+    // -----------------------------------------------------------------
+    static constexpr uint32_t CONTROL_INBOX_CAP = 512;
+    EwControlPacket control_inbox[CONTROL_INBOX_CAP];
+    uint32_t control_inbox_head_u32 = 0;
+    uint32_t control_inbox_count_u32 = 0;
+
+    bool control_packet_push(const EwControlPacket& p);
+    bool control_packet_pop(EwControlPacket& out);
+
+    // XR eye pose observation ingress.
+    void submit_xr_eye_pose_f32(uint32_t eye_index_u32, const float pos_xyz_f32[3], const float rot_xyzw_f32[4], uint64_t tick_u64);
+
+    // XR per-eye projected view packet.
+    bool get_render_xr_eye_packet(uint32_t eye_index_u32, EwRenderXrEyePacket* out) const;
+
+    // -----------------------------------------------------------------
+    // Pending compute-bus requests (hard no-direct-compute rule)
+    // Control packets never directly compute derived results; they only
+    // stage intent that is consumed by compute-bus operator dispatch.
+    // -----------------------------------------------------------------
+    struct EwPendingSettingsSet {
+        uint32_t valid_u32 = 0;
+        uint64_t tick_u64 = 0;
+        uint16_t source_u16 = 0;
+        uint32_t tab_u32 = 0;
+        uint32_t field_u32 = 0;
+        int64_t value_q32_32 = 0;
+    } pending_settings_set;
+
+    struct EwPendingInputEvent {
+        uint32_t valid_u32 = 0;
+        uint64_t tick_u64 = 0;
+        uint16_t source_u16 = 0;
+        uint16_t kind_u16 = 0; // 1 action, 2 axis
+        uint32_t id_u32 = 0;   // raw input code (key/button/axis)
+        int32_t value_q16_16 = 0; // axis value or 1/0 for action
+        uint8_t pressed_u8 = 0;
+    } pending_input_event;
+
+    struct EwPendingBindingSet {
+        uint32_t valid_u32 = 0;
+        uint64_t tick_u64 = 0;
+        uint8_t is_axis_u8 = 0;
+        uint8_t pad_u8[3] = {0,0,0};
+        uint32_t raw_id_u32 = 0;
+        uint32_t mapped_u32 = 0;
+        int32_t scale_q16_16 = (int32_t)(1 * 65536);
+    } pending_binding_set;
+
+    bool input_bindings_dirty = false;
+
+    // Project settings revision (bumps on apply). Used for deterministic
+    // outward projection and snapshot inclusion.
+    uint64_t project_settings_revision_u64 = 0;
+
+    // -----------------------------------------------------------------
+    // Deterministic input bindings (raw OS codes -> semantic actions)
+    // Loaded from project_settings.input.bindings_path_utf8.
+    // -----------------------------------------------------------------
+    enum class EwMappedInputAction : uint32_t {
+        None = 0,
+        MoveForward = 1,
+        MoveBackward = 2,
+        MoveLeft = 3,
+        MoveRight = 4,
+        MoveUp = 5,
+        MoveDown = 6,
+        ZoomIn = 7,
+        ZoomOut = 8,
+        LookYaw = 10,
+        LookPitch = 11,
+    };
+
+    struct EwInputBinding {
+        uint32_t raw_id_u32 = 0;
+        uint32_t mapped_u32 = 0; // EwMappedInputAction
+        int32_t scale_q16_16 = (int32_t)(1 * 65536);
+    };
+
+    std::vector<EwInputBinding> input_action_bindings;
+    std::vector<EwInputBinding> input_axis_bindings;
+    bool input_bindings_loaded = false;
+
+    bool load_input_bindings_if_needed(std::string* out_err);
+    bool save_input_bindings_if_dirty(std::string* out_err);
+
+    // Canonical camera anchor id.
+    uint32_t camera_anchor_id_u32 = 0;
+
+    uint32_t alloc_anchor_id();
+
 
     EwCmbBath cmb_bath;
     // Non-projecting dark excitation accumulator (Blueprint dark sink rule).
@@ -397,6 +582,12 @@ public:
 
     // Last per-tick context snapshot used by operator packets and deterministic bindings.
     EwCtx ctx_snapshot;
+
+    // Compatibility surface: some subsystems reference sm->ctx as the live per-tick context.
+    // This is kept byte-identical to ctx_snapshot.
+    EwCtx ctx;
+
+    // per-tick context. This is kept byte-identical to ctx_snapshot.
 
     // ΩA operator packet execution surface (Equations appendix ΩA).
     std::vector<EwAnchorOpPackedV1Bytes> operator_packets_v1;
@@ -748,6 +939,12 @@ public:
 
     // Learning checkpoint gate state.
     genesis::LearningCheckpointGate learning_gate;
+
+    // Learning automation scheduler (curriculum-driven parallel tasks)
+    genesis::LearningAutomation learning_automation;
+
+    // Phase-amplitude current rail (9D region current field)
+    genesis::EwPhaseCurrent phase_current;
     // Stage-0 language foundations (dictionary/thesaurus/encyclopedia/speech).
     genesis::LanguageFoundation language_foundation;
 
@@ -807,6 +1004,7 @@ struct EwCrawlSession {
     std::vector<std::string> seen_url_keys;
 };
 
+static constexpr uint32_t EW_LEARNING_SANDBOX_MAX = 6;
 static constexpr uint32_t EW_CRAWL_SESSION_MAX = 4;
 EwCrawlSession crawl_sessions[EW_CRAWL_SESSION_MAX];
     uint32_t crawl_rr_u32 = 0;
@@ -815,6 +1013,11 @@ EwCrawlSession crawl_sessions[EW_CRAWL_SESSION_MAX];
 // and for admission filtering when observations arrive.
 GE_CorpusAllowlist corpus_allowlist;
 bool corpus_allowlist_loaded = false;
+
+    // User-updatable allowlist (optional). If present, it overrides the embedded default.
+    // Stored as a corpus artifact and mirrored to disk for persistence.
+    std::string corpus_allowlist_user_md_utf8;
+    bool corpus_allowlist_user_loaded = false;
 
     // Corpus pipeline scheduling knobs (offline-first)
     uint32_t corpus_pipeline_enable_u32 = 1u;
@@ -858,6 +1061,19 @@ uint64_t learning_stage_completed_mask_u64[GENESIS_CURRICULUM_STAGE_COUNT] = {0,
 // Visualization mode: headless disables continuous presentation but keeps
 // verification snapshots and metric validation alive.
 bool visualization_headless = false;
+
+    // -----------------------------------------------------------------
+    // Simulation snapshot + loop/live injection
+    // -----------------------------------------------------------------
+    bool sim_snapshot_valid = false;
+    EwState sim_snapshot;
+    bool sim_play_loop_enabled = false;
+    uint64_t sim_play_loop_start_tick_u64 = 0;
+    // For loop playback, we restore the snapshot before evolution each tick.
+    // For live injection, we restore once and then disable loop.
+
+    bool sim_save_to_file(const std::string& name_ascii);
+    bool sim_load_from_file(const std::string& name_ascii, bool play_loop);
 // Upper bound on allowlist lane accepted at current curriculum stage.
 uint32_t crawl_allowlist_lane_max_u32 = 1u; // stage0(language) allows lanes 0-1 by default
 
@@ -865,8 +1081,40 @@ uint32_t crawl_allowlist_lane_max_u32 = 1u; // stage0(language) allows lanes 0-1
 static constexpr uint32_t UI_OUT_CAP = 256;
 std::deque<std::string> ui_out_q;
 
+    // Global coherence aggregator (q15). Gates *all* AI outputs/actions.
+    genesis::GE_GlobalCoherence global_coherence;
+
+    // Deterministic record of which object ids were advanced by the canonical
+    // object ancilla update this tick. Used to drive bounded object→world
+    // writeback without scanning all objects.
+    std::vector<uint64_t> object_updates_last_tick_u64;
+
+    // Threshold below which AI must fail-closed (ask/plan/quiet) rather than answer.
+    uint16_t global_coherence_gate_min_q15 = 8192; // 0.25 default
+
+    // UI chat message ring buffer (deterministic, bounded).
+    static constexpr uint32_t UI_CHAT_CAP = 20;
+    std::deque<std::string> ui_chat_q;
+    // Index of the most recent chat anchor created from UI input.
+    uint32_t ui_last_chat_anchor_idx_u32 = 0u;
+    // Index of the current UI training anchor for live crawler targeting.
+    uint32_t ui_livecrawl_target_anchor_idx_u32 = 0u;
+    // Anchor indices flagged as UI_PARTITION (kept separate from sim/core intent).
+    std::vector<uint32_t> ui_anchor_indices;
+
+    // Create a UI chat anchor (UI_PARTITION|CHAT_MESSAGE) from a line of text.
+    uint32_t ui_create_chat_anchor_from_text(const std::string& utf8_line);
+    // Create a UI-derived concept/training anchor from the latest chat seed.
+    uint32_t ui_create_anchor_from_chat_seed(uint32_t chat_anchor_idx_u32, uint16_t resonance_q15);
+    // Extract deterministic crawl seeds from text and enqueue to live crawler when allowed.
+    void ui_maybe_enqueue_crawl_seeds_from_text(const std::string& utf8_line);
+
     // Emit one line to the UI output channel (deterministic, bounded).
     void emit_ui_line(const std::string& utf8_line);
+
+    // Allowlist update surface (UI command + config file). Deterministic validation.
+    bool corpus_allowlist_update_from_user_text(const std::string& allowlist_md_utf8);
+    bool corpus_allowlist_load_user_file_if_present();
 
     // Spec/Blueprint: neural phase dynamics controller.
     EwNeuralPhaseAI neural_ai;
@@ -992,6 +1240,17 @@ void ui_submit_user_text_line(const std::string& utf8_line);
 bool ui_pop_output_text(std::string& out_utf8);
 
 // -----------------------------------------------------------------
+// Deterministic export
+// -----------------------------------------------------------------
+// Exports a deterministic bundle for an object:
+//  - Standard shell mesh topology (ewmesh)
+//  - UV atlas variable map (raw rgba8 + json meta)
+//  - One-keyframe material animation json (for clip association)
+bool export_object_bundle(uint64_t object_id_u64,
+                          const std::string& out_dir_utf8,
+                          std::string* out_report_utf8) const;
+
+// -----------------------------------------------------------------
 // Corpus crawl control (button press consent)
 // -----------------------------------------------------------------
 // Parse an allowlist markdown/text and schedule crawl targets deterministically.
@@ -1093,12 +1352,13 @@ void corpus_crawl_stop();
     // These return pointers to GPU lattice objects; callers must not mutate
     // state directly except via lattice APIs.
     EwFieldLatticeGpu* world_lattice_gpu_for_learning();
-    EwFieldLatticeGpu* probe_lattice_gpu_for_learning();
+    EwFieldLatticeGpu* probe_lattice_gpu_for_learning(uint32_t sandbox_id_u32 = 0u);
 
 private:
     std::unique_ptr<EwFieldLatticeGpu> lattice_gpu_;
-    std::unique_ptr<EwFieldLatticeGpu> lattice_probe_gpu_;
+    std::unique_ptr<EwFieldLatticeGpu> lattice_probe_gpu_[EW_LEARNING_SANDBOX_MAX];
     void ensure_lattice_gpu_();
+    void apply_object_imprint_writeback_();
     void ensure_lattice_probe_gpu_();
 
     struct EwLatticeProjectionTag {

@@ -189,6 +189,29 @@ void EwFieldLatticeCpu::step_one_tick() {
                 const float damp = (beta_ * (1.0f + 4.0f * dens)) + opB_[iC];
                 const float trans = (c2_ * (1.0f - 0.65f * dens)) + opA_[iC];
                 float En = 2.0f * Ec - E_prev_[iC] + trans * lap * dt2 - damp * Ec * dt2;
+
+                // Emergent contact constraint (CPU reference).
+                // Matches the GPU kernel: high density triggers a conservative
+                // pressure-like correction driven by the density Laplacian.
+                {
+                    const float dens_cap = 0.78f;
+                    const float overlap = (dens > dens_cap) ? (dens - dens_cap) : 0.0f;
+                    if (overlap > 0.0f) {
+                        const float dm = (float)density_u8_[iXm] / 255.0f;
+                        const float dp = (float)density_u8_[iXp] / 255.0f;
+                        const float em = (float)density_u8_[iYm] / 255.0f;
+                        const float ep = (float)density_u8_[iYp] / 255.0f;
+                        const float fm = (float)density_u8_[iZm] / 255.0f;
+                        const float fp = (float)density_u8_[iZp] / 255.0f;
+                        const float dens_lap = (dm + dp + em + ep + fm + fp - 6.0f * dens);
+                        const float k_contact = 0.35f;
+                        En += (k_contact * overlap * dens_lap) * dt2;
+
+                        const float k_flux = 0.08f;
+                        flux_[iC] = flux_[iC] - k_flux * overlap * dens_lap;
+                    }
+                }
+
                 E_next_[iC] = En;
 
                 coherence_[iC] = 1.0f - dens;
