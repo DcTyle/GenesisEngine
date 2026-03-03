@@ -23,7 +23,7 @@ namespace genesis {
 // - This module is CPU-side orchestration/state only. It produces measurable
 //   checkpoints and exposes metrics to the learning gate. It does not perform
 //   any non-deterministic IO or network activity; all IO is explicit and user-
-//   triggered through SubstrateManager::language_bootstrap_from_dir.
+//   triggered through SubstrateMicroprocessor::language_bootstrap_from_dir.
 // - Storage is ID9-vector based and bounded for stability.
 // -----------------------------------------------------------------------------
 

@@ -2,7 +2,7 @@
 #include <cstdint>
 #include <string>
 
-class SubstrateManager;
+class SubstrateMicroprocessor;
 
 // Deterministic curriculum manager that drives ingest/training scheduling.
 // Does NOT "skip" stages; advances only based on accepted measurable checkpoints.
@@ -18,10 +18,10 @@ struct GE_CurriculumManager {
     uint64_t last_stage_tick_u64 = 0;
     uint64_t stage_advances_u64 = 0;
 
-    void tick(SubstrateManager* sm);
+    void tick(SubstrateMicroprocessor* sm);
 
 private:
-    bool stage0_ready_(SubstrateManager* sm) const;
-    void update_lane_masks_(SubstrateManager* sm);
-    void maybe_advance_(SubstrateManager* sm);
+    bool stage0_ready_(SubstrateMicroprocessor* sm) const;
+    void update_lane_masks_(SubstrateMicroprocessor* sm);
+    void maybe_advance_(SubstrateMicroprocessor* sm);
 };

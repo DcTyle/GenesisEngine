@@ -221,7 +221,7 @@ static std::string ew_pick_explicit_path_or_empty(const std::string& request) {
     return std::string();
 }
 
-static void ew_synth_index_rebuild(SubstrateManager* sm) {
+static void ew_synth_index_rebuild(SubstrateMicroprocessor* sm) {
     if (!sm) return;
     const uint64_t rev = sm->inspector_fields.revision_u64();
     if (rev == sm->synth_index_revision_u64) return;
@@ -250,7 +250,7 @@ static void ew_synth_index_rebuild(SubstrateManager* sm) {
         const bool is_sym_stream = (lp.find(".code_symbols.txt") != std::string::npos);
         if (!is_code && !is_sym_stream) continue;
 
-        SubstrateManager::EwSynthArtifactInfo info;
+        SubstrateMicroprocessor::EwSynthArtifactInfo info;
         info.rel_path = a.rel_path;
         info.kind_u32 = a.kind_u32;
         const uint32_t art_index = (uint32_t)sm->synth_artifacts.size();
@@ -295,7 +295,7 @@ static void ew_synth_index_rebuild(SubstrateManager* sm) {
             const uint32_t n_sym = counts[art_i];
             for (uint32_t t = 0u; t < n_sym; ++t) {
                 const EwSymbolToken9& tt = symbols[(size_t)art_i * (size_t)max_symbols_per_art + t];
-                SubstrateManager::EwSynthSymRef r{};
+                SubstrateMicroprocessor::EwSynthSymRef r{};
                 for (int j = 0; j < 9; ++j) r.sym_id9.u32[j] = tt.lanes_u32[j];
                 r.art_index_u32 = art_i;
                 r.weight_q15 = (uint16_t)std::min<uint32_t>(32768u, (uint32_t)base_w + (tt.len_u32 >= 16u ? 16384u : (tt.len_u32 * 1024u)));
@@ -304,7 +304,7 @@ static void ew_synth_index_rebuild(SubstrateManager* sm) {
         }
 
         std::stable_sort(sm->synth_sym_refs.begin(), sm->synth_sym_refs.end(),
-            [](const SubstrateManager::EwSynthSymRef& a, const SubstrateManager::EwSynthSymRef& b) {
+            [](const SubstrateMicroprocessor::EwSynthSymRef& a, const SubstrateMicroprocessor::EwSynthSymRef& b) {
                 if (a.sym_id9 != b.sym_id9) return a.sym_id9 < b.sym_id9;
                 if (a.art_index_u32 != b.art_index_u32) return a.art_index_u32 < b.art_index_u32;
                 return a.weight_q15 < b.weight_q15;
@@ -329,7 +329,7 @@ static void ew_synth_index_rebuild(SubstrateManager* sm) {
             while (i < len && is_ident_body(p[i])) ++i;
             const uint32_t seg_len = i - start;
 
-            SubstrateManager::EwSynthSymRef r{};
+            SubstrateMicroprocessor::EwSynthSymRef r{};
             r.sym_id9 = ew_id9_from_ascii((const uint8_t*)(p + start), (size_t)seg_len);
             r.art_index_u32 = art_i;
             r.weight_q15 = (uint16_t)std::min<uint32_t>(32768u, 8192u + (seg_len >= 16u ? 16384u : (seg_len * 1024u)));
@@ -338,14 +338,14 @@ static void ew_synth_index_rebuild(SubstrateManager* sm) {
     }
 
     std::stable_sort(sm->synth_sym_refs.begin(), sm->synth_sym_refs.end(),
-        [](const SubstrateManager::EwSynthSymRef& a, const SubstrateManager::EwSynthSymRef& b) {
+        [](const SubstrateMicroprocessor::EwSynthSymRef& a, const SubstrateMicroprocessor::EwSynthSymRef& b) {
             if (a.sym_id9 != b.sym_id9) return a.sym_id9 < b.sym_id9;
             if (a.art_index_u32 != b.art_index_u32) return a.art_index_u32 < b.art_index_u32;
             return a.weight_q15 < b.weight_q15;
         });
 }
 
-static void ew_synth_query_best(SubstrateManager* sm, const std::string& request_utf8, uint32_t max_out,
+static void ew_synth_query_best(SubstrateMicroprocessor* sm, const std::string& request_utf8, uint32_t max_out,
                                std::vector<std::pair<std::string, uint32_t>>& out) {
     out.clear();
     if (!sm) return;
@@ -363,9 +363,9 @@ static void ew_synth_query_best(SubstrateManager* sm, const std::string& request
         // No hashing/crypto/token ids: request segments are projected to 9D ids.
         const EwId9 key = ew_id9_from_string_ascii(t);
         auto lb = std::lower_bound(sm->synth_sym_refs.begin(), sm->synth_sym_refs.end(), key,
-            [](const SubstrateManager::EwSynthSymRef& r, const EwId9& k){ return r.sym_id9 < k; });
+            [](const SubstrateMicroprocessor::EwSynthSymRef& r, const EwId9& k){ return r.sym_id9 < k; });
         auto ub = std::upper_bound(sm->synth_sym_refs.begin(), sm->synth_sym_refs.end(), key,
-            [](const EwId9& k, const SubstrateManager::EwSynthSymRef& r){ return k < r.sym_id9; });
+            [](const EwId9& k, const SubstrateMicroprocessor::EwSynthSymRef& r){ return k < r.sym_id9; });
         for (auto it = lb; it != ub; ++it) {
             const uint32_t ai = it->art_index_u32;
             if (ai < score.size()) score[ai] += (uint32_t)it->weight_q15;
@@ -389,7 +389,7 @@ static void ew_synth_query_best(SubstrateManager* sm, const std::string& request
     }
 }
 
-static bool ew_synth_emit_cli_tool(SubstrateManager* sm, const std::string& tool_name) {
+static bool ew_synth_emit_cli_tool(SubstrateMicroprocessor* sm, const std::string& tool_name) {
     if (!sm) return false;
     if (tool_name.empty()) return false;
 
@@ -416,7 +416,7 @@ static bool ew_synth_emit_cli_tool(SubstrateManager* sm, const std::string& tool
     cpp += " <request>\\n\");\n";
     cpp += "        return 2;\n";
     cpp += "    }\n";
-    cpp += "    SubstrateManager sm;\n";
+    cpp += "    SubstrateMicroprocessor sm;\n";
     cpp += "    sm.set_projection_seed(1u);\n";
     cpp += "    const std::string req = join_args(argc, argv);\n";
     cpp += "    sm.ui_submit_user_text_line(std::string(\"SYNTHCODE:\") + req);\n";
@@ -457,7 +457,7 @@ static bool ew_synth_emit_cli_tool(SubstrateManager* sm, const std::string& tool
     return true;
 }
 
-static bool ew_synthcode_execute(SubstrateManager* sm, const std::string& request_utf8) {
+static bool ew_synthcode_execute(SubstrateMicroprocessor* sm, const std::string& request_utf8) {
     if (!sm) return false;
     std::string req = request_utf8;
     ew_trim_left_ws(req);
@@ -507,7 +507,7 @@ static bool ew_synthcode_execute(SubstrateManager* sm, const std::string& reques
 // Game-engine bootstrap request. This is a substrate-managed process that seeds
 // measurable tasks for the "game" curriculum bucket and emits minimal engine
 // scaffolding modules as inspector artifacts for later hydration.
-static bool ew_gameboot_execute(SubstrateManager* sm, const std::string& request_utf8) {
+static bool ew_gameboot_execute(SubstrateMicroprocessor* sm, const std::string& request_utf8) {
     if (!sm) return false;
     std::string req = request_utf8;
     ew_trim_left_ws(req);
@@ -614,7 +614,7 @@ static inline int32_t q16_16_from_turns(int64_t turns_q) {
     return (int32_t)v;
 }
 
-SubstrateManager::SubstrateManager(size_t count) {
+SubstrateMicroprocessor::SubstrateMicroprocessor(size_t count) {
     int32_t w[9] = {32,32,32,64,384,192,64,128,96}; // sum 1024
     for (int i = 0; i < 9; ++i) weights_q10[i] = w[i];
 
@@ -802,7 +802,7 @@ for (size_t i = 0; i < count; ++i) anchors.emplace_back((uint32_t)i);
 
 }
 
-uint32_t SubstrateManager::alloc_anchor_id() {
+uint32_t SubstrateMicroprocessor::alloc_anchor_id() {
     const uint32_t id = next_anchor_id_u32++;
     if (id >= anchors.size()) {
         anchors.emplace_back(id);
@@ -818,7 +818,7 @@ uint32_t SubstrateManager::alloc_anchor_id() {
     return id;
 }
 
-uint32_t SubstrateManager::derived_crawler_chunk_bytes_u32() const {
+uint32_t SubstrateMicroprocessor::derived_crawler_chunk_bytes_u32() const {
     // Derive a stable DMA-friendly chunk size from the configured segment budget.
     // We target a power-of-two chunk so the GPU kernels can index deterministically.
     // Clamp to a conservative range to avoid pathological allocations.
@@ -832,7 +832,7 @@ uint32_t SubstrateManager::derived_crawler_chunk_bytes_u32() const {
     return (uint32_t)p2;
 }
 
-uint32_t SubstrateManager::derived_crawler_max_chunks_per_obs_u32() const {
+uint32_t SubstrateMicroprocessor::derived_crawler_max_chunks_per_obs_u32() const {
     // Bound chunk fan-out so one observation cannot monopolize the per-tick pulse budget.
     const uint32_t max_pulses = (crawler_max_pulses_per_tick_u32 == 0u) ? 1u : crawler_max_pulses_per_tick_u32;
     // Allow at most 1/4 of the per-tick pulse budget to be chunk-stream pulses for one observation.
@@ -841,7 +841,7 @@ uint32_t SubstrateManager::derived_crawler_max_chunks_per_obs_u32() const {
     return (cap == 0u) ? 1u : cap;
 }
 
-uint32_t SubstrateManager::derived_crawler_chunk_stream_backlog_threshold_u32() const {
+uint32_t SubstrateMicroprocessor::derived_crawler_chunk_stream_backlog_threshold_u32() const {
     // Gate chunk streaming when backlog is approaching the one-window limit.
     // Use 1/8th of the derived backlog limit as the threshold to keep headroom.
     const uint32_t lim = derived_learning_backlog_limit_u32();
@@ -849,7 +849,7 @@ uint32_t SubstrateManager::derived_crawler_chunk_stream_backlog_threshold_u32() 
     return (thr == 0u) ? 1u : thr;
 }
 
-uint32_t SubstrateManager::derived_pulse_fanout_max_u32(const EwCtx& ctx) const {
+uint32_t SubstrateMicroprocessor::derived_pulse_fanout_max_u32(const EwCtx& ctx) const {
     // Derive a max fan-out from available gradient headroom and the governor target.
     // This avoids hardcoded fan-out ceilings.
     const uint64_t unit = (uint64_t)((ctx.phase_orbital_displacement_unit_mA_q32_32 == 0) ? 1 : (uint64_t)ctx.phase_orbital_displacement_unit_mA_q32_32);
@@ -864,7 +864,7 @@ uint32_t SubstrateManager::derived_pulse_fanout_max_u32(const EwCtx& ctx) const 
     return (uint32_t)raw;
 }
 
-uint32_t SubstrateManager::derived_learning_probe_micro_ticks_u32(const EwCtx& ctx) const {
+uint32_t SubstrateMicroprocessor::derived_learning_probe_micro_ticks_u32(const EwCtx& ctx) const {
     // Derive micro-ticks from temporal envelope and governor, bounded conservatively.
     uint64_t env = (ctx.temporal_envelope_ticks_u64 == 0) ? 1ull : (uint64_t)ctx.temporal_envelope_ticks_u64;
     uint64_t raw = env / 32ull;
@@ -876,7 +876,7 @@ uint32_t SubstrateManager::derived_learning_probe_micro_ticks_u32(const EwCtx& c
     return (uint32_t)raw;
 }
 
-uint32_t SubstrateManager::derived_learning_tries_per_step_u32(const EwCtx& ctx) const {
+uint32_t SubstrateMicroprocessor::derived_learning_tries_per_step_u32(const EwCtx& ctx) const {
     // One step represents many parallel tries via fan-out. Tie this to derived fan-out.
     const uint32_t fo = derived_pulse_fanout_max_u32(ctx);
     // Base tries per step is 2^16 scaled by fan-out, capped.
@@ -885,7 +885,7 @@ uint32_t SubstrateManager::derived_learning_tries_per_step_u32(const EwCtx& ctx)
     return (uint32_t)t;
 }
 
-uint32_t SubstrateManager::derived_learning_max_steps_per_tick_u32(const EwCtx& ctx) const {
+uint32_t SubstrateMicroprocessor::derived_learning_max_steps_per_tick_u32(const EwCtx& ctx) const {
     // Bound steps per tick so we respect the governor and avoid host stalls.
     // Scale with current budget proxy (v*i) via the ctx current max.
     const uint64_t cur = (uint64_t)((ctx.pulse_current_max_mA_q32_32 == 0) ? 1 : (uint64_t)ctx.pulse_current_max_mA_q32_32);
@@ -899,7 +899,7 @@ uint32_t SubstrateManager::derived_learning_max_steps_per_tick_u32(const EwCtx& 
     return (uint32_t)s;
 }
 
-void SubstrateManager::ensure_lattice_gpu_() {
+void SubstrateMicroprocessor::ensure_lattice_gpu_() {
     if (!gpu_lattice_authoritative) return;
     if (lattice_gpu_) return;
     // Deterministic default lattice dimensions for the authoritative substrate.
@@ -913,7 +913,7 @@ void SubstrateManager::ensure_lattice_gpu_() {
     lattice_gpu_->upload_density_mask_u8(dens.data(), dens.size());
 }
 
-void SubstrateManager::apply_object_imprint_writeback_() {
+void SubstrateMicroprocessor::apply_object_imprint_writeback_() {
     // Bounded object→world writeback: accumulate the object-local phase/occupancy
     // imprint for objects advanced this tick, then apply it once per cell.
     // This method is called from tick() only when the authoritative lattice exists.
@@ -970,7 +970,7 @@ void SubstrateManager::apply_object_imprint_writeback_() {
     lattice_gpu_->apply_object_imprint_to_fields();
 }
 
-void SubstrateManager::ensure_lattice_probe_gpu_() {
+void SubstrateMicroprocessor::ensure_lattice_probe_gpu_() {
     if (!gpu_lattice_authoritative) return;
     // Default sandbox 0.
     const uint32_t sandbox_id = 0u;
@@ -996,7 +996,7 @@ void SubstrateManager::ensure_lattice_probe_gpu_() {
     );
 }
 
-void SubstrateManager::lattice_get_radiance_slice_bgra8(uint32_t slice_z, std::vector<uint8_t>& out_bgra8, EwFieldFrameHeader& out_hdr) {
+void SubstrateMicroprocessor::lattice_get_radiance_slice_bgra8(uint32_t slice_z, std::vector<uint8_t>& out_bgra8, EwFieldFrameHeader& out_hdr) {
     out_bgra8.clear();
     std::memset(&out_hdr, 0, sizeof(out_hdr));
     if (!gpu_lattice_authoritative) return;
@@ -1005,13 +1005,13 @@ void SubstrateManager::lattice_get_radiance_slice_bgra8(uint32_t slice_z, std::v
     lattice_gpu_->get_radiance_slice_bgra8(slice_z, out_bgra8, out_hdr);
 }
 
-EwFieldLatticeGpu* SubstrateManager::world_lattice_gpu_for_learning() {
+EwFieldLatticeGpu* SubstrateMicroprocessor::world_lattice_gpu_for_learning() {
     if (!gpu_lattice_authoritative) return nullptr;
     ensure_lattice_gpu_();
     return lattice_gpu_.get();
 }
 
-EwFieldLatticeGpu* SubstrateManager::probe_lattice_gpu_for_learning(uint32_t sandbox_id_u32) {
+EwFieldLatticeGpu* SubstrateMicroprocessor::probe_lattice_gpu_for_learning(uint32_t sandbox_id_u32) {
     if (!gpu_lattice_authoritative) return nullptr;
     ensure_lattice_gpu_();
     if (sandbox_id_u32 >= EW_LEARNING_SANDBOX_MAX) sandbox_id_u32 = 0u;
@@ -1024,7 +1024,7 @@ EwFieldLatticeGpu* SubstrateManager::probe_lattice_gpu_for_learning(uint32_t san
     return lattice_probe_gpu_[sandbox_id_u32].get();
 }
 
-void SubstrateManager::ai_log_event(const EwAiActionEvent& e) {
+void SubstrateMicroprocessor::ai_log_event(const EwAiActionEvent& e) {
     const uint32_t idx = (ai_action_log_head_u32) % AI_ACTION_LOG_CAP;
     ai_action_log[idx] = e;
     ai_action_log_head_u32 = (ai_action_log_head_u32 + 1u) % AI_ACTION_LOG_CAP;
@@ -1033,7 +1033,7 @@ void SubstrateManager::ai_log_event(const EwAiActionEvent& e) {
     }
 }
 
-uint32_t SubstrateManager::ai_get_action_log(EwAiActionEvent* out_events, uint32_t max_events) const {
+uint32_t SubstrateMicroprocessor::ai_get_action_log(EwAiActionEvent* out_events, uint32_t max_events) const {
     if (!out_events || max_events == 0) return 0;
     const uint32_t n = (ai_action_log_count_u32 < max_events) ? ai_action_log_count_u32 : max_events;
     // Oldest entry is head - count.
@@ -1058,7 +1058,7 @@ uint32_t SubstrateManager::ai_get_action_log(EwAiActionEvent* out_events, uint32
 
 
 
-void SubstrateManager::set_projection_seed(uint64_t seed) {
+void SubstrateMicroprocessor::set_projection_seed(uint64_t seed) {
     // Allowed only before the first tick. After tick 0, anchors are frozen.
     if (canonical_tick != 0) return;
 
@@ -1083,11 +1083,11 @@ void SubstrateManager::set_projection_seed(uint64_t seed) {
     td_params.norm_turns_q = TURN_SCALE;
 }
 
-void SubstrateManager::set_projection_viewport_basis(uint64_t basis_u64) {
+void SubstrateMicroprocessor::set_projection_viewport_basis(uint64_t basis_u64) {
     set_projection_seed(basis_u64);
 }
 
-void SubstrateManager::configure_cosmic_expansion(int64_t h0_q32_32, int64_t dt_seconds_q32_32) {
+void SubstrateMicroprocessor::configure_cosmic_expansion(int64_t h0_q32_32, int64_t dt_seconds_q32_32) {
     // Store baseline references only. Effective constants are derived per-tick
     // inside the substrate microprocessor from relative factors.
     hubble_h0_q32_32 = (h0_q32_32 != 0) ? h0_q32_32 : hubble_h0_ref_default_q32_32();
@@ -1096,22 +1096,22 @@ void SubstrateManager::configure_cosmic_expansion(int64_t h0_q32_32, int64_t dt_
     boundary_scale_q32_32 = (1LL << 32);
 }
 
-void SubstrateManager::submit_pulse(const Pulse& p) {
+void SubstrateMicroprocessor::submit_pulse(const Pulse& p) {
     inbound.push_back(p);
 }
 
-void SubstrateManager::submit_envelope_sample(const EwEnvelopeSample& s) {
+void SubstrateMicroprocessor::submit_envelope_sample(const EwEnvelopeSample& s) {
     envelope_sample = s;
 }
 
 
-void SubstrateManager::submit_gpu_pulse_sample(uint64_t freq_hz_u64, uint64_t freq_ref_hz_u64,
+void SubstrateMicroprocessor::submit_gpu_pulse_sample(uint64_t freq_hz_u64, uint64_t freq_ref_hz_u64,
                                 uint32_t amp_u32, uint32_t amp_ref_u32) {
     // Backward-compatible entry point: voltage channel defaults to zero.
     submit_gpu_pulse_sample_v2(freq_hz_u64, freq_ref_hz_u64, amp_u32, amp_ref_u32, 0u, 1u);
 }
 
-void SubstrateManager::submit_gpu_pulse_sample_v2(uint64_t freq_hz_u64, uint64_t freq_ref_hz_u64,
+void SubstrateMicroprocessor::submit_gpu_pulse_sample_v2(uint64_t freq_hz_u64, uint64_t freq_ref_hz_u64,
                                 uint32_t amp_u32, uint32_t amp_ref_u32,
                                 uint32_t volt_u32, uint32_t volt_ref_u32) {
     // Store latest raw readings. All derived scaling and factors are computed inside the
@@ -1143,7 +1143,7 @@ void SubstrateManager::submit_gpu_pulse_sample_v2(uint64_t freq_hz_u64, uint64_t
 
 
 
-void SubstrateManager::submit_ai_commands_fixed(const EwAiCommand* cmds, uint32_t count_u32) {
+void SubstrateMicroprocessor::submit_ai_commands_fixed(const EwAiCommand* cmds, uint32_t count_u32) {
     // Fixed-array schema (BF.3A). Commands are copied into substrate state so
     // decompression and effects occur inside the microprocessor.
     ai_commands_count_u32 = 0;
@@ -1169,7 +1169,7 @@ void SubstrateManager::submit_ai_commands_fixed(const EwAiCommand* cmds, uint32_
     if (ai_pulse_q63 > INT64_MAX) ai_pulse_q63 = INT64_MAX;
 }
 
-bool SubstrateManager::control_packet_push(const EwControlPacket& p) {
+bool SubstrateMicroprocessor::control_packet_push(const EwControlPacket& p) {
     if (control_inbox_count_u32 >= CONTROL_INBOX_CAP) return false;
     const uint32_t idx = (control_inbox_head_u32 + control_inbox_count_u32) % CONTROL_INBOX_CAP;
     control_inbox[idx] = p;
@@ -1177,7 +1177,7 @@ bool SubstrateManager::control_packet_push(const EwControlPacket& p) {
     return true;
 }
 
-bool SubstrateManager::control_packet_pop(EwControlPacket& out) {
+bool SubstrateMicroprocessor::control_packet_pop(EwControlPacket& out) {
     if (control_inbox_count_u32 == 0) return false;
     out = control_inbox[control_inbox_head_u32];
     control_inbox_head_u32 = (control_inbox_head_u32 + 1) % CONTROL_INBOX_CAP;
@@ -1186,7 +1186,7 @@ bool SubstrateManager::control_packet_pop(EwControlPacket& out) {
 }
 
 
-bool SubstrateManager::load_input_bindings_if_needed(std::string* out_err) {
+bool SubstrateMicroprocessor::load_input_bindings_if_needed(std::string* out_err) {
     if (input_bindings_loaded) return true;
 
     // Deterministic load of bindings file. Format (one per line):
@@ -1246,7 +1246,7 @@ bool SubstrateManager::load_input_bindings_if_needed(std::string* out_err) {
     return true;
 }
 
-bool SubstrateManager::save_input_bindings_if_dirty(std::string* out_err) {
+bool SubstrateMicroprocessor::save_input_bindings_if_dirty(std::string* out_err) {
     if (!input_bindings_dirty) return true;
     const std::string path = project_settings.input.bindings_path_utf8;
     std::ofstream f(path.c_str(), std::ios::out | std::ios::binary | std::ios::trunc);
@@ -1291,7 +1291,7 @@ bool SubstrateManager::save_input_bindings_if_dirty(std::string* out_err) {
 
 
 
-void SubstrateManager::submit_operator_packet_v1(const uint8_t* bytes, size_t bytes_len) {
+void SubstrateMicroprocessor::submit_operator_packet_v1(const uint8_t* bytes, size_t bytes_len) {
     if (bytes == nullptr) return;
     if (bytes_len != EW_ANCHOR_OP_PACKED_V1_BYTES) return;
     EwAnchorOpPackedV1Bytes pkt{};
@@ -1300,16 +1300,16 @@ void SubstrateManager::submit_operator_packet_v1(const uint8_t* bytes, size_t by
 }
 
 
-void SubstrateManager::enqueue_inbound_pulse(const Pulse& p) {
+void SubstrateMicroprocessor::enqueue_inbound_pulse(const Pulse& p) {
     // Canonical inbound admission for simulated subsystems.
     inbound.push_back(p);
 }
 
-const GE_CorpusAllowlist* SubstrateManager::corpus_allowlist_ptr() const {
+const GE_CorpusAllowlist* SubstrateMicroprocessor::corpus_allowlist_ptr() const {
     return corpus_allowlist_loaded ? &corpus_allowlist : nullptr;
 }
 
-void SubstrateManager::crawler_enqueue_observation_utf8(
+void SubstrateMicroprocessor::crawler_enqueue_observation_utf8(
     uint64_t artifact_id_u64,
     uint32_t stream_id_u32,
     uint32_t extractor_id_u32,
@@ -1372,7 +1372,7 @@ void SubstrateManager::crawler_enqueue_observation_utf8(
     }
 }
 
-bool SubstrateManager::pop_external_api_request(EwExternalApiRequest& out_req) {
+bool SubstrateMicroprocessor::pop_external_api_request(EwExternalApiRequest& out_req) {
     if (external_api_pending.empty()) return false;
     out_req = external_api_pending.front();
     external_api_pending.pop_front();
@@ -2056,7 +2056,7 @@ static bool ew_license_marker_ok_bounded(const uint8_t* bytes, size_t n) {
     return false;
 }
 
-void SubstrateManager::submit_external_api_response(const EwExternalApiResponse& resp) {
+void SubstrateMicroprocessor::submit_external_api_response(const EwExternalApiResponse& resp) {
     // Feed a deterministic response summary back into the substrate. We do not
     // parse response bodies here; parsing/meaning is phase dynamics.
     const uint32_t EW_CAUSAL_TAG_EXTERNAL_API_RESP = 0x41504932U; // 'API2'
@@ -2352,7 +2352,7 @@ if (have_in) {
 
 #endif // disabled block for compilation hygiene
 
-bool SubstrateManager::submit_external_api_response_chunk(
+bool SubstrateMicroprocessor::submit_external_api_response_chunk(
     uint64_t request_id_u64,
     uint64_t tick_u64,
     int32_t http_status_s32,
@@ -2391,7 +2391,7 @@ bool SubstrateManager::submit_external_api_response_chunk(
 }
 
 
-void SubstrateManager::observe_text_line(const std::string& utf8_line) {
+void SubstrateMicroprocessor::observe_text_line(const std::string& utf8_line) {
     // Store observation inside substrate memory for phase operators.
     last_observation_text = utf8_line;
 
@@ -2426,7 +2426,7 @@ void SubstrateManager::observe_text_line(const std::string& utf8_line) {
 }
 
 
-void SubstrateManager::ui_submit_user_text_line(const std::string& utf8_line) {
+void SubstrateMicroprocessor::ui_submit_user_text_line(const std::string& utf8_line) {
     // Control commands (deterministic ASCII parsing)
     //  - /crawl_live on consent=1
     //  - /crawl_live off
@@ -2628,14 +2628,14 @@ void SubstrateManager::ui_submit_user_text_line(const std::string& utf8_line) {
     (void)compile_and_submit_experiment_from_text(routed_line);
 }
 
-bool SubstrateManager::compile_and_submit_experiment_from_text(const std::string& utf8_line) {
+bool SubstrateMicroprocessor::compile_and_submit_experiment_from_text(const std::string& utf8_line) {
     EigenWare::EwExperimentRequest req;
     if (!EigenWare::ew_parse_experiment_request(utf8_line, req)) return false;
 
     return compile_and_submit_experiment(req);
 }
 
-bool SubstrateManager::compile_and_submit_experiment(const EigenWare::EwExperimentRequest& req) {
+bool SubstrateMicroprocessor::compile_and_submit_experiment(const EigenWare::EwExperimentRequest& req) {
     std::vector<std::vector<uint8_t>> pkts;
     if (!ew_compile_experiment_to_operator_packets(req, pkts)) return false;
     for (size_t i = 0; i < pkts.size(); ++i) {
@@ -2651,7 +2651,7 @@ bool SubstrateManager::compile_and_submit_experiment(const EigenWare::EwExperime
     return true;
 }
 
-void SubstrateManager::set_lattice_projection_tag(uint32_t slice_z_u32,
+void SubstrateMicroprocessor::set_lattice_projection_tag(uint32_t slice_z_u32,
                                                   uint32_t stride_u32,
                                                   uint32_t max_points_u32,
                                                   uint32_t intensity_min_u8,
@@ -2659,7 +2659,7 @@ void SubstrateManager::set_lattice_projection_tag(uint32_t slice_z_u32,
     set_lattice_projection_tag_ex(0u, slice_z_u32, stride_u32, max_points_u32, intensity_min_u8, enabled);
 }
 
-void SubstrateManager::set_lattice_projection_tag_ex(uint32_t lattice_sel_u32,
+void SubstrateMicroprocessor::set_lattice_projection_tag_ex(uint32_t lattice_sel_u32,
                                                      uint32_t slice_z_u32,
                                                      uint32_t stride_u32,
                                                      uint32_t max_points_u32,
@@ -2676,7 +2676,7 @@ void SubstrateManager::set_lattice_projection_tag_ex(uint32_t lattice_sel_u32,
 }
 
 
-uint32_t SubstrateManager::ui_create_chat_anchor_from_text(const std::string& utf8_line) {
+uint32_t SubstrateMicroprocessor::ui_create_chat_anchor_from_text(const std::string& utf8_line) {
 #if defined(EW_ENABLE_UI_PARTITION) && (EW_ENABLE_UI_PARTITION==1)
     // Bounded ring buffer (drop oldest deterministically).
     if (ui_chat_q.size() >= UI_CHAT_CAP) ui_chat_q.pop_front();
@@ -2752,7 +2752,7 @@ uint32_t SubstrateManager::ui_create_chat_anchor_from_text(const std::string& ut
 }
 
 
-bool SubstrateManager::corpus_allowlist_update_from_user_text(const std::string& allowlist_md_utf8) {
+bool SubstrateMicroprocessor::corpus_allowlist_update_from_user_text(const std::string& allowlist_md_utf8) {
     // Deterministic validation: bounded size + strict parser.
     std::string s = allowlist_md_utf8;
     if (s.size() > (size_t)128 * 1024) s.resize((size_t)128 * 1024);
@@ -2793,7 +2793,7 @@ bool SubstrateManager::corpus_allowlist_update_from_user_text(const std::string&
 }
 
 
-bool SubstrateManager::corpus_allowlist_load_user_file_if_present() {
+bool SubstrateMicroprocessor::corpus_allowlist_load_user_file_if_present() {
     const std::string rel = "Draft Container/Corpus/allowlist_user.md";
     std::ifstream f(rel.c_str(), std::ios::binary);
     if (!f.good()) return false;
@@ -2818,7 +2818,7 @@ static inline bool ew_read_i64(std::istream& in, int64_t& v) {
     return in.good();
 }
 
-bool SubstrateManager::sim_save_to_file(const std::string& name_ascii) {
+bool SubstrateMicroprocessor::sim_save_to_file(const std::string& name_ascii) {
     // Snapshot current state (same struct used by candidate/commit path).
     EwState st;
     st.canonical_tick = canonical_tick;
@@ -2924,7 +2924,7 @@ bool SubstrateManager::sim_save_to_file(const std::string& name_ascii) {
     return true;
 }
 
-bool SubstrateManager::sim_load_from_file(const std::string& name_ascii, bool play_loop) {
+bool SubstrateMicroprocessor::sim_load_from_file(const std::string& name_ascii, bool play_loop) {
     std::string nm = name_ascii;
     if (nm.empty()) nm = "default";
     for (size_t i = 0; i < nm.size(); ++i) {
@@ -3047,7 +3047,7 @@ bool SubstrateManager::sim_load_from_file(const std::string& name_ascii, bool pl
 }
 
 
-uint32_t SubstrateManager::ui_create_anchor_from_chat_seed(uint32_t chat_anchor_idx_u32, uint16_t resonance_q15) {
+uint32_t SubstrateMicroprocessor::ui_create_anchor_from_chat_seed(uint32_t chat_anchor_idx_u32, uint16_t resonance_q15) {
 #if defined(EW_ENABLE_UI_PARTITION) && (EW_ENABLE_UI_PARTITION==1)
     if (chat_anchor_idx_u32 >= anchors.size()) return 0u;
 
@@ -3110,7 +3110,7 @@ uint32_t SubstrateManager::ui_create_anchor_from_chat_seed(uint32_t chat_anchor_
 }
 
 
-void SubstrateManager::ui_maybe_enqueue_crawl_seeds_from_text(const std::string& utf8_line) {
+void SubstrateMicroprocessor::ui_maybe_enqueue_crawl_seeds_from_text(const std::string& utf8_line) {
     // Only act when live crawl is enabled and consent is granted.
     if (crawler_enable_live_u32 == 0u || crawler_live_consent_required_u32 != 0u) {
         emit_ui_line("AUTO_CRAWL_BLOCKED: live crawl disabled or consent required");
@@ -3155,20 +3155,20 @@ void SubstrateManager::ui_maybe_enqueue_crawl_seeds_from_text(const std::string&
 }
 
 
-void SubstrateManager::emit_ui_line(const std::string& utf8_line) {
+void SubstrateMicroprocessor::emit_ui_line(const std::string& utf8_line) {
     if (ui_out_q.size() < UI_OUT_CAP) {
         ui_out_q.push_back(utf8_line);
     }
 }
 
-bool SubstrateManager::ui_pop_output_text(std::string& out_utf8) {
+bool SubstrateMicroprocessor::ui_pop_output_text(std::string& out_utf8) {
     if (ui_out_q.empty()) return false;
     out_utf8 = ui_out_q.front();
     ui_out_q.pop_front();
     return true;
 }
 
-bool SubstrateManager::export_object_bundle(uint64_t object_id_u64,
+bool SubstrateMicroprocessor::export_object_bundle(uint64_t object_id_u64,
                                             const std::string& out_dir_utf8,
                                             std::string* out_report_utf8) const {
     auto rep = [&](const std::string& s){ if (out_report_utf8) { out_report_utf8->append(s); out_report_utf8->push_back('\n'); } };
@@ -3345,7 +3345,7 @@ static bool ew_is_host_char(char c) {
 
 static void ew_parse_allowlist_targets_deterministic(
     const std::string& md,
-    std::vector<SubstrateManager::EwCorpusCrawlTarget>& out_targets)
+    std::vector<SubstrateMicroprocessor::EwCorpusCrawlTarget>& out_targets)
 {
     out_targets.clear();
 
@@ -3414,7 +3414,7 @@ static void ew_parse_allowlist_targets_deterministic(
                 bool ok = (host.find('.') != std::string::npos) && host.size() <= 128;
                 for (size_t t = 0; t < host.size() && ok; ++t) ok = ew_is_host_char(host[t]);
                 if (ok) {
-                    SubstrateManager::EwCorpusCrawlTarget ct{};
+                    SubstrateMicroprocessor::EwCorpusCrawlTarget ct{};
                     ct.lane_u32 = lane;
                     ct.stage_u32 = 0;
                     ct.profile_u32 = 0;
@@ -3430,7 +3430,7 @@ static void ew_parse_allowlist_targets_deterministic(
     }
 
     // Deduplicate deterministically by (lane, host, path).
-    std::vector<SubstrateManager::EwCorpusCrawlTarget> uniq;
+    std::vector<SubstrateMicroprocessor::EwCorpusCrawlTarget> uniq;
     uniq.reserve(out_targets.size());
     for (size_t k = 0; k < out_targets.size(); ++k) {
         const auto& x = out_targets[k];
@@ -3496,7 +3496,7 @@ static std::string ew_allowlist_extract_host_context_utf8(
     return out;
 }
 
-void SubstrateManager::corpus_crawl_start_from_allowlist_text(const std::string& allowlist_md_utf8) {
+void SubstrateMicroprocessor::corpus_crawl_start_from_allowlist_text(const std::string& allowlist_md_utf8) {
     // Parse and store allowlist for admission filtering.
     corpus_allowlist_loaded = GE_load_corpus_allowlist_from_md_text(allowlist_md_utf8, corpus_allowlist);
     domain_policies.build_from_allowlist(corpus_allowlist);
@@ -3530,7 +3530,7 @@ void SubstrateManager::corpus_crawl_start_from_allowlist_text(const std::string&
         return id;
     };
 
-    std::vector<SubstrateManager::EwCorpusCrawlTarget> parsed;
+    std::vector<SubstrateMicroprocessor::EwCorpusCrawlTarget> parsed;
     ew_parse_allowlist_targets_deterministic(allowlist_md_utf8, parsed);
 
     // Build session 0 domain list: use host-only literals; ignore literals with embedded paths.
@@ -3616,7 +3616,7 @@ void SubstrateManager::corpus_crawl_start_from_allowlist_text(const std::string&
         }
         ss.domain_map.push_back(me);
 
-        SubstrateManager::EwCorpusCrawlTarget t{};
+        SubstrateMicroprocessor::EwCorpusCrawlTarget t{};
         t.lane_u32 = 0;
         t.stage_u32 = 0;
         t.profile_u32 = 0;
@@ -3627,7 +3627,7 @@ void SubstrateManager::corpus_crawl_start_from_allowlist_text(const std::string&
         // Khan Academy math: seed an explicit entry path so the crawler
         // reaches math pages without needing a sitemap first.
         if (host == "www.khanacademy.org") {
-            SubstrateManager::EwCorpusCrawlTarget t2{};
+            SubstrateMicroprocessor::EwCorpusCrawlTarget t2{};
             t2.lane_u32 = 2u; // Lane 2 = Math
             t2.stage_u32 = 1u;
             t2.profile_u32 = 0u;
@@ -3898,7 +3898,7 @@ UE marketplace (not necessarily free/open):
 - `ncbi.nlm.nih.gov`, `pubchem.ncbi.nlm.nih.gov`, `pmc.ncbi.nlm.nih.gov`, `medlineplus.gov`
 - `gutenberg.org`, `si.edu`, `3d.si.edu`, `science.nasa.gov/3d-resources/`
 )EW_ALLOWLISTX";
-void SubstrateManager::corpus_crawl_start_neuralis_corpus_default() {
+void SubstrateMicroprocessor::corpus_crawl_start_neuralis_corpus_default() {
     // Prefer user-updated allowlist if present.
     // This keeps the allowlist user-updatable without weakening enforcement.
     if (!corpus_allowlist_user_loaded) {
@@ -3989,7 +3989,7 @@ void SubstrateManager::corpus_crawl_start_neuralis_corpus_default() {
 
         // Enqueue per-host robots stage and per-endpoint root stages (host+path pairs).
         for (size_t i = 0; i < uniq_hosts.size(); ++i) {
-            SubstrateManager::EwCorpusCrawlTarget t{};
+            SubstrateMicroprocessor::EwCorpusCrawlTarget t{};
             t.lane_u32 = 0;
             t.stage_u32 = 0;
             t.profile_u32 = profile_u32;
@@ -3998,7 +3998,7 @@ void SubstrateManager::corpus_crawl_start_neuralis_corpus_default() {
             ss.q.push_back(t);
         }
         for (size_t i = 0; i < host_paths.size(); ++i) {
-            SubstrateManager::EwCorpusCrawlTarget t{};
+            SubstrateMicroprocessor::EwCorpusCrawlTarget t{};
             t.lane_u32 = 0;
             t.stage_u32 = 1;
             t.profile_u32 = profile_u32;
@@ -4045,7 +4045,7 @@ void SubstrateManager::corpus_crawl_start_neuralis_corpus_default() {
     start_session(3, 3, mark_copy, "MARK_COPY");
 }
 
-void SubstrateManager::corpus_crawl_stop() {
+void SubstrateMicroprocessor::corpus_crawl_stop() {
     for (uint32_t si = 0; si < EW_CRAWL_SESSION_MAX; ++si) {
         crawl_sessions[si].active = false;
         crawl_sessions[si].q.clear();
@@ -4054,7 +4054,7 @@ void SubstrateManager::corpus_crawl_stop() {
 }
 
     
-bool SubstrateManager::language_bootstrap_from_dir(const std::string& root_dir_utf8) {
+bool SubstrateMicroprocessor::language_bootstrap_from_dir(const std::string& root_dir_utf8) {
     std::string rep;
     const bool any = language_foundation.bootstrap_from_dir(root_dir_utf8, &rep);
 
@@ -4140,7 +4140,7 @@ bool SubstrateManager::language_bootstrap_from_dir(const std::string& root_dir_u
 }
 
 
-Basis9 SubstrateManager::projected_for(const Anchor& a) const {
+Basis9 SubstrateMicroprocessor::projected_for(const Anchor& a) const {
     Basis9 p = a.basis9;
 
     // Projection is a deterministic view of the anchor state plus global
@@ -4567,7 +4567,7 @@ static inline void ew_opk_chain_apply(std::vector<EwOpLaneEntry>& lanes,
 }
 
 
-static inline void ew_execute_operator_packets_v1(SubstrateManager* sm) {
+static inline void ew_execute_operator_packets_v1(SubstrateMicroprocessor* sm) {
     if (!sm) return;
     if (sm->operator_packets_v1.empty()) return;
 
@@ -4815,9 +4815,9 @@ static inline void ew_execute_operator_packets_v1(SubstrateManager* sm) {
             // Ensure bindings are present (fail closed if missing).
             if (!sm->input_bindings_loaded) return;
 
-            auto lookup = [&](const std::vector<SubstrateManager::EwInputBinding>& v, uint32_t raw)->SubstrateManager::EwInputBinding {
+            auto lookup = [&](const std::vector<SubstrateMicroprocessor::EwInputBinding>& v, uint32_t raw)->SubstrateMicroprocessor::EwInputBinding {
                 for (const auto& b : v) if (b.raw_id_u32 == raw) return b;
-                return SubstrateManager::EwInputBinding{};
+                return SubstrateMicroprocessor::EwInputBinding{};
             };
 
             const bool is_action = (ev.kind_u16 == 1u);
@@ -4833,19 +4833,19 @@ static inline void ew_execute_operator_packets_v1(SubstrateManager* sm) {
                 return (sign >= 0) ? base_step_q16 : -base_step_q16;
             };
 
-            if (mapped == (uint32_t)SubstrateManager::EwMappedInputAction::MoveForward) {
+            if (mapped == (uint32_t)SubstrateMicroprocessor::EwMappedInputAction::MoveForward) {
                 if (is_action && ev.pressed_u8) cam.camera_state.pos_xyz_q16_16[2] += step_delta_q16(sm->project_settings.camera.move_step_m_q16_16, +1);
-            } else if (mapped == (uint32_t)SubstrateManager::EwMappedInputAction::MoveBackward) {
+            } else if (mapped == (uint32_t)SubstrateMicroprocessor::EwMappedInputAction::MoveBackward) {
                 if (is_action && ev.pressed_u8) cam.camera_state.pos_xyz_q16_16[2] += step_delta_q16(sm->project_settings.camera.move_step_m_q16_16, -1);
-            } else if (mapped == (uint32_t)SubstrateManager::EwMappedInputAction::MoveRight) {
+            } else if (mapped == (uint32_t)SubstrateMicroprocessor::EwMappedInputAction::MoveRight) {
                 if (is_action && ev.pressed_u8) cam.camera_state.pos_xyz_q16_16[0] += step_delta_q16(sm->project_settings.camera.move_step_m_q16_16, +1);
-            } else if (mapped == (uint32_t)SubstrateManager::EwMappedInputAction::MoveLeft) {
+            } else if (mapped == (uint32_t)SubstrateMicroprocessor::EwMappedInputAction::MoveLeft) {
                 if (is_action && ev.pressed_u8) cam.camera_state.pos_xyz_q16_16[0] += step_delta_q16(sm->project_settings.camera.move_step_m_q16_16, -1);
-            } else if (mapped == (uint32_t)SubstrateManager::EwMappedInputAction::MoveUp) {
+            } else if (mapped == (uint32_t)SubstrateMicroprocessor::EwMappedInputAction::MoveUp) {
                 if (is_action && ev.pressed_u8) cam.camera_state.pos_xyz_q16_16[1] += step_delta_q16(sm->project_settings.camera.move_step_m_q16_16, +1);
-            } else if (mapped == (uint32_t)SubstrateManager::EwMappedInputAction::MoveDown) {
+            } else if (mapped == (uint32_t)SubstrateMicroprocessor::EwMappedInputAction::MoveDown) {
                 if (is_action && ev.pressed_u8) cam.camera_state.pos_xyz_q16_16[1] += step_delta_q16(sm->project_settings.camera.move_step_m_q16_16, -1);
-            } else if (mapped == (uint32_t)SubstrateManager::EwMappedInputAction::ZoomIn) {
+            } else if (mapped == (uint32_t)SubstrateMicroprocessor::EwMappedInputAction::ZoomIn) {
                 if (is_action) {
                     if (ev.pressed_u8) cam.camera_state.focus_distance_m_q32_32 -= ((int64_t)sm->project_settings.camera.zoom_step_m_q16_16 << 16);
                 } else {
@@ -4853,14 +4853,14 @@ static inline void ew_execute_operator_packets_v1(SubstrateManager* sm) {
                     if (ev.value_q16_16 > 0) cam.camera_state.focus_distance_m_q32_32 -= ((int64_t)sm->project_settings.camera.zoom_step_m_q16_16 << 16);
                     if (ev.value_q16_16 < 0) cam.camera_state.focus_distance_m_q32_32 += ((int64_t)sm->project_settings.camera.zoom_step_m_q16_16 << 16);
                 }
-            } else if (mapped == (uint32_t)SubstrateManager::EwMappedInputAction::ZoomOut) {
+            } else if (mapped == (uint32_t)SubstrateMicroprocessor::EwMappedInputAction::ZoomOut) {
                 if (is_action) {
                     if (ev.pressed_u8) cam.camera_state.focus_distance_m_q32_32 += ((int64_t)sm->project_settings.camera.zoom_step_m_q16_16 << 16);
                 } else {
                     if (ev.value_q16_16 > 0) cam.camera_state.focus_distance_m_q32_32 += ((int64_t)sm->project_settings.camera.zoom_step_m_q16_16 << 16);
                     if (ev.value_q16_16 < 0) cam.camera_state.focus_distance_m_q32_32 -= ((int64_t)sm->project_settings.camera.zoom_step_m_q16_16 << 16);
                 }
-            } else if (mapped == (uint32_t)SubstrateManager::EwMappedInputAction::LookYaw) {
+            } else if (mapped == (uint32_t)SubstrateMicroprocessor::EwMappedInputAction::LookYaw) {
                 // Axis event: value_q16_16 is delta units.
                 if (!is_action) {
                     int32_t dtheta = (int32_t)(((int64_t)ev.value_q16_16 * (int64_t)sm->project_settings.camera.look_sens_rad_per_unit_q16_16) >> 16);
@@ -4873,7 +4873,7 @@ static inline void ew_execute_operator_packets_v1(SubstrateManager* sm) {
                     for (int i=0;i<4;++i) cam.camera_state.rot_quat_q16_16[i] = out[i];
                     quat_norm_approx(cam.camera_state.rot_quat_q16_16);
                 }
-            } else if (mapped == (uint32_t)SubstrateManager::EwMappedInputAction::LookPitch) {
+            } else if (mapped == (uint32_t)SubstrateMicroprocessor::EwMappedInputAction::LookPitch) {
                 if (!is_action) {
                     int32_t dtheta = (int32_t)(((int64_t)ev.value_q16_16 * (int64_t)sm->project_settings.camera.look_sens_rad_per_unit_q16_16) >> 16);
                     dtheta = qmul_q16(dtheta, b.scale_q16_16);
@@ -4907,7 +4907,7 @@ static inline void ew_execute_operator_packets_v1(SubstrateManager* sm) {
             const uint32_t mapped = req.mapped_u32;
             if (mapped > 4096u) return; // fail closed on nonsense ids
 
-            auto upsert = [&](std::vector<SubstrateManager::EwInputBinding>& v) {
+            auto upsert = [&](std::vector<SubstrateMicroprocessor::EwInputBinding>& v) {
                 bool found = false;
                 for (auto& b : v) {
                     if (b.raw_id_u32 == req.raw_id_u32) {
@@ -4918,13 +4918,13 @@ static inline void ew_execute_operator_packets_v1(SubstrateManager* sm) {
                     }
                 }
                 if (!found) {
-                    SubstrateManager::EwInputBinding b;
+                    SubstrateMicroprocessor::EwInputBinding b;
                     b.raw_id_u32 = req.raw_id_u32;
                     b.mapped_u32 = mapped;
                     b.scale_q16_16 = scale;
                     v.push_back(b);
                 }
-                auto cmp = [](const SubstrateManager::EwInputBinding& a, const SubstrateManager::EwInputBinding& b) {
+                auto cmp = [](const SubstrateMicroprocessor::EwInputBinding& a, const SubstrateMicroprocessor::EwInputBinding& b) {
                     if (a.raw_id_u32 != b.raw_id_u32) return a.raw_id_u32 < b.raw_id_u32;
                     return a.mapped_u32 < b.mapped_u32;
                 };
@@ -5002,7 +5002,7 @@ static inline void ew_execute_operator_packets_v1(SubstrateManager* sm) {
 }
 
 
-void SubstrateManager::tick() {
+void SubstrateMicroprocessor::tick() {
     const uint64_t prev_tick_u64 = canonical_tick;
 
     // ------------------------------------------------------------------
@@ -6132,7 +6132,7 @@ neural_ai.pre_tick(this);
             if (chosen == EW_CRAWL_SESSION_MAX) break;
 
             EwCrawlSession& ss = crawl_sessions[chosen];
-            SubstrateManager::EwCorpusCrawlTarget t = ss.q.front();
+            SubstrateMicroprocessor::EwCorpusCrawlTarget t = ss.q.front();
             ss.q.pop_front();
 
             // Curriculum gating: if target lane is not yet permitted, re-queue
@@ -7462,7 +7462,7 @@ if (ap && ap->object_id_u64 != 0u) {
     carrier_ring = outbound;
 }
 
-void SubstrateManager::inject_text_utf8(const char* utf8) {
+void SubstrateMicroprocessor::inject_text_utf8(const char* utf8) {
     if (!utf8) return;
     const std::string s(utf8);
 
@@ -7479,7 +7479,7 @@ void SubstrateManager::inject_text_utf8(const char* utf8) {
     pending_text_x_q = wrap_turns(pending_text_x_q + scaled_turns);
 }
 
-void SubstrateManager::inject_image_pixels_u8(const uint8_t* rgba, int width, int height) {
+void SubstrateMicroprocessor::inject_image_pixels_u8(const uint8_t* rgba, int width, int height) {
     if (!rgba || width <= 0 || height <= 0) return;
 
     // IMAGE encoding is frequency-derived and collapsed into a single carrier.
@@ -7494,7 +7494,7 @@ void SubstrateManager::inject_image_pixels_u8(const uint8_t* rgba, int width, in
     pending_image_y_q = wrap_turns(pending_image_y_q + scaled_turns);
 }
 
-void SubstrateManager::inject_audio_pcm16(const int16_t* pcm, int samples, int channels) {
+void SubstrateMicroprocessor::inject_audio_pcm16(const int16_t* pcm, int samples, int channels) {
     if (!pcm || samples <= 0 || channels <= 0) return;
 
     // AUDIO encoding is frequency-derived and collapsed into a single carrier.
@@ -7509,7 +7509,7 @@ void SubstrateManager::inject_audio_pcm16(const int16_t* pcm, int samples, int c
     pending_audio_z_q = wrap_turns(pending_audio_z_q + scaled_turns);
 }
 
-void SubstrateManager::build_viz_points(std::vector<EwVizPoint>& out) const {
+void SubstrateMicroprocessor::build_viz_points(std::vector<EwVizPoint>& out) const {
     out.clear();
 
     // If a lattice projection tag is enabled and the GPU lattice exists, project
@@ -7598,7 +7598,7 @@ void SubstrateManager::build_viz_points(std::vector<EwVizPoint>& out) const {
     }
 }
 
-bool SubstrateManager::check_invariants() const {
+bool SubstrateMicroprocessor::check_invariants() const {
     for (size_t i = 0; i < anchors.size(); ++i) {
         const Anchor& a = anchors[i];
         if (a.theta_q < 0 || a.theta_q >= TURN_SCALE) return false;
@@ -7608,7 +7608,7 @@ bool SubstrateManager::check_invariants() const {
     return true;
 }
 
-bool SubstrateManager::hydrate_workspace_to(const std::string& root_dir) {
+bool SubstrateMicroprocessor::hydrate_workspace_to(const std::string& root_dir) {
     std::vector<EwInspectorArtifact> committed;
     inspector_fields.snapshot_committed(committed);
 
@@ -7636,7 +7636,7 @@ bool SubstrateManager::hydrate_workspace_to(const std::string& root_dir) {
     return true;
 }
 
-uint32_t SubstrateManager::corpus_query_best_score(const std::string& query_utf8) {
+uint32_t SubstrateMicroprocessor::corpus_query_best_score(const std::string& query_utf8) {
     std::string qlc;
     qlc.reserve(query_utf8.size());
     for (size_t i = 0; i < query_utf8.size(); ++i) {
@@ -7687,7 +7687,7 @@ uint32_t SubstrateManager::corpus_query_best_score(const std::string& query_utf8
     return best;
 }
 
-void SubstrateManager::corpus_query_emit_results(const std::string& query_utf8, uint32_t context_anchor_id_u32) {
+void SubstrateMicroprocessor::corpus_query_emit_results(const std::string& query_utf8, uint32_t context_anchor_id_u32) {
     std::string qlc;
     qlc.reserve(query_utf8.size());
     for (size_t i = 0; i < query_utf8.size(); ++i) {
@@ -7828,7 +7828,7 @@ for (size_t i = 0; i < hits.size(); ++i) {
 }
 
 
-void SubstrateManager::corpus_answer_emit(const std::string& query_utf8, uint32_t context_anchor_id_u32) {
+void SubstrateMicroprocessor::corpus_answer_emit(const std::string& query_utf8, uint32_t context_anchor_id_u32) {
     (void)context_anchor_id_u32;
 
     // Global coherence gate: AI output must be restricted by the *global* coherence,

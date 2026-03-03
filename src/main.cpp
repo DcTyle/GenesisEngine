@@ -18,23 +18,23 @@ public:
 };
 
 int main() {
-    SubstrateManager substrate(8);
-    substrate.projection_seed = 12345;    // Configure boundary expansion from baseline references.
+    SubstrateMicroprocessor substrate_microprocessor(8);
+    substrate_microprocessor.projection_seed = 12345;    // Configure boundary expansion from baseline references.
     // Genesis tick cadence: 360 Hz (deterministic simulation micro-tick).
     const double dt_s = 1.0 / 360.0;
     const int64_t dt_q32_32 = (int64_t)(dt_s * 4294967296.0);
     const int64_t h0_ref_q32_32 = hubble_h0_ref_default_q32_32();
-    substrate.configure_cosmic_expansion(h0_ref_q32_32, dt_q32_32);
+    substrate_microprocessor.configure_cosmic_expansion(h0_ref_q32_32, dt_q32_32);
     Sandbox sandbox;
 
     for (int i = 0; i < 10; ++i) {
-        substrate.tick();
-        if (!substrate.check_invariants()) {
-            std::cerr << "Invariant failure at tick " << substrate.canonical_tick << "\n";
+        substrate_microprocessor.tick();
+        if (!substrate_microprocessor.check_invariants()) {
+            std::cerr << "Invariant failure at tick " << substrate_microprocessor.canonical_tick << "\n";
             return 2;
         }
-        sandbox.consume(substrate.outbound);
-        substrate.outbound.clear();
+        sandbox.consume(substrate_microprocessor.outbound);
+        substrate_microprocessor.outbound.clear();
     }
     return 0;
 }

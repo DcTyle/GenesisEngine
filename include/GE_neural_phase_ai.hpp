@@ -36,7 +36,7 @@ struct EwAttractorEntry {
     uint64_t last_tick_u64;
 };
 
-class SubstrateManager;
+class SubstrateMicroprocessor;
 
 class EwNeuralPhaseAI {
 public:
@@ -45,10 +45,10 @@ public:
     void init(uint64_t projection_seed);
 
     // Pre-tick: internal control actions (bounded) before candidate evolution.
-    void pre_tick(SubstrateManager* sm);
+    void pre_tick(SubstrateMicroprocessor* sm);
 
     // Post-tick: update memory + classification from committed state.
-    void post_tick(SubstrateManager* sm);
+    void post_tick(SubstrateMicroprocessor* sm);
 
     const EwAiStatus& status() const { return status_; }
 
@@ -62,8 +62,8 @@ private:
     int64_t last_strength_q32_32_ = 0;
 
     static uint64_t sig9_fold(uint64_t acc, uint64_t x);
-    static uint64_t sig9_from_state(const SubstrateManager* sm);
+    static uint64_t sig9_from_state(const SubstrateMicroprocessor* sm);
     static uint32_t class_id_from_sig9(uint64_t sig9_u64);
-    static int64_t  confidence_from_state(const SubstrateManager* sm);
+    static int64_t  confidence_from_state(const SubstrateMicroprocessor* sm);
     int64_t attractor_strength_for_sig9(uint64_t sig9_u64) const;
 };

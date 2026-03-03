@@ -231,7 +231,7 @@ struct EwCtx {
     // Envelope headroom scalar derived from read-path counters, Q32.32 in [0,1].
     int64_t envelope_headroom_q32_32 = (1LL << 32);
 
-    // Carrier safety governor parameters (copied from SubstrateManager each tick).
+    // Carrier safety governor parameters (copied from SubstrateMicroprocessor each tick).
     EwGovernorParams governor;
 
     // -----------------------------------------------------------------
@@ -386,7 +386,7 @@ public:
     }
 };
 
-class SubstrateManager {
+class SubstrateMicroprocessor {
 public:
     uint64_t canonical_tick = 0;
     int64_t reservoir = 0;
@@ -1130,7 +1130,7 @@ std::deque<std::string> ui_out_q;
         (1LL << 32), (1LL << 32), (1LL << 32), (1LL << 32)
     };
 
-    explicit SubstrateManager(size_t count);
+    explicit SubstrateMicroprocessor(size_t count);
 
     // Record an AI action event deterministically (ring buffer).
     void ai_log_event(const EwAiActionEvent& e);

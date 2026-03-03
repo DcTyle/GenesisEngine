@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-class SubstrateManager;
+class SubstrateMicroprocessor;
 
 namespace genesis {
 
@@ -30,22 +30,22 @@ public:
     static constexpr uint32_t OBJECTS_ANCILLA_ID = 2u;
 
     // Ensure canonical global ancillas exist and are correctly tagged.
-    static void ensure_canonical_global_ancillas(SubstrateManager* sm);
+    static void ensure_canonical_global_ancillas(SubstrateMicroprocessor* sm);
 
     // Ensure a per-object update anchor exists and is bound to object_id.
     // Returns the anchor id.
-    static uint32_t ensure_object_update_anchor(SubstrateManager* sm, uint64_t object_id_u64);
+    static uint32_t ensure_object_update_anchor(SubstrateMicroprocessor* sm, uint64_t object_id_u64);
 
     // Advance a bounded number of objects this tick.
     // GPU-first: reduces voxel volumes on GPU; CPU fallback is disallowed
     // (fails closed) unless EW_ENABLE_CUDA=0 and verification mode is enabled.
-    static void tick_object_updates(SubstrateManager* sm, uint32_t max_objects_per_tick);
+    static void tick_object_updates(SubstrateMicroprocessor* sm, uint32_t max_objects_per_tick);
 
 private:
-    static bool compute_coupling_obs_gpu(SubstrateManager* sm,
+    static bool compute_coupling_obs_gpu(SubstrateMicroprocessor* sm,
                                          uint64_t object_id_u64,
                                          EwObjectCouplingObs& out_obs);
-    static void apply_obs_to_anchor_and_emit(SubstrateManager* sm,
+    static void apply_obs_to_anchor_and_emit(SubstrateMicroprocessor* sm,
                                              uint32_t object_anchor_id_u32,
                                              const EwObjectCouplingObs& obs);
 };

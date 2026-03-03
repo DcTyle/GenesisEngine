@@ -54,7 +54,7 @@ static inline Pulse mk_pulse(uint32_t aid, int32_t f_code, uint16_t a_code, uint
 
 namespace genesis {
 
-void EwObjectAncilla::ensure_canonical_global_ancillas(SubstrateManager* sm) {
+void EwObjectAncilla::ensure_canonical_global_ancillas(SubstrateMicroprocessor* sm) {
     if (!sm) return;
     // Ensure at least ids 0..2 exist.
     const uint32_t need = 3u;
@@ -79,7 +79,7 @@ void EwObjectAncilla::ensure_canonical_global_ancillas(SubstrateManager* sm) {
     sm->anchors[OBJECTS_ANCILLA_ID].object_id_u64 = 0u;
 }
 
-uint32_t EwObjectAncilla::ensure_object_update_anchor(SubstrateManager* sm, uint64_t object_id_u64) {
+uint32_t EwObjectAncilla::ensure_object_update_anchor(SubstrateMicroprocessor* sm, uint64_t object_id_u64) {
     if (!sm) return 0u;
     ensure_canonical_global_ancillas(sm);
 
@@ -108,7 +108,7 @@ uint32_t EwObjectAncilla::ensure_object_update_anchor(SubstrateManager* sm, uint
     return id;
 }
 
-bool EwObjectAncilla::compute_coupling_obs_gpu(SubstrateManager* sm,
+bool EwObjectAncilla::compute_coupling_obs_gpu(SubstrateMicroprocessor* sm,
                                                uint64_t object_id_u64,
                                                EwObjectCouplingObs& out_obs) {
     out_obs = EwObjectCouplingObs{};
@@ -224,7 +224,7 @@ bool EwObjectAncilla::compute_coupling_obs_gpu(SubstrateManager* sm,
     return true;
 }
 
-void EwObjectAncilla::apply_obs_to_anchor_and_emit(SubstrateManager* sm,
+void EwObjectAncilla::apply_obs_to_anchor_and_emit(SubstrateMicroprocessor* sm,
                                                    uint32_t object_anchor_id_u32,
                                                    const EwObjectCouplingObs& obs) {
     if (!sm || object_anchor_id_u32 >= sm->anchors.size()) return;
@@ -274,7 +274,7 @@ void EwObjectAncilla::apply_obs_to_anchor_and_emit(SubstrateManager* sm,
     }
 }
 
-void EwObjectAncilla::tick_object_updates(SubstrateManager* sm, uint32_t max_objects_per_tick) {
+void EwObjectAncilla::tick_object_updates(SubstrateMicroprocessor* sm, uint32_t max_objects_per_tick) {
     if (!sm) return;
     ensure_canonical_global_ancillas(sm);
     if (max_objects_per_tick == 0) return;

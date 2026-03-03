@@ -10,6 +10,7 @@
 #include "GE_audio_features.hpp"
 #include "GE_voice_synth.hpp"
 #include "GE_voice_predictive_model.hpp"
+#include "GE_forced_aligner.hpp"
 
 using namespace genesis;
 
@@ -155,8 +156,19 @@ int main(int argc, char** argv) {
         if (amp_ratio < 0.2) amp_ratio = 0.2;
         if (amp_ratio > 2.0) amp_ratio = 2.0;
 
-        // Phones from text (fallback, deterministic).
+        // Phones from text (deterministic).
         auto phones = ge_text_to_phones_english(s.text_utf8);
+        // Forced alignment (phones <-> audio frames) for measurable per-phone durations.
+        // Fail-closed per spec: if alignment fails, skip the sample deterministically.
+        ForcedAlignResult ar = ge_forced_align_phones_to_audio_frames(phones, frames);
+        if (!ar.ok) continue;
+        std::vector<uint32_t> durs = ge_alignment_phone_durations_ms(
+            phones, frames, fcfg.hop_samples_u32, wav.sample_rate_hz_u32, ar);
+        if (durs.size() != phones.size()) continue;
+        for (size_t pi = 0; pi < phones.size(); ++pi) {
+            if (phones[pi].phone == "WB") continue;
+            if (durs[pi] > 0) phones[pi].dur_ms_u32 = durs[pi];
+        }
         if (phones.empty()) continue;
 
         double dur_per_phone = audio_ms / (double)phones.size();

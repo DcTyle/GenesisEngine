@@ -156,7 +156,7 @@ bool GE_LiveCrawler::http_get_body_(const std::string& domain, uint16_t port, co
     return true;
 }
 
-void GE_LiveCrawler::tick(SubstrateManager* sm, const GE_DomainPolicyTable& pol, GE_RateLimiter* rl) {
+void GE_LiveCrawler::tick(SubstrateMicroprocessor* sm, const GE_DomainPolicyTable& pol, GE_RateLimiter* rl) {
     if (!enabled || !consent_granted) return;
     if (!sm || !rl) return;
 

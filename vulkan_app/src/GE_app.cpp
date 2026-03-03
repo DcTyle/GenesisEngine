@@ -13,7 +13,7 @@
 #include <sstream>
 #include <cstdlib>
 
-#include "GE_runtime.hpp" // SubstrateManager
+#include "GE_runtime.hpp" // SubstrateMicroprocessor
 #include "ew_runtime.h"      // ew_runtime_project_points
 #include "GE_object_memory.hpp"
 #include "field_lattice_cpu.hpp"
@@ -46,7 +46,7 @@ struct EwBindingsEditorWin32 {
     HWND edit = nullptr;
     HWND btn_save = nullptr;
     std::string path_utf8;
-    EigenWare::SubstrateManager* sm = nullptr;
+    EigenWare::SubstrateMicroprocessor* sm = nullptr;
 };
 
 static EwBindingsEditorWin32 g_bind_editor;
@@ -135,7 +135,7 @@ static LRESULT CALLBACK EwBindingsEditorProc(HWND h, UINT msg, WPARAM w, LPARAM 
     return DefWindowProcW(h, msg, w, l);
 }
 
-static void ew_open_bindings_editor(EigenWare::SubstrateManager* sm, const std::string& path_utf8) {
+static void ew_open_bindings_editor(EigenWare::SubstrateMicroprocessor* sm, const std::string& path_utf8) {
     if (g_bind_editor.hwnd) {
         SetForegroundWindow(g_bind_editor.hwnd);
         return;
@@ -222,7 +222,7 @@ static bool write_ewmesh_v1(const std::string& out_path_utf8, const EwObjMesh& m
 }
 
 struct App::Scene {
-    EigenWare::SubstrateManager sm;
+    EigenWare::SubstrateMicroprocessor sm;
     uint64_t next_object_id_u64 = 1;
 
     // Default solar-system demo state (Earth orbit).

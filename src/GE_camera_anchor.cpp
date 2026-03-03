@@ -74,7 +74,7 @@ static bool ge_build_compute_payload72_carrier(uint32_t subop_u32,
     return true;
 }
 
-void ge_camera_anchor_tick(SubstrateManager& sm, Anchor& cam_anchor, uint64_t tick_u64) {
+void ge_camera_anchor_tick(SubstrateMicroprocessor& sm, Anchor& cam_anchor, uint64_t tick_u64) {
     if (cam_anchor.kind_u32 != EW_ANCHOR_KIND_CAMERA) return;
 
     // HARD RULE: no direct compute here.

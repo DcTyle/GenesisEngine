@@ -67,6 +67,8 @@ add_library(EigenWareCore
     src/GE_speech_alignment.cpp
     src/GE_voice_synth.cpp
     src/GE_g2p_lexicon.cpp
+    src/GE_g2p_english.cpp
+    src/GE_forced_aligner.cpp
     src/GE_voice_predictive_model.cpp
     src/GE_math_foundation.cpp
     src/GE_experiment_templates.cpp
@@ -117,7 +119,7 @@ add_library(EigenWareCore
     src/cmb_bath.cpp
     src/operator_validator.cpp
     src/ew_phase_transport.cpp
-    src/ew_substrate_manager.cpp
+    src/ew_substrate_microprocessor.cpp
     src/ew_runtime.cpp
     src/ew_eq_exec.cpp
     src/ew_flow_ir.cpp
