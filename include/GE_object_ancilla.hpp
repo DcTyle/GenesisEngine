@@ -18,6 +18,9 @@ struct EwObjectCouplingObs {
     // TURN_SCALE-domain proxies.
     int64_t curvature_turns_q = 0;
     int64_t doppler_turns_q = 0;
+
+    // World-sampled flux-gradient magnitude (Q0.15).
+    uint16_t world_flux_grad_mean_q15 = 0;
 };
 
 class EwObjectAncilla {

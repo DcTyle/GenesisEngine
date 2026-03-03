@@ -1,4 +1,5 @@
 #include "GE_voice_synth.hpp"
+#include "GE_g2p_lexicon.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -19,60 +20,6 @@ static bool ge_is_vowel_phone(const std::string& p) {
         if (p.rfind(v, 0) == 0) return true;
     }
     return false;
-}
-
-std::vector<PhonemeSpan> ge_text_to_phones_fallback_english(const std::string& text) {
-    // Deterministic toy G2P: letters -> rough phones. This is a placeholder to
-    // enable end-to-end audio output before full corpus-trained alignment.
-    // Rules are intentionally simple and measurable.
-    std::vector<PhonemeSpan> out;
-    auto push = [&](const std::string& ph, uint32_t ms) {
-        PhonemeSpan s; s.phone = ph; s.dur_ms_u32 = ms; out.push_back(s);
-    };
-
-    std::string t = ge_upper(text);
-    for (size_t i = 0; i < t.size(); ++i) {
-        char c = t[i];
-        if (c >= 'A' && c <= 'Z') {
-            switch (c) {
-                case 'A': push("AH0", 90); break;
-                case 'B': push("B", 70); break;
-                case 'C': push("K", 70); break;
-                case 'D': push("D", 70); break;
-                case 'E': push("EH0", 90); break;
-                case 'F': push("F", 70); break;
-                case 'G': push("G", 70); break;
-                case 'H': push("HH", 60); break;
-                case 'I': push("IH0", 90); break;
-                case 'J': push("JH", 80); break;
-                case 'K': push("K", 70); break;
-                case 'L': push("L", 70); break;
-                case 'M': push("M", 70); break;
-                case 'N': push("N", 70); break;
-                case 'O': push("AO0", 90); break;
-                case 'P': push("P", 70); break;
-                case 'Q': push("K", 50); push("W", 50); break;
-                case 'R': push("R", 70); break;
-                case 'S': push("S", 70); break;
-                case 'T': push("T", 70); break;
-                case 'U': push("UH0", 90); break;
-                case 'V': push("V", 70); break;
-                case 'W': push("W", 70); break;
-                case 'X': push("K", 50); push("S", 50); break;
-                case 'Y': push("Y", 70); break;
-                case 'Z': push("Z", 70); break;
-                default: break;
-            }
-        } else if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
-            push("SP", 90);
-        } else if (c == '.' || c == '!' || c == '?') {
-            push("SP", 160);
-        } else if (c == ',' || c == ';' || c == ':') {
-            push("SP", 120);
-        }
-    }
-    if (out.empty()) push("SP", 200);
-    return out;
 }
 
 // Simple deterministic oscillator helpers (double math only; deterministic given inputs).

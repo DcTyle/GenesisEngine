@@ -191,7 +191,7 @@ void GE_LiveCrawler::tick(SubstrateManager* sm, const GE_DomainPolicyTable& pol,
         // Emit as a crawler observation into the substrate. target anchor id is 0 for now.
         sm->crawler.enqueue_observation_utf8(
             /*artifact_id*/ (uint64_t)t.seq_u64,
-            /*target_anchor_id*/ 0u,
+            /*target_anchor_id*/ (sm->ui_livecrawl_target_anchor_idx_u32 ? sm->ui_livecrawl_target_anchor_idx_u32 : 0u),
             /*crawler_anchor_id*/ 0u,
             /*context_anchor_id*/ 0u,
             /*stream_id*/ 0u,

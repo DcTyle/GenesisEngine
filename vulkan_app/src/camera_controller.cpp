@@ -1,5 +1,7 @@
 #include "camera_controller.hpp"
 #include <cmath>
+#include "GE_control_packets.hpp"
+#include "GE_camera_anchor.hpp"
 
 static inline float clampf(float v, float a, float b) { return (v < a) ? a : (v > b ? b : v); }
 
@@ -134,4 +136,58 @@ void ew_camera_tick(EwCamera& cam, EwInputState& in, float dt_seconds) {
 
     // Clear per-frame deltas.
     ew_input_reset_deltas(in);
+}
+
+static void quat_from_yaw_pitch(float yaw, float pitch, int32_t out_q16_16[4]) {
+    // Yaw around Z, pitch around X. Deterministic float math is acceptable for UI.
+    const float hy = yaw * 0.5f;
+    const float hp = pitch * 0.5f;
+    const float cy = std::cos(hy);
+    const float sy = std::sin(hy);
+    const float cp = std::cos(hp);
+    const float sp = std::sin(hp);
+    // q = q_yaw * q_pitch
+    const float qw = cy*cp;
+    const float qx = cy*sp;
+    const float qy = sy*sp;
+    const float qz = sy*cp;
+    out_q16_16[0] = (int32_t)(qx * 65536.0f);
+    out_q16_16[1] = (int32_t)(qy * 65536.0f);
+    out_q16_16[2] = (int32_t)(qz * 65536.0f);
+    out_q16_16[3] = (int32_t)(qw * 65536.0f);
+}
+
+static void yaw_pitch_from_quat_q16_16(const int32_t q[4], float& out_yaw, float& out_pitch) {
+    const float qx = (float)q[0] / 65536.0f;
+    const float qy = (float)q[1] / 65536.0f;
+    const float qz = (float)q[2] / 65536.0f;
+    const float qw = (float)q[3] / 65536.0f;
+    // yaw (Z) and pitch (X) from quaternion (approx)
+    const float sinp = 2.0f * (qw*qx - qy*qz);
+    out_pitch = std::asin(clampf(sinp, -1.0f, 1.0f));
+    const float siny = 2.0f * (qw*qz + qx*qy);
+    const float cosy = 1.0f - 2.0f * (qx*qx + qz*qz);
+    out_yaw = std::atan2(siny, cosy);
+}
+
+void ew_camera_fill_control_packet_from_camera(const EwCamera& cam, EwControlPacket& out) {
+    out = EwControlPacket{};
+    out.kind = EwControlPacketKind::CameraSet;
+    out.payload.camera_set.focus_mode_u8 = (uint8_t)EwFocusMode::ManualDistance;
+    out.payload.camera_set.manual_focus_distance_m_q32_32 = (int64_t)(cam.focal_distance_m * 4294967296.0f);
+    out.payload.camera_set.focal_length_mm_q16_16 = (int32_t)(50 * 65536);
+    out.payload.camera_set.aperture_f_q16_16 = (int32_t)(28 * 65536 / 10);
+    out.payload.camera_set.exposure_ev_q16_16 = 0;
+    out.payload.camera_set.pos_xyz_q16_16[0] = (int32_t)(cam.pos[0] * 65536.0f);
+    out.payload.camera_set.pos_xyz_q16_16[1] = (int32_t)(cam.pos[1] * 65536.0f);
+    out.payload.camera_set.pos_xyz_q16_16[2] = (int32_t)(cam.pos[2] * 65536.0f);
+    quat_from_yaw_pitch(cam.yaw_rad, cam.pitch_rad, out.payload.camera_set.rot_quat_q16_16);
+}
+
+void ew_camera_apply_render_packet(EwCamera& cam, const EwRenderCameraPacket& in) {
+    cam.pos[0] = (float)in.pos_xyz_q16_16[0] / 65536.0f;
+    cam.pos[1] = (float)in.pos_xyz_q16_16[1] / 65536.0f;
+    cam.pos[2] = (float)in.pos_xyz_q16_16[2] / 65536.0f;
+    yaw_pitch_from_quat_q16_16(in.rot_quat_q16_16, cam.yaw_rad, cam.pitch_rad);
+    cam.focal_distance_m = (float)in.focus_distance_m_q32_32 / 4294967296.0f;
 }

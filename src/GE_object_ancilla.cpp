@@ -177,6 +177,11 @@ bool EwObjectAncilla::compute_coupling_obs_gpu(SubstrateManager* sm,
             world_bias.coherence_q15 = s.coherence_q15;
             world_bias.curvature_q15 = s.curvature_q15;
             world_bias.doppler_q15 = s.doppler_q15;
+
+            // Store a Q0.15 magnitude for later use (lighting diffusion/noise dominance).
+            const int32_t fg = (int32_t)s.flux_grad_q15;
+            const int32_t fga = (fg < 0) ? -fg : fg;
+            out_obs.world_flux_grad_mean_q15 = (uint16_t)clamp_u32((uint32_t)fga, 0u, 32767u);
         }
     }
 
@@ -234,6 +239,7 @@ void EwObjectAncilla::apply_obs_to_anchor_and_emit(SubstrateManager* sm,
 
     // Update derived terms deterministically.
     a.update_derived_terms(obs.curvature_turns_q, doppler_turns_q);
+    a.world_flux_grad_mean_q15 = obs.world_flux_grad_mean_q15;
     a.sync_basis9_from_core();
 
     // Refresh UV atlas: write G/B from curvature/doppler proxies.
@@ -277,6 +283,9 @@ void EwObjectAncilla::tick_object_updates(SubstrateManager* sm, uint32_t max_obj
     sm->object_store.list_object_ids_sorted(ids);
     if (ids.empty()) return;
 
+    // Record which objects were updated this tick (bounded, deterministic).
+    sm->object_updates_last_tick_u64.clear();
+
     // Deterministic round-robin start index based on canonical tick.
     const uint64_t tick = sm->canonical_tick;
     const uint32_t start = (uint32_t)(tick % (uint64_t)ids.size());
@@ -292,6 +301,7 @@ void EwObjectAncilla::tick_object_updates(SubstrateManager* sm, uint32_t max_obj
             continue;
         }
         apply_obs_to_anchor_and_emit(sm, aid, obs);
+        sm->object_updates_last_tick_u64.push_back(oid);
         ++done;
     }
 }

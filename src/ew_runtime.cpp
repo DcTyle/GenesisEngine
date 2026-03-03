@@ -1,6 +1,8 @@
 #include "ew_runtime.h"
 #include "GE_runtime.hpp"
 #include "ew_ingress.h"
+#include "GE_control_packets.hpp"
+#include "GE_camera_anchor.hpp"
 
 void ew_runtime_submit_pulsepacket(SubstrateManager* sm, const PulsePacketV1* p) {
     if (!sm || !p) return;
@@ -57,5 +59,27 @@ std::vector<EwVizPoint> ew_runtime_project_points(const SubstrateManager* sm, ui
     sm->build_viz_points(pts);
     if (max_points_u32 != 0u && pts.size() > (size_t)max_points_u32) pts.resize((size_t)max_points_u32);
     return pts;
+}
+
+bool ew_runtime_submit_control_packet(SubstrateManager* sm, const EwControlPacket* p) {
+    if (!sm || !p) return false;
+    return sm->control_packet_push(*p);
+}
+
+bool ew_runtime_get_render_camera_packet(const SubstrateManager* sm, EwRenderCameraPacket* out) {
+    if (!sm || !out) return false;
+    if (sm->camera_anchor_id_u32 == 0u || sm->camera_anchor_id_u32 >= sm->anchors.size()) return false;
+    const Anchor& a = sm->anchors[sm->camera_anchor_id_u32];
+    if (a.kind_u32 != EW_ANCHOR_KIND_CAMERA) return false;
+    out->focal_length_mm_q16_16 = a.camera_state.focal_length_mm_q16_16;
+    out->aperture_f_q16_16 = a.camera_state.aperture_f_q16_16;
+    out->exposure_ev_q16_16 = a.camera_state.exposure_ev_q16_16;
+    out->focus_distance_m_q32_32 = a.camera_state.focus_distance_m_q32_32;
+    out->focus_mode_u8 = a.camera_state.focus_mode_u8;
+    out->pos_xyz_q16_16[0] = a.camera_state.pos_xyz_q16_16[0];
+    out->pos_xyz_q16_16[1] = a.camera_state.pos_xyz_q16_16[1];
+    out->pos_xyz_q16_16[2] = a.camera_state.pos_xyz_q16_16[2];
+    for (int i = 0; i < 4; ++i) out->rot_quat_q16_16[i] = a.camera_state.rot_quat_q16_16[i];
+    return true;
 }
 

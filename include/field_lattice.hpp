@@ -37,6 +37,19 @@ struct EwPulseInjectCmd {
     float amp_audio;
 };
 
+// Centered signed Q15-ish means sampled from the world lattice in a clamped box.
+// These values serve as boundary conditions for object-local sublattice evolution.
+struct EwBoundarySampleQ15 {
+    int16_t e_curr_q15 = 0;
+    int16_t flux_q15 = 0;
+    // Q0.15 magnitude of the local flux gradient (0..32767). Used for
+    // boundary-coupled diffusion/noise and energy dominance rules.
+    int16_t flux_grad_q15 = 0;
+    int16_t coherence_q15 = 0;
+    int16_t curvature_q15 = 0;
+    int16_t doppler_q15 = 0;
+};
+
 class EwFieldLatticeGpu {
 public:
     EwFieldLatticeGpu(uint32_t gx, uint32_t gy, uint32_t gz);
@@ -98,6 +111,30 @@ public:
     uint32_t grid_y() const { return gy_; }
     uint32_t grid_z() const { return gz_; }
 
+    // Deterministic sampling support for object↔world boundary exchange.
+    // Returns centered signed Q15-ish means of multiple world fields over a clamped box.
+    // These values are intended to bias object-local boundary evolution.
+    EwBoundarySampleQ15 sample_boundary_means_q15_box(uint32_t center_x, uint32_t center_y, uint32_t center_z,
+                                                      uint32_t radius_x, uint32_t radius_y, uint32_t radius_z) const;
+
+    // ------------------------------------------------------------------
+    // Object→world bounded writeback
+    //
+    // To preserve determinism, object writeback accumulates into integer
+    // imprint buffers (atomicAdd on int32 is order-independent). The imprint
+    // is then applied once per cell into the floating world fields.
+    // ------------------------------------------------------------------
+    void clear_object_imprint();
+    // Accumulate a bounded object-local imprint into world-sized integer buffers.
+    // The imprint is applied later in a single per-cell pass to preserve determinism.
+    // Scales are per-field multipliers converting centered Q15-ish sums into world float units.
+    bool accumulate_object_imprint5_q15(const uint8_t* occ_u8, const int16_t* phi_q15_s16,
+                                        uint32_t ogx, uint32_t ogy, uint32_t ogz,
+                                        uint32_t world_center_x, uint32_t world_center_y, uint32_t world_center_z,
+                                        float e_scale, float coherence_scale,
+                                        float flux_scale, float curvature_scale, float doppler_scale);
+    void apply_object_imprint_to_fields();
+
 private:
     uint32_t gx_ = 0, gy_ = 0, gz_ = 0;
     uint64_t tick_index_ = 0;
@@ -145,6 +182,17 @@ private:
     void* d_pulse_cmds_ = nullptr;
     uint32_t pulse_cmd_cap_ = 0;
     uint32_t pulse_cmd_count_ = 0;
+
+    // Persistent device-side sampling scratch (integer sums + count).
+    void* d_sample_sums_i64_ = nullptr; // int64_t[5]
+    void* d_sample_cnt_u64_ = nullptr;  // uint64_t
+
+    // Persistent device-side object imprint scratch (integer sums per cell).
+    void* d_obj_imprint_e_i32_ = nullptr;   // int32_t[gx*gy*gz]
+    void* d_obj_imprint_coh_i32_ = nullptr; // int32_t[gx*gy*gz]
+    void* d_obj_imprint_flux_i32_ = nullptr; // int32_t[gx*gy*gz]
+    void* d_obj_imprint_curv_i32_ = nullptr; // int32_t[gx*gy*gz]
+    void* d_obj_imprint_dopp_i32_ = nullptr; // int32_t[gx*gy*gz]
 
     void alloc_buffers_();
     void free_buffers_();

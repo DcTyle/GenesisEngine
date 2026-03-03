@@ -12,11 +12,11 @@ namespace genesis {
 void AutoArtifactBus::push(const AutoArtifact& a_in) {
     AutoArtifact a = a_in;
     // Deterministic id9 if caller didn't provide one.
-    if (a.id9.a_u32 == 0 && a.id9.b_u32 == 0 && a.id9.c_u32 == 0) {
+    if (a.id9.u32[0] == 0u && a.id9.u32[1] == 0u && a.id9.u32[2] == 0u) {
         // NOTE: This is not cryptographic; it is a stable sequence labeling.
-        a.id9.a_u32 = (uint32_t)(seq_u64_ & 0xFFFFFFFFu);
-        a.id9.b_u32 = (uint32_t)((seq_u64_ >> 32) & 0xFFFFFFFFu);
-        a.id9.c_u32 = (uint32_t)a.kind;
+        a.id9.u32[0] = (uint32_t)(seq_u64_ & 0xFFFFFFFFu);
+        a.id9.u32[1] = (uint32_t)((seq_u64_ >> 32) & 0xFFFFFFFFu);
+        a.id9.u32[2] = (uint32_t)a.kind;
         seq_u64_++;
     }
     // Bounded queue (deterministic drop oldest).
@@ -42,7 +42,7 @@ static inline bool is_commit_safe_small_utf8(const std::string& s) {
 // Track mapping
 // -----------------------------------------------------------------------------
 
-LearningTrack LearningAutomation::track_for_metric(MetricKind k) {
+static LearningTrack track_for_metric(MetricKind k) {
     switch (k) {
         case MetricKind::Lang_Dictionary_LexiconStats:
         case MetricKind::Lang_Thesaurus_RelationStats:
@@ -92,7 +92,7 @@ LearningTrack LearningAutomation::track_for_metric(MetricKind k) {
     }
 }
 
-uint32_t LearningAutomation::sandbox_for_track(LearningTrack t) {
+static uint32_t sandbox_for_track(LearningTrack t) {
     switch (t) {
         case LearningTrack::Vocabulary: return 0u;
         case LearningTrack::Math:       return 0u;

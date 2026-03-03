@@ -39,3 +39,10 @@ void ew_camera_tick(EwCamera& cam, EwInputState& in, float dt_seconds);
 
 // Deterministic view basis outputs for renderer state.
 void ew_camera_get_forward(const EwCamera& cam, float out_fwd3[3]);
+
+// Bridge between viewport navigation and substrate camera anchor.
+// The viewport must emit control packets and consume render camera packets.
+struct EwControlPacket;
+struct EwRenderCameraPacket;
+void ew_camera_fill_control_packet_from_camera(const EwCamera& cam, EwControlPacket& out);
+void ew_camera_apply_render_packet(EwCamera& cam, const EwRenderCameraPacket& in);

@@ -14,6 +14,8 @@ int main(int argc, char** argv) {
     const ew::EwCliArgs args = ew::ew_cli_parse_kv_ascii(argc, argv);
 
     std::string lang_dir;
+    std::string export_dir;
+    uint64_t export_object_id_u64 = 0;
     uint32_t ticks = 600;
 
     if (const char* v = ew::ew_cli_get_str(args, "lang-bootstrap")) lang_dir = v;
@@ -21,6 +23,10 @@ int main(int argc, char** argv) {
         if (const char* v2 = ew::ew_cli_get_str(args, "lang_bootstrap")) lang_dir = v2;
     }
     (void)ew::ew_cli_get_u32(args, "ticks", ticks);
+    if (const char* od = ew::ew_cli_get_str(args, "export_dir")) export_dir = od;
+    if (const char* od2 = ew::ew_cli_get_str(args, "export-dir")) export_dir = od2;
+    (void)ew::ew_cli_get_u64(args, "export_object_id", export_object_id_u64);
+    (void)ew::ew_cli_get_u64(args, "export-object-id", export_object_id_u64);
 
     SubstrateManager sm(64);
     sm.set_projection_seed(0xC0FFEE1234ULL);
@@ -48,6 +54,13 @@ int main(int argc, char** argv) {
             std::printf("UI:%s\n", out.c_str());
             printed++;
         }
+    }
+
+    if (!export_dir.empty() && export_object_id_u64 != 0) {
+        std::string rep;
+        const bool ok = sm.export_object_bundle(export_object_id_u64, export_dir, &rep);
+        std::printf("export_bundle=%s\n", ok ? "true" : "false");
+        std::printf("export_report=\n%s\n", rep.c_str());
     }
 
     print_u64_hex("tick_u64", sm.canonical_tick_u64());

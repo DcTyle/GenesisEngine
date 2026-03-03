@@ -21,6 +21,9 @@
 #include "GE_render_instance.hpp"
 #include "ewmesh_voxelizer.hpp"
 #include "carrier_bundle_cuda.hpp"
+#include "GE_control_packets.hpp"
+
+#include <fstream>
 
 #ifndef EW_SHADER_OUT_DIR
 #define EW_SHADER_OUT_DIR "."
@@ -29,6 +32,133 @@
 #pragma comment(lib, "Shcore.lib")
 
 namespace ewv {
+
+// -----------------------------------------------------------------------------
+// Win32 Input Bindings Editor (minimal)
+// - Exposes a UI tool to edit input_bindings.ewcfg
+// - On save, writes the file and emits InputBindingsReload control packet.
+// - No input mapping effects are computed here; substrate remains the only
+//   place where bindings are interpreted.
+// -----------------------------------------------------------------------------
+
+struct EwBindingsEditorWin32 {
+    HWND hwnd = nullptr;
+    HWND edit = nullptr;
+    HWND btn_save = nullptr;
+    std::string path_utf8;
+    EigenWare::SubstrateManager* sm = nullptr;
+};
+
+static EwBindingsEditorWin32 g_bind_editor;
+
+static LRESULT CALLBACK EwBindingsEditorProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
+    switch (msg) {
+        case WM_CREATE: {
+            RECT rc;
+            GetClientRect(h, &rc);
+            const int w0 = rc.right - rc.left;
+            const int h0 = rc.bottom - rc.top;
+            g_bind_editor.edit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+                                                 WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_AUTOVSCROLL | ES_AUTOHSCROLL | WS_VSCROLL,
+                                                 8, 8, w0 - 16, h0 - 56,
+                                                 h, (HMENU)101, GetModuleHandleW(nullptr), nullptr);
+            g_bind_editor.btn_save = CreateWindowExW(0, L"BUTTON", L"Save + Reload",
+                                                     WS_CHILD | WS_VISIBLE,
+                                                     8, h0 - 40, 140, 28,
+                                                     h, (HMENU)102, GetModuleHandleW(nullptr), nullptr);
+
+            // Load file content.
+            std::ifstream f(g_bind_editor.path_utf8.c_str(), std::ios::in | std::ios::binary);
+            std::string content;
+            if (f.good()) {
+                f.seekg(0, std::ios::end);
+                const size_t n = (size_t)f.tellg();
+                f.seekg(0, std::ios::beg);
+                content.resize(n);
+                if (n > 0) f.read(content.data(), (std::streamsize)n);
+            } else {
+                content = "# input_bindings file missing\n";
+            }
+            const std::wstring wtxt = utf8_to_wide(content);
+            SetWindowTextW(g_bind_editor.edit, wtxt.c_str());
+            return 0;
+        }
+        case WM_SIZE: {
+            RECT rc;
+            GetClientRect(h, &rc);
+            const int w0 = rc.right - rc.left;
+            const int h0 = rc.bottom - rc.top;
+            if (g_bind_editor.edit) MoveWindow(g_bind_editor.edit, 8, 8, w0 - 16, h0 - 56, TRUE);
+            if (g_bind_editor.btn_save) MoveWindow(g_bind_editor.btn_save, 8, h0 - 40, 140, 28, TRUE);
+            return 0;
+        }
+        case WM_COMMAND: {
+            const int id = LOWORD(w);
+            if (id == 102 && g_bind_editor.edit) {
+                const int len = GetWindowTextLengthW(g_bind_editor.edit);
+                std::wstring wbuf;
+                wbuf.resize((size_t)len);
+                GetWindowTextW(g_bind_editor.edit, wbuf.data(), len + 1);
+                const std::string txt = wide_to_utf8(wbuf);
+
+                // Deterministic write: overwrite file bytes exactly as edited.
+                {
+                    std::ofstream out(g_bind_editor.path_utf8.c_str(), std::ios::out | std::ios::binary | std::ios::trunc);
+                    if (out.good()) {
+                        out.write(txt.data(), (std::streamsize)txt.size());
+                    }
+                }
+
+                // Emit reload packet into substrate.
+                if (g_bind_editor.sm) {
+                    EwControlPacket cp{};
+                    cp.kind = EwControlPacketKind::InputBindingsReload;
+                    cp.source_u16 = 1;
+                    cp.tick_u64 = g_bind_editor.sm->canonical_tick;
+                    (void)ew_runtime_submit_control_packet(g_bind_editor.sm, &cp);
+                }
+
+                MessageBoxW(h, L"Saved. Substrate will reload bindings next tick.", L"Genesis", MB_OK);
+                return 0;
+            }
+            break;
+        }
+        case WM_CLOSE:
+            DestroyWindow(h);
+            return 0;
+        case WM_DESTROY:
+            g_bind_editor.hwnd = nullptr;
+            g_bind_editor.edit = nullptr;
+            g_bind_editor.btn_save = nullptr;
+            return 0;
+    }
+    return DefWindowProcW(h, msg, w, l);
+}
+
+static void ew_open_bindings_editor(EigenWare::SubstrateManager* sm, const std::string& path_utf8) {
+    if (g_bind_editor.hwnd) {
+        SetForegroundWindow(g_bind_editor.hwnd);
+        return;
+    }
+    g_bind_editor.sm = sm;
+    g_bind_editor.path_utf8 = path_utf8;
+
+    static bool cls = false;
+    if (!cls) {
+        WNDCLASSW wc{};
+        wc.lpfnWndProc = EwBindingsEditorProc;
+        wc.hInstance = GetModuleHandleW(nullptr);
+        wc.lpszClassName = L"GE_BindingsEditor";
+        wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+        RegisterClassW(&wc);
+        cls = true;
+    }
+
+    g_bind_editor.hwnd = CreateWindowExW(0, L"GE_BindingsEditor", L"Input Bindings Editor",
+                                         WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+                                         CW_USEDEFAULT, CW_USEDEFAULT, 720, 520,
+                                         nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+}
 
 static std::wstring utf8_to_wide(const std::string& s) {
     if (s.empty()) return L"";
@@ -1561,6 +1691,14 @@ void App::Tick() {
     }
     prev_h = h_now;
 
+    // Open input bindings editor with F9 (editor tool).
+    static bool prev_f9 = false;
+    const bool f9_now = input_.key_down[VK_F9] != 0;
+    if (f9_now && !prev_f9 && scene_) {
+        ew_open_bindings_editor(&scene_->sm, scene_->sm.project_settings.input.bindings_path_utf8);
+    }
+    prev_f9 = f9_now;
+
     // Authoritative simulation ticks (server-truth) at fixed cadence.
     // Deterministic clamp: never execute more than N ticks per rendered frame.
     acc += dt;
@@ -1588,7 +1726,63 @@ void App::Tick() {
     }
 
     // Standard camera controls.
-    ew_camera_tick(cam_, input_, dt);
+    // HARD RULE: no camera integration / derived control computation here.
+    // The viewport emits raw input events only; the substrate performs all
+    // input mapping effects and camera integration.
+    {
+        static bool prev_keys[256] = {false};
+        for (int k = 0; k < 256; ++k) {
+            const bool now = input_.key_down[k];
+            if (now != prev_keys[k]) {
+                EwControlPacket cp{};
+                cp.kind = EwControlPacketKind::InputAction;
+                cp.source_u16 = 1;
+                cp.tick_u64 = scene_->sm.canonical_tick;
+                cp.payload.input_action.action_id_u32 = (uint32_t)k;
+                cp.payload.input_action.pressed_u8 = now ? 1u : 0u;
+                (void)ew_runtime_submit_control_packet(&scene_->sm, &cp);
+                prev_keys[k] = now;
+            }
+        }
+
+        // Mouse deltas as axis packets.
+        if (input_.mouse_dx != 0) {
+            EwControlPacket cp{};
+            cp.kind = EwControlPacketKind::InputAxis;
+            cp.source_u16 = 1;
+            cp.tick_u64 = scene_->sm.canonical_tick;
+            cp.payload.input_axis.axis_id_u32 = 0x1000u; // mouse_dx
+            cp.payload.input_axis.value_q16_16 = (int32_t)(input_.mouse_dx << 16);
+            (void)ew_runtime_submit_control_packet(&scene_->sm, &cp);
+        }
+        if (input_.mouse_dy != 0) {
+            EwControlPacket cp{};
+            cp.kind = EwControlPacketKind::InputAxis;
+            cp.source_u16 = 1;
+            cp.tick_u64 = scene_->sm.canonical_tick;
+            cp.payload.input_axis.axis_id_u32 = 0x1001u; // mouse_dy
+            cp.payload.input_axis.value_q16_16 = (int32_t)(input_.mouse_dy << 16);
+            (void)ew_runtime_submit_control_packet(&scene_->sm, &cp);
+        }
+        if (input_.wheel_delta != 0) {
+            EwControlPacket cp{};
+            cp.kind = EwControlPacketKind::InputAxis;
+            cp.source_u16 = 1;
+            cp.tick_u64 = scene_->sm.canonical_tick;
+            cp.payload.input_axis.axis_id_u32 = 0x1002u; // wheel
+            cp.payload.input_axis.value_q16_16 = (int32_t)(input_.wheel_delta << 16);
+            (void)ew_runtime_submit_control_packet(&scene_->sm, &cp);
+        }
+        ew_input_reset_deltas(input_);
+    }
+
+    // Consume render camera packet derived from CameraAnchor state.
+    {
+        EwRenderCameraPacket rp{};
+        if (ew_runtime_get_render_camera_packet(&scene_->sm, &rp)) {
+            ew_camera_apply_render_packet(cam_, rp);
+        }
+    }
 
     // Build camera basis
     float fwd[3];
@@ -1602,62 +1796,9 @@ void App::Tick() {
         right[0]*fwd[1] - right[1]*fwd[0]
     };
 
-    // Focus control (VR eye tracking + camera view):
-    // In Immersion mode, drive focal distance from gaze ray intersection when available.
-    // This is deterministic (scene geometry + pose only). For now gaze ray defaults to forward;
-    // OpenXR eye-gaze can be wired into the same hook without changing the LOD contract.
-    if (scene_) {
-        const bool enable_focus_from_gaze = immersion_mode_ || env_truthy("GENESIS_FOCUS_FROM_GAZE");
-        if (enable_focus_from_gaze) {
-            // Raycast against object bounding spheres.
-            const float ox = cam_.pos[0];
-            const float oy = cam_.pos[1];
-            const float oz = cam_.pos[2];
-            float dxr = fwd[0];
-            float dyr = fwd[1];
-            float dzr = fwd[2];
-
-            // In Immersion mode, prefer true eye-gaze from OpenXR when available.
-            // We use camera origin (world) + XR gaze direction (unit), which is
-            // sufficient to derive focus distance without requiring full XR view
-            // space alignment.
-            if (immersion_mode_) {
-                EwOpenXRGazeRay gr = xr_.GetGazeRay();
-                if (gr.valid) {
-                    dxr = gr.dir[0];
-                    dyr = gr.dir[1];
-                    dzr = gr.dir[2];
-                }
-            }
-            float best_t = 1.0e30f;
-            bool hit = false;
-            for (const auto& o : scene_->objects) {
-                // Sphere intersection
-                float cx = o.xf.pos[0];
-                float cy = o.xf.pos[1];
-                float cz = o.xf.pos[2];
-                float r = std::max(0.01f, o.radius_m_f32);
-                float lx = ox - cx;
-                float ly = oy - cy;
-                float lz = oz - cz;
-                float b = lx*dxr + ly*dyr + lz*dzr;
-                float c = lx*lx + ly*ly + lz*lz - r*r;
-                float disc = b*b - c;
-                if (disc < 0.0f) continue;
-                float sdisc = std::sqrt(disc);
-                float t0 = -b - sdisc;
-                float t1 = -b + sdisc;
-                float t = (t0 > 0.01f) ? t0 : ((t1 > 0.01f) ? t1 : 0.0f);
-                if (t > 0.01f && t < best_t) { best_t = t; hit = true; }
-            }
-            if (hit) {
-                // Clamp to a sane DOF domain for the editor.
-                if (best_t < 0.05f) best_t = 0.05f;
-                if (best_t > 25.0f) best_t = 25.0f;
-                cam_.focal_distance_m = best_t;
-            }
-        }
-    }
+    // Focus control: all autofocus logic lives in substrate. The viewport is
+    // permitted to provide observations (depth histogram) but not to compute
+    // focus distances or derived lens scalars.
 
     // Projection (camera-relative instances)
     scene_->instances.clear();

@@ -9,6 +9,8 @@ class SubstrateManager;
 struct EwVizPoint;
 struct EwExternalApiRequest;
 struct EwExternalApiResponse;
+struct EwControlPacket;
+struct EwRenderCameraPacket;
 
 // Canonical runtime dispatcher surface per Spec v7.
 // These are thin wrappers over the existing SubstrateManager runtime to satisfy
@@ -24,4 +26,10 @@ bool ew_runtime_language_bootstrap(SubstrateManager* sm, const char* root_dir_ut
 
 // Visualization projection (UE/host inspection).
 std::vector<EwVizPoint> ew_runtime_project_points(const SubstrateManager* sm, uint32_t max_points_u32);
+
+// Control surfaces (UI/editor/input) -> AI substrate.
+bool ew_runtime_submit_control_packet(SubstrateManager* sm, const EwControlPacket* p);
+
+// Renderer read path: derive a render camera packet from the camera anchor.
+bool ew_runtime_get_render_camera_packet(const SubstrateManager* sm, EwRenderCameraPacket* out);
 

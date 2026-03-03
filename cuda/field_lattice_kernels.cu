@@ -219,6 +219,38 @@ extern "C" __global__ void ew_kernel_wave_step(const float* E_prev, const float*
     const float dt2 = dt * dt;
     float En = 2.0f * Ec - E_prev[iC] + trans * lap_eff * dt2 - damp * Ec * dt2;
 
+    // ---------------------------------------------------------------------
+    // Emergent contact constraint (field-native, no collider/solver stack)
+    //
+    // High local density is treated as a proxy for multi-occupancy/contact.
+    // We apply a conservative pressure-like correction driven by the density
+    // Laplacian to encourage separation and stable stacking.
+    //
+    // contact_term = k_contact * overlap * lap(density)
+    // overlap = max(0, dens - dens_cap)
+    // ---------------------------------------------------------------------
+    {
+        const float dens_cap = 0.78f;
+        const float overlap = (dens > dens_cap) ? (dens - dens_cap) : 0.0f;
+        if (overlap > 0.0f) {
+            const float dm = (float)density_u8[iXm] / 255.0f;
+            const float dp = (float)density_u8[iXp] / 255.0f;
+            const float em = (float)density_u8[iYm] / 255.0f;
+            const float ep = (float)density_u8[iYp] / 255.0f;
+            const float fm = (float)density_u8[iZm] / 255.0f;
+            const float fp = (float)density_u8[iZp] / 255.0f;
+            const float dens_lap = (dm + dp + em + ep + fm + fp - 6.0f * dens);
+
+            const float k_contact = 0.35f;
+            En += (k_contact * overlap * dens_lap) * dt2;
+
+            if (flux) {
+                const float k_flux = 0.08f;
+                flux[iC] = ew_quantize_f32((flux[iC] - k_flux * overlap * dens_lap), EW_SNAP_FLUX_SCALE);
+            }
+        }
+    }
+
     // Coherence gate: higher density reduces coherence.
     coherence[iC] = ew_quantize_f32(((1.0f - dens)), EW_SNAP_COHERENCE_SCALE);
 

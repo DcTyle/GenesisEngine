@@ -33,6 +33,8 @@ static __device__ __forceinline__ int32_t ew_leak_density_q16_16_from_mass_dev(i
 __global__ void ew_kernel_compute_carrier_triples(
     const int64_t* __restrict__ doppler_q,
     const int64_t* __restrict__ m_q,
+    const int64_t* __restrict__ curvature_q,
+    const uint16_t* __restrict__ flux_grad_mean_q15,
     const uint16_t* __restrict__ harmonics_mean_q15,
     uint32_t anchors_n,
     const uint32_t* __restrict__ anchor_ids,
@@ -66,23 +68,35 @@ __global__ void ew_kernel_compute_carrier_triples(
     uint32_t h2 = (uint32_t)harmonics_mean_q15[a2];
     uint32_t h = ((h0 + h1 + h2) / 3u) & 65535u;
 
-    out_triples[idx] = EwCarrierTriple{(uint32_t)leak_bundled, (uint32_t)doppler_bundled, h};
+    // Flux-gradient magnitude sampled from world boundary exchange.
+    const uint32_t g0 = (uint32_t)flux_grad_mean_q15[a0];
+    const uint32_t g1 = (uint32_t)flux_grad_mean_q15[a1];
+    const uint32_t g2 = (uint32_t)flux_grad_mean_q15[a2];
+    const uint32_t g = ((g0 + g1 + g2) / 3u) & 65535u;
+
+    const uint32_t z = ((g & 65535u) << 16) | (h & 65535u);
+
+    out_triples[idx] = EwCarrierTriple{(uint32_t)leak_bundled, (uint32_t)doppler_bundled, z};
 }
 
 extern "C" bool ew_cuda_compute_carrier_triples_impl(
     const int64_t* doppler_q_turns,
     const int64_t* m_q_turns,
+    const int64_t* curvature_q_turns,
+    const uint16_t* flux_grad_mean_q15,
     const uint16_t* harmonics_mean_q15,
     uint32_t anchors_n,
     const uint32_t* anchor_ids,
     uint32_t ids_n,
     EwCarrierTriple* out_triples
 ) {
-    if (!doppler_q_turns || !m_q_turns || !harmonics_mean_q15 || !anchor_ids || !out_triples) return false;
+    if (!doppler_q_turns || !m_q_turns || !curvature_q_turns || !flux_grad_mean_q15 || !harmonics_mean_q15 || !anchor_ids || !out_triples) return false;
     if (anchors_n == 0u || ids_n == 0u) return true;
 
     int64_t* d_doppler = nullptr;
     int64_t* d_m = nullptr;
+    int64_t* d_curv = nullptr;
+    uint16_t* d_fluxg = nullptr;
     uint16_t* d_hm = nullptr;
     uint32_t* d_ids = nullptr;
     EwCarrierTriple* d_out = nullptr;
@@ -94,10 +108,14 @@ extern "C" bool ew_cuda_compute_carrier_triples_impl(
     if (st != cudaSuccess) { cudaFree(d_doppler); return false; }
     st = cudaMalloc((void**)&d_hm, sizeof(uint16_t) * (size_t)anchors_n);
     if (st != cudaSuccess) { cudaFree(d_doppler); cudaFree(d_m); return false; }
-    st = cudaMalloc((void**)&d_ids, sizeof(uint32_t) * (size_t)ids_n);
+    st = cudaMalloc((void**)&d_fluxg, sizeof(uint16_t) * (size_t)anchors_n);
     if (st != cudaSuccess) { cudaFree(d_doppler); cudaFree(d_m); cudaFree(d_hm); return false; }
+    st = cudaMalloc((void**)&d_curv, sizeof(int64_t) * (size_t)anchors_n);
+    if (st != cudaSuccess) { cudaFree(d_doppler); cudaFree(d_m); cudaFree(d_hm); cudaFree(d_fluxg); return false; }
+    st = cudaMalloc((void**)&d_ids, sizeof(uint32_t) * (size_t)ids_n);
+    if (st != cudaSuccess) { cudaFree(d_doppler); cudaFree(d_m); cudaFree(d_hm); cudaFree(d_fluxg); cudaFree(d_curv); return false; }
     st = cudaMalloc((void**)&d_out, sizeof(EwCarrierTriple) * (size_t)ids_n);
-    if (st != cudaSuccess) { cudaFree(d_doppler); cudaFree(d_m); cudaFree(d_hm); cudaFree(d_ids); return false; }
+    if (st != cudaSuccess) { cudaFree(d_doppler); cudaFree(d_m); cudaFree(d_hm); cudaFree(d_fluxg); cudaFree(d_curv); cudaFree(d_ids); return false; }
 
     st = cudaMemcpy(d_doppler, doppler_q_turns, sizeof(int64_t) * (size_t)anchors_n, cudaMemcpyHostToDevice);
     if (st != cudaSuccess) goto fail;
@@ -105,12 +123,16 @@ extern "C" bool ew_cuda_compute_carrier_triples_impl(
     if (st != cudaSuccess) goto fail;
     st = cudaMemcpy(d_hm, harmonics_mean_q15, sizeof(uint16_t) * (size_t)anchors_n, cudaMemcpyHostToDevice);
     if (st != cudaSuccess) goto fail;
+    st = cudaMemcpy(d_fluxg, flux_grad_mean_q15, sizeof(uint16_t) * (size_t)anchors_n, cudaMemcpyHostToDevice);
+    if (st != cudaSuccess) goto fail;
+    st = cudaMemcpy(d_curv, curvature_q_turns, sizeof(int64_t) * (size_t)anchors_n, cudaMemcpyHostToDevice);
+    if (st != cudaSuccess) goto fail;
     st = cudaMemcpy(d_ids, anchor_ids, sizeof(uint32_t) * (size_t)ids_n, cudaMemcpyHostToDevice);
     if (st != cudaSuccess) goto fail;
 
     const uint32_t block = 256u;
     const uint32_t grid = (ids_n + block - 1u) / block;
-    ew_kernel_compute_carrier_triples<<<grid, block>>>(d_doppler, d_m, d_hm, anchors_n, d_ids, ids_n, d_out);
+    ew_kernel_compute_carrier_triples<<<grid, block>>>(d_doppler, d_m, d_curv, d_fluxg, d_hm, anchors_n, d_ids, ids_n, d_out);
     st = cudaGetLastError();
     if (st != cudaSuccess) goto fail;
     st = cudaMemcpy(out_triples, d_out, sizeof(EwCarrierTriple) * (size_t)ids_n, cudaMemcpyDeviceToHost);
@@ -118,6 +140,8 @@ extern "C" bool ew_cuda_compute_carrier_triples_impl(
 
     cudaFree(d_doppler);
     cudaFree(d_m);
+    cudaFree(d_curv);
+    cudaFree(d_fluxg);
     cudaFree(d_hm);
     cudaFree(d_ids);
     cudaFree(d_out);
@@ -126,6 +150,8 @@ extern "C" bool ew_cuda_compute_carrier_triples_impl(
 fail:
     cudaFree(d_doppler);
     cudaFree(d_m);
+    cudaFree(d_curv);
+    cudaFree(d_fluxg);
     cudaFree(d_hm);
     cudaFree(d_ids);
     cudaFree(d_out);

@@ -2,18 +2,30 @@ cmake_minimum_required(VERSION 3.18)
 
 # Vulkan native viewport application (replaces UE adapter).
 
-add_executable(GenesisEngineVulkan
+add_executable(genesis_runtime
     src/main.cpp
     src/GE_app.cpp
     src/camera_controller.cpp
-    src/obj_import.cpp
     src/ai_ui.cpp
     src/openxr_runtime.cpp
 )
 
-target_include_directories(GenesisEngineVulkan PRIVATE include)
+add_executable(genesis_editor
+    src/main.cpp
+    src/GE_app.cpp
+    src/camera_controller.cpp
+    src/ai_ui.cpp
+    src/openxr_runtime.cpp
+    src/obj_import.cpp
+)
 
-target_link_libraries(GenesisEngineVulkan PRIVATE EigenWareCore)
+target_include_directories(genesis_runtime PRIVATE include)
+target_link_libraries(genesis_runtime PRIVATE EigenWareCore)
+target_compile_definitions(genesis_runtime PRIVATE GENESIS_EDITOR_BUILD=0)
+
+target_include_directories(genesis_editor PRIVATE include)
+target_link_libraries(genesis_editor PRIVATE EigenWareCore)
+target_compile_definitions(genesis_editor PRIVATE GENESIS_EDITOR_BUILD=1)
 
 # -----------------------------------------------------------------------------
 # OpenXR (optional, production path)
@@ -37,21 +49,28 @@ find_library(EW_OPENXR_LOADER_LIB
 
 if (EW_OPENXR_INCLUDE_DIR AND EW_OPENXR_LOADER_LIB)
     message(STATUS "OpenXR found: enabling Vulkan OpenXR path")
-    target_include_directories(GenesisEngineVulkan PRIVATE "${EW_OPENXR_INCLUDE_DIR}")
-    target_link_libraries(GenesisEngineVulkan PRIVATE "${EW_OPENXR_LOADER_LIB}")
-    target_compile_definitions(GenesisEngineVulkan PRIVATE GENESIS_HAS_OPENXR=1)
+    target_include_directories(genesis_runtime PRIVATE "${EW_OPENXR_INCLUDE_DIR}")
+    target_link_libraries(genesis_runtime PRIVATE "${EW_OPENXR_LOADER_LIB}")
+    target_compile_definitions(genesis_runtime PRIVATE GENESIS_HAS_OPENXR=1)
+
+    target_include_directories(genesis_editor PRIVATE "${EW_OPENXR_INCLUDE_DIR}")
+    target_link_libraries(genesis_editor PRIVATE "${EW_OPENXR_LOADER_LIB}")
+    target_compile_definitions(genesis_editor PRIVATE GENESIS_HAS_OPENXR=1)
 else()
     message(STATUS "OpenXR not found: building without XR (desktop viewport only)")
 endif()
 
 if (WIN32)
-    target_compile_definitions(GenesisEngineVulkan PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_compile_definitions(genesis_runtime PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_compile_definitions(genesis_editor PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
     # Vulkan loader is provided by the Vulkan SDK.
     find_package(Vulkan REQUIRED)
-    target_link_libraries(GenesisEngineVulkan PRIVATE Vulkan::Vulkan user32 gdi32 shell32 comdlg32)
+    target_link_libraries(genesis_runtime PRIVATE Vulkan::Vulkan user32 gdi32 shell32 comdlg32)
+    target_link_libraries(genesis_editor PRIVATE Vulkan::Vulkan user32 gdi32 shell32 comdlg32)
 else()
     find_package(Vulkan REQUIRED)
-    target_link_libraries(GenesisEngineVulkan PRIVATE Vulkan::Vulkan)
+    target_link_libraries(genesis_runtime PRIVATE Vulkan::Vulkan)
+    target_link_libraries(genesis_editor PRIVATE Vulkan::Vulkan)
 endif()
 
 # -----------------------------------------------------------------------------
@@ -106,17 +125,22 @@ if (WIN32)
         VERBATIM)
 
     add_custom_target(EWShaders ALL DEPENDS ${EW_SPV})
-    add_dependencies(GenesisEngineVulkan EWShaders)
-    target_compile_definitions(GenesisEngineVulkan PRIVATE EW_SHADER_OUT_DIR="${EW_SHADER_OUT}")
+    add_dependencies(genesis_runtime EWShaders)
+    add_dependencies(genesis_editor EWShaders)
+    target_compile_definitions(genesis_runtime PRIVATE EW_SHADER_OUT_DIR="${EW_SHADER_OUT}")
+    target_compile_definitions(genesis_editor PRIVATE EW_SHADER_OUT_DIR="${EW_SHADER_OUT}")
 endif()
 
-set_target_properties(GenesisEngineVulkan PROPERTIES
+set_target_properties(genesis_runtime PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/GenesisEngineState/Binaries/Win64"
+)
+set_target_properties(genesis_editor PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/GenesisEngineState/Binaries/Win64"
 )
 
 # Hard fail if someone configures a 32-bit Windows build.
 if (WIN32)
     if (CMAKE_SIZEOF_VOID_P EQUAL 4)
-        message(FATAL_ERROR "GenesisEngineVulkan must be built as a Win64 (x64) application. Configure with -A x64.")
+        message(FATAL_ERROR "GenesisEngine Vulkan apps must be built as Win64 (x64). Configure with -A x64.")
     endif()
 endif()

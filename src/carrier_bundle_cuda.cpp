@@ -23,10 +23,18 @@ static inline int32_t ew_leak_density_q16_16_from_mass_i64(int64_t mass_turns_q)
     return ew_clamp_i32_local(num / (int64_t)TURN_SCALE, 0, (int32_t)65536);
 }
 
+// Flux-gradient magnitude is sampled from the world lattice during
+// object↔world boundary exchange and stored on the anchor as Q0.15.
+static inline uint16_t ew_flux_grad_q0_15_from_anchor_u16(uint16_t q15) {
+    return (q15 > 32768u) ? 32768u : q15;
+}
+
 #if defined(EW_ENABLE_CUDA) && (EW_ENABLE_CUDA==1)
 extern "C" bool ew_cuda_compute_carrier_triples_impl(
     const int64_t* doppler_q_turns,
     const int64_t* m_q_turns,
+    const int64_t* curvature_q_turns,
+    const uint16_t* flux_grad_mean_q15,
     const uint16_t* harmonics_mean_q15,
     uint32_t anchors_n,
     const uint32_t* anchor_ids,
@@ -51,15 +59,19 @@ bool ew_compute_carrier_triples_for_anchor_ids(
     // SoA build for deterministic device execution.
     std::vector<int64_t> doppler_q(n);
     std::vector<int64_t> m_q(n);
+    std::vector<int64_t> curvature_q(n);
+    std::vector<uint16_t> fluxg_q15(n);
     std::vector<uint16_t> hm(n);
     for (uint32_t i = 0; i < n; ++i) {
         doppler_q[i] = anchors[i].doppler_q;
         m_q[i] = anchors[i].m_q;
+        curvature_q[i] = anchors[i].curvature_q;
+        fluxg_q15[i] = anchors[i].world_flux_grad_mean_q15;
         hm[i] = anchors[i].harmonics_mean_q15;
     }
 
     return ew_cuda_compute_carrier_triples_impl(
-        doppler_q.data(), m_q.data(), hm.data(), n,
+        doppler_q.data(), m_q.data(), curvature_q.data(), fluxg_q15.data(), hm.data(), n,
         anchor_ids.data(), (uint32_t)anchor_ids.size(),
         out_triples.data()
     );
@@ -94,7 +106,16 @@ bool ew_compute_carrier_triples_for_anchor_ids(
         uint32_t h2 = (uint32_t)A2.harmonics_mean_q15;
         uint32_t h = ((h0 + h1 + h2) / 3u) & 65535u;
 
-        out_triples[i] = EwCarrierTriple{(uint32_t)leak_bundled, (uint32_t)doppler_bundled, h};
+        // Flux-gradient magnitude sampled from world boundary exchange.
+        const uint32_t g0 = (uint32_t)ew_flux_grad_q0_15_from_anchor_u16(A0.world_flux_grad_mean_q15);
+        const uint32_t g1 = (uint32_t)ew_flux_grad_q0_15_from_anchor_u16(A1.world_flux_grad_mean_q15);
+        const uint32_t g2 = (uint32_t)ew_flux_grad_q0_15_from_anchor_u16(A2.world_flux_grad_mean_q15);
+        const uint32_t g = ((g0 + g1 + g2) / 3u) & 65535u;
+
+        // Pack: high16=flux_grad Q0.15, low16=harm_mean Q0.15.
+        const uint32_t z = ((g & 65535u) << 16) | (h & 65535u);
+
+        out_triples[i] = EwCarrierTriple{(uint32_t)leak_bundled, (uint32_t)doppler_bundled, z};
     }
     return true;
 #endif

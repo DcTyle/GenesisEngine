@@ -55,6 +55,8 @@ endif()
 
 add_library(EigenWareCore
     src/GE_runtime.cpp
+    src/GE_camera_anchor.cpp
+    src/GE_project_settings.cpp
     src/GE_neural_phase_ai.cpp
     src/GE_ai_policy.cpp
     src/GE_ai_anticipation.cpp
@@ -64,6 +66,7 @@ add_library(EigenWareCore
     src/GE_audio_features.cpp
     src/GE_speech_alignment.cpp
     src/GE_voice_synth.cpp
+    src/GE_g2p_lexicon.cpp
     src/GE_voice_predictive_model.cpp
     src/GE_math_foundation.cpp
     src/GE_experiment_templates.cpp
@@ -72,6 +75,7 @@ add_library(EigenWareCore
     src/GE_live_crawler.cpp
     src/GE_curriculum_manager.cpp
     src/GE_learning_checkpoint_gate.cpp
+    src/GE_learning_automation.cpp
     src/code_artifact_ops.cpp
     src/inspector_fields.cpp
     src/anchor_pack.cpp
@@ -88,6 +92,8 @@ add_library(EigenWareCore
     src/GE_quantity_peeling_trainer.cpp
     src/GE_coherence_graph_store.cpp
     src/GE_safety_governor.cpp
+    src/GE_phase_current.cpp
+    src/GE_global_coherence.cpp
     src/ancilla_ops.cpp
     src/substrate_alu.cpp
     src/substrate_harmonics.cpp
@@ -99,6 +105,11 @@ add_library(EigenWareCore
     src/bytes_encoder.cpp
     # CUDA-only glue (GPU-resident crawler/learning kernels). Added below when EW_ENABLE_CUDA is ON.
     src/GE_object_memory.cpp
+    src/GE_uv_unwrap.cpp
+    src/GE_uv_atlas_baker.cpp
+    src/GE_shell_mesh.cpp
+    src/GE_object_ancilla.cpp
+    src/GE_object_local_cuda.cpp
     src/ew_cordic.cpp
     src/spec_aux_ops.cpp
     src/canonical_ops.cpp
@@ -153,11 +164,9 @@ if (EW_BUILD_ASSIMP_TOOLS)
     target_link_libraries(EigenWareCore PUBLIC assimp::assimp)
 endif()
 
-add_executable(GenesisEngine
-    src/main.cpp
-)
-target_link_libraries(GenesisEngine PRIVATE EigenWareCore)
+# Main executables are provided by vulkan_app as genesis_runtime and genesis_editor.
 
+option(EW_ENABLE_UI_PARTITION "Enable UI anchor partition + chat stream" ON)
 option(EW_ENABLE_CUDA "Enable CUDA evolution kernel (required for GPU-only pipeline)" ON)
 if (EW_ENABLE_CUDA)
     enable_language(CUDA)
@@ -173,6 +182,8 @@ if (EW_ENABLE_CUDA)
         cuda/GE_canonicalize_kernels.cu
         cuda/GE_topk_select_kernels.cu
         cuda/symbol_tokenize_kernels.cu
+        cuda/GE_phase_current_kernels.cu
+        cuda/GE_object_local_kernels.cu
 )
     target_link_libraries(eigen_cuda PRIVATE CUDA::cudart)
     target_include_directories(eigen_cuda PRIVATE ${CUDAToolkit_INCLUDE_DIRS} ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -259,6 +270,12 @@ add_executable(test_microprocessor
 )
 target_link_libraries(test_microprocessor PRIVATE EigenWareCore)
 add_test(NAME microprocessor COMMAND test_microprocessor)
+
+add_executable(test_contact_constraint
+    tests/test_contact_constraint.cpp
+)
+target_link_libraries(test_contact_constraint PRIVATE EigenWareCore)
+add_test(NAME contact_constraint COMMAND test_contact_constraint)
 
 add_executable(ew_crawler_loop
     src/tools/crawler_loop_main.cpp
@@ -349,7 +366,7 @@ if (EW_ENFORCE_COHERENCE_GATE)
         VERBATIM
     )
     add_dependencies(coherence_gate test_determinism test_ai_golden test_microprocessor ew_contract_harness ew_verify_proofs)
-    add_dependencies(GenesisEngine coherence_gate)
+    # Executables are provided by vulkan_app; enforce coherence gate at build level.
 endif()
 
 add_custom_target(ew_package_artifacts

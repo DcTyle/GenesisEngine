@@ -86,6 +86,8 @@ static inline bool ew_relpath_less(const AnchorPackBlob& a, const AnchorPackBlob
 bool AnchorPack_install(std::vector<AnchorPackRecord>& out_records,
                         uint32_t lane_u32,
                         const EwId9& domain_id9) {
+    (void)lane_u32;
+    (void)domain_id9;
     std::vector<AnchorPackBlob> blobs;
     AnchorPackGen::get_embedded_blobs(blobs);
     std::stable_sort(blobs.begin(), blobs.end(), ew_relpath_less);
@@ -97,14 +99,22 @@ bool AnchorPack_install(std::vector<AnchorPackRecord>& out_records,
         AnchorPackRecord r;
         r.relpath_utf8 = b.relpath_utf8;
         r.artifact_id9 = AnchorPack_id9_from_relpath(b.relpath_utf8);
-        r.anchor.reset();
-        r.anchor.anchor_id9 = r.artifact_id9;
-        r.anchor.domain_id9 = domain_id9;
-        r.anchor.lane_u8 = (uint8_t)(lane_u32 & 0xFFu);
-        r.anchor.seq_u32 = 0u;
-        r.anchor.offset_u32 = 0u;
-        r.anchor.size_u32 = (uint32_t)b.comp_bytes_u8.size();
+        // AnchorPackRecord::anchor stores the embedded bytes' harmonic signature
+        // as substrate observables. The canonical Anchor type in this repo does
+        // not track lane/offset metadata; those belong to the pack record.
+        r.anchor = Anchor();
+        r.anchor.id = 0u;
+        r.anchor.kind_u32 = EW_ANCHOR_KIND_DOC_ROOT;
+        r.anchor.context_id_u32 = 0u;
+        r.anchor.crawler_id_u32 = 0u;
+        r.anchor.object_id_u64 = 0u;
+        r.anchor.object_phase_seed_u64 = 0u;
         AnchorPack_bytes_to_harmonics32_q15(b.comp_bytes_u8.data(), b.comp_bytes_u8.size(), r.anchor.harmonics_q15);
+        // Compute mean deterministically.
+        uint32_t sum = 0;
+        for (uint32_t i = 0; i < Anchor::HARMONICS_N; ++i) sum += (uint32_t)r.anchor.harmonics_q15[i];
+        r.anchor.harmonics_mean_q15 = (uint16_t)((sum + (Anchor::HARMONICS_N/2u)) / Anchor::HARMONICS_N);
+        r.anchor.harmonics_epoch_u32 = 1u;
         out_records.push_back(std::move(r));
     }
     return true;
