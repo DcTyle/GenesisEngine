@@ -19,7 +19,7 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    SubstrateMicroprocessor sm;
+    SubstrateManager sm;
     sm.set_projection_seed(1u);
 
     const std::string req = join_args(argc, argv);

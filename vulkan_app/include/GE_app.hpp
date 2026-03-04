@@ -39,6 +39,26 @@ private:
     HWND hwnd_bootstrap_ = nullptr;
     HWND hwnd_objlist_ = nullptr;
 
+    // Transform UI (authoritative in anchors; UI emits control packets)
+    HWND hwnd_posx_ = nullptr;
+    HWND hwnd_posy_ = nullptr;
+    HWND hwnd_posz_ = nullptr;
+    HWND hwnd_apply_xform_ = nullptr;
+
+    // Editor interaction UI
+    HWND hwnd_mode_translate_ = nullptr;
+    HWND hwnd_mode_rotate_ = nullptr;
+    HWND hwnd_frame_sel_ = nullptr;
+    HWND hwnd_axis_none_ = nullptr;
+    HWND hwnd_axis_x_ = nullptr;
+    HWND hwnd_axis_y_ = nullptr;
+    HWND hwnd_axis_z_ = nullptr;
+    HWND hwnd_undo_ = nullptr;
+    HWND hwnd_redo_ = nullptr;
+    HWND hwnd_snap_enable_ = nullptr;
+    HWND hwnd_grid_step_ = nullptr;
+    HWND hwnd_angle_step_ = nullptr;
+
     bool running_ = true;
     bool resized_ = false;
     int client_w_ = 0;
@@ -54,6 +74,33 @@ private:
     // Viewport observer camera + input
     EwCamera cam_{};
     EwInputState input_{};
+
+    // Editor interaction state (UI-side). Canonical copy is stored in substrate
+    // via EW_ANCHOR_KIND_EDITOR and updated by control packets.
+    uint64_t editor_selected_object_id_u64_ = 0;
+    uint32_t editor_selection_count_u32_ = 0;
+    uint64_t editor_selection_object_id_u64_[16] = {0};
+
+    uint8_t editor_gizmo_mode_u8_ = 1; // Translate
+    uint8_t editor_gizmo_space_u8_ = 0; // World
+    uint8_t editor_snap_enabled_u8_ = 0;
+    uint8_t editor_axis_constraint_u8_ = 0; // 0 none, 1 X, 2 Y, 3 Z
+    int32_t editor_grid_step_m_q16_16_ = (int32_t)(1 * 65536);
+    int32_t editor_angle_step_deg_q16_16_ = (int32_t)(15 * 65536);
+
+    // Camera rig (UI-side) for orbit/pan/dolly/fly; emitted as CameraSet packets.
+    float cam_target_[3] = {0.0f, 0.0f, 0.0f};
+    float cam_yaw_rad_ = 0.0f;
+    float cam_pitch_rad_ = 0.0f;
+    float cam_dist_m_ = 5.0f;
+
+    // Gizmo drag state
+    bool gizmo_drag_active_ = false;
+    int32_t drag_start_mouse_x_ = 0;
+    int32_t drag_start_mouse_y_ = 0;
+    int32_t drag_start_pos_q16_16_[3] = {0,0,0};
+    int32_t drag_last_pos_q16_16_[3] = {0,0,0};
+    int32_t drag_start_rot_q16_16_[4] = {0,0,0,65536};
 
     // Visualization toggle: when false, the app runs headless (no continuous presentation)
     // but simulation and verification continue.
@@ -77,6 +124,21 @@ private:
     void OnSend();
     void OnImportObj();
     void OnBootstrapGame();
+    void OnApplyTransform();
+
+    void EmitEditorSelection(uint64_t object_id_u64);
+    void EmitEditorToggleSelection(uint64_t object_id_u64);
+    void EmitEditorAxisConstraint();
+    void EmitEditorCommitTransformTxn(uint64_t object_id_u64,
+                                       const int32_t before_pos_q16_16[3],
+                                       const int32_t before_rot_q16_16[4],
+                                       const int32_t after_pos_q16_16[3],
+                                       const int32_t after_rot_q16_16[4]);
+    void EmitEditorUndo();
+    void EmitEditorRedo();
+    void EmitEditorGizmo();
+    void EmitEditorSnap();
+    void EmitCameraSetFromRig();
 
     void AppendOutputUtf8(const std::string& line);
 };

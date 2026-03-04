@@ -10,7 +10,7 @@
 #include "GE_runtime.hpp"
 #include "GE_operator_registry.hpp"
 
-static EwLedger compute_ledger_from_sim(const SubstrateMicroprocessor& sim);
+static EwLedger compute_ledger_from_sim(const SubstrateManager& sim);
 
 static inline void write_text_file(const std::string& path, const std::string& content) {
     FILE* f = std::fopen(path.c_str(), "wb");
@@ -40,7 +40,7 @@ static inline uint8_t u8_clamp_i64(int64_t x) {
     return static_cast<uint8_t>(x);
 }
 
-static inline void coord_sig9_u64x9(const SubstrateMicroprocessor& sim, uint64_t out9[9]) {
+static inline void coord_sig9_u64x9(const SubstrateManager& sim, uint64_t out9[9]) {
     for (int i = 0; i < 9; ++i) out9[i] = 0ULL;
     for (size_t k = 0; k < sim.anchors.size(); ++k) {
         const Anchor& a = sim.anchors[k];
@@ -57,7 +57,7 @@ static inline void coord_sig9_u64x9(const SubstrateMicroprocessor& sim, uint64_t
 }
 
 static inline void emit_rvc_artifacts(const std::string& out_dir,
-                                      const SubstrateMicroprocessor& sim,
+                                      const SubstrateManager& sim,
                                       int steps,
                                       uint64_t seed) {
     const size_t n = sim.anchors.size();
@@ -157,7 +157,7 @@ static inline void emit_rvc_artifacts(const std::string& out_dir,
     }
 }
 
-static EwLedger compute_ledger_from_sim(const SubstrateMicroprocessor& sim) {
+static EwLedger compute_ledger_from_sim(const SubstrateManager& sim) {
     EwState s;
     s.canonical_tick = sim.canonical_tick;
     s.reservoir = sim.reservoir;
@@ -168,8 +168,8 @@ static EwLedger compute_ledger_from_sim(const SubstrateMicroprocessor& sim) {
 }
 
 static bool run_determinism_harness(std::string* repro_out) {
-    SubstrateMicroprocessor a(64);
-    SubstrateMicroprocessor b(64);
+    SubstrateManager a(64);
+    SubstrateManager b(64);
     a.projection_seed = 123;
     b.projection_seed = 123;
 
@@ -210,7 +210,7 @@ static bool run_determinism_harness(std::string* repro_out) {
 }
 
 static bool run_conservation_harness(uint64_t* max_resid_out, std::string* repro_out) {
-    SubstrateMicroprocessor sim(128);
+    SubstrateManager sim(128);
     sim.projection_seed = 7;
 
     const EwLedger L0 = compute_ledger_from_sim(sim);
@@ -244,8 +244,8 @@ static bool run_conservation_harness(uint64_t* max_resid_out, std::string* repro
 }
 
 static bool run_decoherence_harness(uint64_t* gamma_effect_out, std::string* repro_out) {
-    SubstrateMicroprocessor s0(32);
-    SubstrateMicroprocessor s1(32);
+    SubstrateManager s0(32);
+    SubstrateManager s1(32);
     s0.projection_seed = 99;
     s1.projection_seed = 99;
 
@@ -274,7 +274,7 @@ static bool run_decoherence_harness(uint64_t* gamma_effect_out, std::string* rep
 }
 
 static bool run_identity_harness(std::string* repro_out) {
-    SubstrateMicroprocessor sim(64);
+    SubstrateManager sim(64);
     sim.projection_seed = 5;
 
     std::vector<uint32_t> ids;
@@ -335,7 +335,7 @@ int main(int argc, char** argv) {
 
     // RVC required artifacts (per run)
     {
-        SubstrateMicroprocessor sim(128);
+        SubstrateManager sim(128);
         sim.projection_seed = seed;
         sim.configure_cosmic_expansion(1, 1);
         for (int k = 0; k < steps; ++k) sim.tick();

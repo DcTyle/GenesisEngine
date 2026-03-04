@@ -105,7 +105,7 @@ static uint32_t sandbox_for_track(LearningTrack t) {
     }
 }
 
-bool LearningAutomation::track_prereqs_satisfied(SubstrateMicroprocessor* sm, LearningTrack t) {
+bool LearningAutomation::track_prereqs_satisfied(SubstrateManager* sm, LearningTrack t) {
     if (!sm) return false;
 
     // Curriculum logic:
@@ -151,7 +151,7 @@ bool LearningAutomation::track_prereqs_satisfied(SubstrateMicroprocessor* sm, Le
 // Automation
 // -----------------------------------------------------------------------------
 
-void LearningAutomation::init_once(SubstrateMicroprocessor* sm) {
+void LearningAutomation::init_once(SubstrateManager* sm) {
     if (inited_) return;
     inited_ = true;
 
@@ -183,7 +183,7 @@ void LearningAutomation::init_once(SubstrateMicroprocessor* sm) {
     if (is_commit_safe_small_utf8(a.payload_utf8)) bus_.push(a);
 }
 
-void LearningAutomation::emit_eval_results(SubstrateMicroprocessor* sm) {
+void LearningAutomation::emit_eval_results(SubstrateManager* sm) {
     if (!sm) return;
 
     const auto& completed = sm->learning_gate.registry().completed();
@@ -223,7 +223,7 @@ void LearningAutomation::emit_eval_results(SubstrateMicroprocessor* sm) {
     }
 }
 
-void LearningAutomation::maybe_seed_plans(SubstrateMicroprocessor* sm) {
+void LearningAutomation::maybe_seed_plans(SubstrateManager* sm) {
     if (!sm) return;
     // Ensure allowlist is loaded and crawl sessions exist (but do not execute network unless enabled).
     if (!sm->corpus_allowlist_loaded) {
@@ -231,7 +231,7 @@ void LearningAutomation::maybe_seed_plans(SubstrateMicroprocessor* sm) {
     }
 }
 
-void LearningAutomation::plan_expand_for_stage(SubstrateMicroprocessor* sm, uint32_t stage_u32) {
+void LearningAutomation::plan_expand_for_stage(SubstrateManager* sm, uint32_t stage_u32) {
     if (!sm) return;
 
     // Expand to CrawlRequests for eligible tracks, in a bounded round-robin style.
@@ -246,7 +246,7 @@ void LearningAutomation::plan_expand_for_stage(SubstrateMicroprocessor* sm, uint
     schedule_parallel_tasks(sm, stage_u32);
 }
 
-void LearningAutomation::schedule_parallel_tasks(SubstrateMicroprocessor* sm, uint32_t stage_u32) {
+void LearningAutomation::schedule_parallel_tasks(SubstrateManager* sm, uint32_t stage_u32) {
     if (!sm) return;
     (void)stage_u32;
 
@@ -294,7 +294,7 @@ void LearningAutomation::schedule_parallel_tasks(SubstrateMicroprocessor* sm, ui
     }
 }
 
-void LearningAutomation::process_one_artifact(SubstrateMicroprocessor* sm, const AutoArtifact& a) {
+void LearningAutomation::process_one_artifact(SubstrateManager* sm, const AutoArtifact& a) {
     if (!sm) return;
 
     if (a.kind == AutoArtifactKind::CrawlRequest) {
@@ -339,7 +339,7 @@ void LearningAutomation::process_one_artifact(SubstrateMicroprocessor* sm, const
     }
 }
 
-void LearningAutomation::tick(SubstrateMicroprocessor* sm) {
+void LearningAutomation::tick(SubstrateManager* sm) {
     if (!sm) return;
     if (!enabled_) return;
 

@@ -3,12 +3,21 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include <cmath>
 
 struct EwSceneObject {
     uint32_t id = 0;
     std::string name_utf8;
     std::string source_path_utf8;
     EwTransform xform;
+    // Cached fixed-point representation for render-time use (no draw-time float conversions).
+    int32_t pos_q16_16[3] = {0,0,0};
+    void refresh_fixed_cache() {
+        // Deterministic float->fixed conversion (round to nearest).
+        pos_q16_16[0] = (int32_t)llround((double)xform.position.x * 65536.0);
+        pos_q16_16[1] = (int32_t)llround((double)xform.position.y * 65536.0);
+        pos_q16_16[2] = (int32_t)llround((double)xform.position.z * 65536.0);
+    }
 };
 
 struct EwScene {

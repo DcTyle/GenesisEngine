@@ -1,7 +1,7 @@
 #include "assimp_fbx_io.hpp"
 #include "ew_cli_args.hpp"
 
-#include "ew_substrate_microprocessor.h"
+#include "ew_substrate_manager.h"
 
 #include <cstdio>
 #include <string>
@@ -33,7 +33,7 @@ int main(int argc, char** argv) {
 
     std::string report;
     genesis::EwMeshV1 mesh;
-    SubstrateMicroprocessor sm = ew_substrate_microprocessor_build_default(/*seed=*/1u);
+    SubstrateManager sm = ew_substrate_manager_build_default(/*seed=*/1u);
     sm.materials_calib_done = true;
     if (!genesis::assimp_import_to_ewmesh_v1(&sm, in_path, mesh, &report)) {
         std::fprintf(stderr, "%s", report.c_str());

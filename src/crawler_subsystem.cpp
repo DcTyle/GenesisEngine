@@ -114,7 +114,7 @@ EigenWare::EwId9 CrawlerSubsystem::id9_from_spidercode4_(uint16_t f, uint16_t a,
 // encoding. The only CPU responsibility here is deterministic batching and
 // scheduling (queue order + size caps), then dispatching the GPU encoder.
 
-void CrawlerSubsystem::tick(SubstrateMicroprocessor* sm) {
+void CrawlerSubsystem::tick(SubstrateManager* sm) {
     if (!sm) return;
 
     // Deterministic queue ordering: stable sort by (domain_id9, url_id9, artifact_id, causal_tag).

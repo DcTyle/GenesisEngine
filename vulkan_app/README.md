@@ -42,7 +42,7 @@ The current renderer is a deterministic **clear-only** frame (no shaders yet), w
 The right panel is implemented using Win64 controls (no third-party UI deps):
 
 - **Input**: UTF-8 text line
-- **Send**: injects into `SubstrateMicroprocessor::ui_submit_user_text_line()`
+- **Send**: injects into `SubstrateManager::ui_submit_user_text_line()`
 - **Output**: shows up to 64 emitted lines per tick
 - **Import OBJ**: imports Wavefront `.obj` into the scene list
 

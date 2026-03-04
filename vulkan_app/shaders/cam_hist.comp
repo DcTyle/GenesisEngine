@@ -1,0 +1,26 @@
+#version 450
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+// Depth input (D32) sampled as normalized [0,1]
+layout(binding = 0) uniform sampler2D uDepth;
+
+layout(std430, binding = 1) buffer HistBuf {
+    uint bins[256];
+} hist;
+
+layout(push_constant) uniform PC {
+    uint width;
+    uint height;
+} pc;
+
+void main() {
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+    if (x >= pc.width || y >= pc.height) return;
+
+    vec2 uv = vec2((float(x) + 0.5) / float(pc.width), (float(y) + 0.5) / float(pc.height));
+    float d = texture(uDepth, uv).r;
+    d = clamp(d, 0.0, 1.0);
+    uint b = uint(d * 255.0 + 0.5);
+    atomicAdd(hist.bins[b], 1u);
+}

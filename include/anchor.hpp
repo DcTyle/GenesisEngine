@@ -1,6 +1,7 @@
 #pragma once
 #include <vector>
 #include <cstddef>
+#include <cstring>
 #include "fixed_point.hpp"
 
 // Anchor kind tags (deterministic, non-versioned).
@@ -11,8 +12,22 @@ static const uint32_t EW_ANCHOR_KIND_CRAWLER_ROOT = 3;
 static const uint32_t EW_ANCHOR_KIND_DOMAIN_ROOT = 4;
 static const uint32_t EW_ANCHOR_KIND_DOC_ROOT = 5;
 static const uint32_t EW_ANCHOR_KIND_CAMERA = 6;
+static const uint32_t EW_ANCHOR_KIND_OBJECT = 7;
+static const uint32_t EW_ANCHOR_KIND_PLANET = 8;
+static const uint32_t EW_ANCHOR_KIND_EDITOR = 9;
+static const uint32_t EW_ANCHOR_KIND_SPECTRAL_FIELD = 10;
+static const uint32_t EW_ANCHOR_KIND_COHERENCE_BUS = 11;
+static const uint32_t EW_ANCHOR_KIND_VOXEL_COUPLING = 12;
+static const uint32_t EW_ANCHOR_KIND_COLLISION_ENV = 13;
 
 #include "GE_camera_anchor.hpp"
+#include "GE_object_anchor.hpp"
+#include "GE_planet_anchor.hpp"
+#include "GE_editor_anchor.hpp"
+#include "GE_spectral_field_anchor.hpp"
+#include "GE_coherence_bus_anchor.hpp"
+#include "GE_voxel_coupling_anchor.hpp"
+#include "GE_collision_env_anchor.hpp"
 
 // Spider carrier bounds (deterministic, non-versioned).
 // These are carrier observables used for gating and tensor-gradient coupling.
@@ -95,8 +110,35 @@ public:
     // deterministic diffusion/noise shaping and energy dominance rules.
     uint16_t world_flux_grad_mean_q15;
 
+    // Derived collision environment coefficients (Q0.15).
+    // These are read-only, computed from world flux + coherence, and are
+    // intended to bias collision/contact resolution deterministically.
+    uint16_t collision_env_friction_q15;
+    uint16_t collision_env_restitution_q15;
+
     // Camera anchor payload. Valid only when kind_u32 == EW_ANCHOR_KIND_CAMERA.
     EwCameraAnchorState camera_state;
+
+    // Object anchor payload. Valid only when kind_u32 == EW_ANCHOR_KIND_OBJECT.
+    EwObjectAnchorState object_state;
+
+    // Planet anchor payload. Valid only when kind_u32 == EW_ANCHOR_KIND_PLANET.
+    EwPlanetAnchorState planet_state;
+
+    // Editor anchor payload. Valid only when kind_u32 == EW_ANCHOR_KIND_EDITOR.
+    EwEditorAnchorState editor_state;
+
+    // Spectral field anchor payload. Valid only when kind_u32 == EW_ANCHOR_KIND_SPECTRAL_FIELD.
+    EwSpectralFieldAnchorState spectral_field_state;
+
+    // Coherence bus anchor payload. Valid only when kind_u32 == EW_ANCHOR_KIND_COHERENCE_BUS.
+    EwCoherenceBusAnchorState coherence_bus_state;
+
+    // Voxel coupling anchor payload. Valid only when kind_u32 == EW_ANCHOR_KIND_VOXEL_COUPLING.
+    EwVoxelCouplingAnchorState voxel_coupling_state;
+
+    // Collision environment anchor payload. Valid only when kind_u32 == EW_ANCHOR_KIND_COLLISION_ENV.
+    EwCollisionEnvAnchorState collision_env_state;
 
     // Previous-step phase for deterministic doppler estimation.
     int64_t last_theta_q;
@@ -151,11 +193,19 @@ public:
           object_theta_scale_turns_q32_32(0),
           theta_q(0), chi_q(TURN_SCALE / 10),
           m_q(TURN_SCALE), tau_q(0), tau_turns_q(0),
-          curvature_q(0), doppler_q(0), world_flux_grad_mean_q15(0), last_theta_q(0) {
+          curvature_q(0), doppler_q(0), world_flux_grad_mean_q15(0), collision_env_friction_q15(0), collision_env_restitution_q15(0), last_theta_q(0) {
         last_f_code = 0;
         last_a_code = 0;
         last_v_code = 0;
         last_i_code = 0;
+
+        // Explicit zeroing of planet payload for bytewise determinism.
+        std::memset(&planet_state, 0, sizeof(planet_state));
+        std::memset(&editor_state, 0, sizeof(editor_state));
+        std::memset(&spectral_field_state, 0, sizeof(spectral_field_state));
+        std::memset(&coherence_bus_state, 0, sizeof(coherence_bus_state));
+        std::memset(&voxel_coupling_state, 0, sizeof(voxel_coupling_state));
+        std::memset(&collision_env_state, 0, sizeof(collision_env_state));
         last_lnA_q32_32 = 0;
         last_lnF_q32_32 = 0;
         dt_star_seconds_q32_32 = 0;

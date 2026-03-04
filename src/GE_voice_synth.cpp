@@ -51,6 +51,47 @@ static Formants ge_formants_for_vowel(const std::string& phone) {
     return {600, 1200, 2500};
 }
 
+// Simple resonator (biquad bandpass-ish) for formant shaping.
+struct Reson {
+    double a0 = 0, a1 = 0, a2 = 0;
+    double b1 = 0, b2 = 0;
+    double z1 = 0, z2 = 0;
+};
+
+static Reson ge_make_reson(double sr, double f_hz, double q) {
+    // RBJ cookbook bandpass constant skirt gain.
+    // Deterministic double math; stable for sr>=8k.
+    const double w0 = 2.0 * 3.141592653589793 * (f_hz / sr);
+    const double cw = std::cos(w0);
+    const double sw = std::sin(w0);
+    const double alpha = sw / (2.0 * q);
+
+    double b0 = alpha;
+    double b1 = 0.0;
+    double b2 = -alpha;
+    double a0 = 1.0 + alpha;
+    double a1 = -2.0 * cw;
+    double a2 = 1.0 - alpha;
+
+    Reson r;
+    r.a0 = b0 / a0;
+    r.a1 = b1 / a0;
+    r.a2 = b2 / a0;
+    r.b1 = a1 / a0;
+    r.b2 = a2 / a0;
+    r.z1 = 0.0;
+    r.z2 = 0.0;
+    return r;
+}
+
+static inline double ge_reson_tick(Reson& r, double x) {
+    // Direct Form I/II hybrid.
+    const double y = r.a0 * x + r.z1;
+    r.z1 = r.a1 * x - r.b1 * y + r.z2;
+    r.z2 = r.a2 * x - r.b2 * y;
+    return y;
+}
+
 TtsResult ge_synthesize_phones_to_wav(const std::vector<PhonemeSpan>& phones, const VoiceSynthConfig& cfg) {
     TtsResult r;
     r.wav.sample_rate_hz_u32 = (cfg.sample_rate_hz_u32 == 0) ? 48000u : cfg.sample_rate_hz_u32;
@@ -82,21 +123,26 @@ TtsResult ge_synthesize_phones_to_wav(const std::vector<PhonemeSpan>& phones, co
             // Silence.
         } else if (ge_is_vowel_phone(p)) {
             Formants f = ge_formants_for_vowel(p);
-            // Source: saw-ish (harmonic series) at f0.
-            // Filter: three sin carriers at formants. This is *not* a real vocoder;
-            // it just creates vowel-ish energy in the right bands.
+            // Source: harmonic glottal-like wave at f0.
+            // Filter: three resonators at vowel formants. Still lightweight, but materially clearer.
+            Reson r1 = ge_make_reson(sr, f.f1, 6.0);
+            Reson r2 = ge_make_reson(sr, f.f2, 8.0);
+            Reson r3 = ge_make_reson(sr, f.f3, 10.0);
             for (uint32_t i = 0; i < n; ++i) {
-                // Saw approximation with 6 harmonics
+                // Band-limited-ish harmonic sum (12 harmonics)
                 double src = 0.0;
-                for (int k = 1; k <= 6; ++k) src += (1.0 / (double)k) * ge_sin_2pi(phase * (double)k);
-                src *= 0.35;
-                // Formant mix
-                double t = (double)i / sr;
-                double y = src * (
-                    0.55 * std::sin(6.283185307179586 * f.f1 * t) +
-                    0.30 * std::sin(6.283185307179586 * f.f2 * t) +
-                    0.15 * std::sin(6.283185307179586 * f.f3 * t)
-                );
+                for (int k = 1; k <= 12; ++k) src += (1.0 / (double)k) * ge_sin_2pi(phase * (double)k);
+                src *= 0.25;
+
+                // Spectral tilt to reduce buzz.
+                const double tilt = 0.85;
+                src = src * (1.0 - 0.15 * phase) * tilt;
+
+                // Formant filtering.
+                double y = 0.0;
+                y += 0.65 * ge_reson_tick(r1, src);
+                y += 0.35 * ge_reson_tick(r2, src);
+                y += 0.20 * ge_reson_tick(r3, src);
                 // simple attack/decay
                 double a = std::min(1.0, (double)i / (0.02 * sr));
                 double d = std::min(1.0, (double)(n - 1 - i) / (0.03 * sr));

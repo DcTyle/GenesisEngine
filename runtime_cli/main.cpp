@@ -28,7 +28,7 @@ int main(int argc, char** argv) {
     (void)ew::ew_cli_get_u64(args, "export_object_id", export_object_id_u64);
     (void)ew::ew_cli_get_u64(args, "export-object-id", export_object_id_u64);
 
-    SubstrateMicroprocessor sm(64);
+    SubstrateManager sm(64);
     sm.set_projection_seed(0xC0FFEE1234ULL);
 
     // Configure tick dt deterministically (360 Hz).

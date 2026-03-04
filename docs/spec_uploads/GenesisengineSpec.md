@@ -1966,7 +1966,7 @@ Thermal ledger ontology binding (anchor-encoded, non-exportable):
   - basis[24] delta_time_tensor_q63  = 0 => default q63_one/256; SHALL be calibrated at boot from measurement granularity and then frozen
 
 Boot calibration (authoritative source for delta_time_tensor_q63):
-- SubstrateMicroprocessor SHALL calibrate delta_time_tensor_q63 ONCE at boot before copying AnchorDef bank to device memory.
+- SubstrateManager SHALL calibrate delta_time_tensor_q63 ONCE at boot before copying AnchorDef bank to device memory.
 - Calibration reads only measurable envelope counts (no map exposure). The reference provider is NVML power telemetry (counts = mW).
 - Define an idle baseline to avoid baking driver- or board-specific offsets into the spacing:
   - Collect N_idle = 64 samples of power_mw with sleep_ms = 10 between samples.
@@ -1988,7 +1988,7 @@ Boot calibration (authoritative source for delta_time_tensor_q63):
 - Freeze:
   - Write anchor0.constraint_fabric.basis[24] = delta_time_tensor_q63 and treat it as immutable after boot.
 - Fallback:
-  - If telemetry is unavailable, SubstrateMicroprocessor SHALL leave basis[24] = 0, which triggers the canonical default delta = q63_one/256.
+  - If telemetry is unavailable, SubstrateManager SHALL leave basis[24] = 0, which triggers the canonical default delta = q63_one/256.
 - The routing itself is not a new physics operator; it is a deterministic ledger split of an already-defined leakage quantity into:
   (a) reservoir_mass_q63 (thermal pool / abs0 reference) and (b) radiation_mass_q63 (discontinuity emission sink).
 Absolute zero reference (CMB reservoir):

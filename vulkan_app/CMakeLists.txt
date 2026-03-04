@@ -102,11 +102,15 @@ endif()
 set(EW_SHADERS
     "${EW_SHADER_DIR}/instanced.vert"
     "${EW_SHADER_DIR}/instanced.frag"
+    "${EW_SHADER_DIR}/cam_hist.comp"
+    "${EW_SHADER_DIR}/cam_median.comp"
 )
 
 set(EW_SPV
     "${EW_SHADER_OUT}/instanced.vert.spv"
     "${EW_SHADER_OUT}/instanced.frag.spv"
+    "${EW_SHADER_OUT}/cam_hist.comp.spv"
+    "${EW_SHADER_OUT}/cam_median.comp.spv"
 )
 
 if (WIN32)
@@ -122,6 +126,20 @@ if (WIN32)
         COMMAND "${EW_SHADER_COMPILER}" $<$<STREQUAL:${EW_COMP_MODE},glslc>:-o> "${EW_SHADER_OUT}/instanced.frag.spv" "${EW_SHADER_DIR}/instanced.frag"
         COMMAND "${EW_SHADER_COMPILER}" $<$<STREQUAL:${EW_COMP_MODE},glslang>:-V> "${EW_SHADER_DIR}/instanced.frag" -o "${EW_SHADER_OUT}/instanced.frag.spv"
         DEPENDS "${EW_SHADER_DIR}/instanced.frag"
+        VERBATIM)
+
+    add_custom_command(
+        OUTPUT "${EW_SHADER_OUT}/cam_hist.comp.spv"
+        COMMAND "${EW_SHADER_COMPILER}" $<$<STREQUAL:${EW_COMP_MODE},glslc>:-o> "${EW_SHADER_OUT}/cam_hist.comp.spv" "${EW_SHADER_DIR}/cam_hist.comp"
+        COMMAND "${EW_SHADER_COMPILER}" $<$<STREQUAL:${EW_COMP_MODE},glslang>:-V> "${EW_SHADER_DIR}/cam_hist.comp" -o "${EW_SHADER_OUT}/cam_hist.comp.spv"
+        DEPENDS "${EW_SHADER_DIR}/cam_hist.comp"
+        VERBATIM)
+
+    add_custom_command(
+        OUTPUT "${EW_SHADER_OUT}/cam_median.comp.spv"
+        COMMAND "${EW_SHADER_COMPILER}" $<$<STREQUAL:${EW_COMP_MODE},glslc>:-o> "${EW_SHADER_OUT}/cam_median.comp.spv" "${EW_SHADER_DIR}/cam_median.comp"
+        COMMAND "${EW_SHADER_COMPILER}" $<$<STREQUAL:${EW_COMP_MODE},glslang>:-V> "${EW_SHADER_DIR}/cam_median.comp" -o "${EW_SHADER_OUT}/cam_median.comp.spv"
+        DEPENDS "${EW_SHADER_DIR}/cam_median.comp"
         VERBATIM)
 
     add_custom_target(EWShaders ALL DEPENDS ${EW_SPV})

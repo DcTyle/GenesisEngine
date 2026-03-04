@@ -4,7 +4,7 @@
 #include "GE_control_packets.hpp"
 #include "GE_camera_anchor.hpp"
 
-void ew_runtime_submit_pulsepacket(SubstrateMicroprocessor* sm, const PulsePacketV1* p) {
+void ew_runtime_submit_pulsepacket(SubstrateManager* sm, const PulsePacketV1* p) {
     if (!sm || !p) return;
     if (ew_pulsepacketv1_validate(p) != EW_INGRESS_OK) return;
 
@@ -36,23 +36,23 @@ void ew_runtime_submit_pulsepacket(SubstrateMicroprocessor* sm, const PulsePacke
     sm->enqueue_inbound_pulse(pp);
 }
 
-void ew_runtime_submit_external_api_response(SubstrateMicroprocessor* sm, const EwExternalApiResponse& resp) {
+void ew_runtime_submit_external_api_response(SubstrateManager* sm, const EwExternalApiResponse& resp) {
     if (!sm) return;
     sm->submit_external_api_response(resp);
 }
 
-bool ew_runtime_pop_external_api_request(SubstrateMicroprocessor* sm, EwExternalApiRequest* out_req) {
+bool ew_runtime_pop_external_api_request(SubstrateManager* sm, EwExternalApiRequest* out_req) {
     if (!sm || !out_req) return false;
     return sm->pop_external_api_request(*out_req);
 }
 
 
-bool ew_runtime_language_bootstrap(SubstrateMicroprocessor* sm, const char* root_dir_utf8) {
+bool ew_runtime_language_bootstrap(SubstrateManager* sm, const char* root_dir_utf8) {
     if (!sm || !root_dir_utf8) return false;
     return sm->language_bootstrap_from_dir(std::string(root_dir_utf8));
 }
 
-std::vector<EwVizPoint> ew_runtime_project_points(const SubstrateMicroprocessor* sm, uint32_t max_points_u32) {
+std::vector<EwVizPoint> ew_runtime_project_points(const SubstrateManager* sm, uint32_t max_points_u32) {
     if (!sm) return {};
     std::vector<EwVizPoint> pts;
     pts.reserve((max_points_u32 == 0u) ? 0u : max_points_u32);
@@ -61,12 +61,12 @@ std::vector<EwVizPoint> ew_runtime_project_points(const SubstrateMicroprocessor*
     return pts;
 }
 
-bool ew_runtime_submit_control_packet(SubstrateMicroprocessor* sm, const EwControlPacket* p) {
+bool ew_runtime_submit_control_packet(SubstrateManager* sm, const EwControlPacket* p) {
     if (!sm || !p) return false;
     return sm->control_packet_push(*p);
 }
 
-bool ew_runtime_get_render_camera_packet(const SubstrateMicroprocessor* sm, EwRenderCameraPacket* out) {
+bool ew_runtime_get_render_camera_packet(const SubstrateManager* sm, EwRenderCameraPacket* out) {
     if (!sm || !out) return false;
     // Renderer consumes the projected packet computed inside the substrate tick.
     // Fail closed if not yet projected.
@@ -75,3 +75,45 @@ bool ew_runtime_get_render_camera_packet(const SubstrateMicroprocessor* sm, EwRe
     return true;
 }
 
+bool ew_runtime_get_render_assist_packet(const SubstrateManager* sm, EwRenderAssistPacket* out) {
+    if (!sm || !out) return false;
+    if (sm->render_assist_packet_tick_u64 == 0u) return false;
+    *out = sm->render_assist_packet;
+    return true;
+}
+
+void ew_runtime_submit_camera_sensor_median_norm(SubstrateManager* sm, int32_t median_depth_norm_q16_16, uint64_t tick_u64) {
+    if (!sm) return;
+    // Observation ingress only: deterministic write. Convert-to-meters and
+    // autofocus are performed inside the substrate compute op.
+    sm->camera_sensor.median_depth_norm_q16_16 = median_depth_norm_q16_16;
+    sm->camera_sensor.tick_u64 = tick_u64;
+}
+
+
+void ew_runtime_submit_xr_eye_pose_f32(SubstrateManager* sm, uint32_t eye_index_u32, const float pos_xyz_f32[3], const float rot_xyzw_f32[4], uint64_t tick_u64) {
+    if (!sm) return;
+    sm->submit_xr_eye_pose_f32(eye_index_u32, pos_xyz_f32, rot_xyzw_f32, tick_u64);
+}
+
+bool ew_runtime_get_render_xr_eye_packet(const SubstrateManager* sm, uint32_t eye_index_u32, EwRenderXrEyePacket* out) {
+    if (!sm || !out) return false;
+    return sm->get_render_xr_eye_packet(eye_index_u32, out);
+}
+
+bool ew_runtime_get_render_object_packets(const SubstrateManager* sm, const EwRenderObjectPacket** out_packets, size_t* out_count) {
+    if (!sm || !out_packets || !out_count) return false;
+    if (sm->render_object_packets_tick_u64 == 0u) return false;
+    *out_packets = sm->render_object_packets.empty() ? nullptr : sm->render_object_packets.data();
+    *out_count = sm->render_object_packets.size();
+    return true;
+}
+
+uint64_t ew_runtime_get_state_fingerprint_9d(const SubstrateManager* sm, uint64_t* out_tick_u64) {
+    if (!sm) {
+        if (out_tick_u64) *out_tick_u64 = 0u;
+        return 0u;
+    }
+    if (out_tick_u64) *out_tick_u64 = sm->state_fingerprint_tick_u64;
+    return sm->state_fingerprint_u64;
+}

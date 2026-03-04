@@ -32,7 +32,12 @@
 #include "GE_live_crawler.hpp"
 
 #include "GE_project_settings.hpp"
+#include "GE_asset_substrate.hpp"
 #include "GE_control_packets.hpp"
+
+#include "GE_planet_anchor.hpp"
+#include "GE_nbody.hpp"
+#include "GE_state_fingerprint.hpp"
 
 #include "GE_curriculum_manager.hpp"
 #include "GE_ai_policy.hpp"
@@ -187,6 +192,29 @@ struct EwInputs {
     // Pulses and modality displacements for the tick.
     std::vector<Pulse> inbound;
 
+    // -----------------------------------------------------------------
+        // Sandbox environment (level container)
+        // -----------------------------------------------------------------
+        // A sandbox is a bounded environment the AI can scale and use for
+        // measurable experiments, object synthesis, and task-scoped simulation.
+        // The viewport may render it as a boundary volume and optionally hide
+        // the broader world when replace_world_u32==1.
+        struct EwSandboxEnv {
+            uint32_t active_u32 = 0;
+            uint32_t replace_world_u32 = 0;
+            uint64_t created_tick_u64 = 0;
+            // Center in world units (Q32.32).
+            int64_t center_xyz_q32_32[3] = {0,0,0};
+            // Full size/extents in world units (Q32.32).
+            int64_t size_xyz_q32_32[3] = {0,0,0};
+            // Optional target object that motivated the scale choice.
+            uint64_t target_object_id_u64 = 0;
+        } sandbox_env;
+    
+        // Deterministically derive a sandbox scale from an object id hint and/or
+        // current object store. Returns a full extent in Q32.32.
+        int64_t derived_sandbox_scale_m_q32_32(uint64_t target_object_id_u64) const;
+
     // Read-path execution envelope sample for the tick (may be all zeros).
     EwEnvelopeSample envelope;
 
@@ -231,7 +259,7 @@ struct EwCtx {
     // Envelope headroom scalar derived from read-path counters, Q32.32 in [0,1].
     int64_t envelope_headroom_q32_32 = (1LL << 32);
 
-    // Carrier safety governor parameters (copied from SubstrateMicroprocessor each tick).
+    // Carrier safety governor parameters (copied from SubstrateManager each tick).
     EwGovernorParams governor;
 
     // -----------------------------------------------------------------
@@ -343,6 +371,9 @@ struct EwState {
     std::vector<EwQubitLane> lanes;
     EwObjectStore object_store;
 
+    // Canonical N-body state (snapshot-included).
+    genesis::EwNBodyState nbody_state;
+
     // Materials calibration gate propagated from the substrate.
     bool materials_calib_done = false;
 
@@ -386,7 +417,7 @@ public:
     }
 };
 
-class SubstrateMicroprocessor {
+class SubstrateManager {
 public:
     uint64_t canonical_tick = 0;
     int64_t reservoir = 0;
@@ -397,11 +428,19 @@ public:
     EwProjectSettings project_settings;
 
     // -----------------------------------------------------------------
+        // Asset library substrate (per-project + global cache)
+        // -----------------------------------------------------------------
+        genesis::GeAssetSubstrate asset_substrate;
+
+    // -----------------------------------------------------------------
     // Camera sensor sample (world->camera sampling only)
     // The viewport submits these read-only samples to the substrate.
     // -----------------------------------------------------------------
     struct EwCameraSensorSample {
-        int64_t median_depth_m_q32_32 = (int64_t)(5) * (1ll<<32);
+        // Median depth sample from Vulkan depth histogram pipeline.
+        // This is a normalized depth in [0,1] encoded as Q16.16.
+        // Conversion to meters (linear depth) happens inside the substrate.
+        int32_t median_depth_norm_q16_16 = (int32_t)(0.5f * 65536.0f);
         uint64_t tick_u64 = 0;
     } camera_sensor;
 
@@ -411,6 +450,31 @@ public:
     // -----------------------------------------------------------------
     EwRenderCameraPacket render_camera_packet;
     uint64_t render_camera_packet_tick_u64 = 0;
+
+    EwRenderAssistPacket render_assist_packet;
+    uint64_t render_assist_packet_tick_u64 = 0;
+
+    // Render object packets projected inside substrate (objects + planets).
+    std::vector<EwRenderObjectPacket> render_object_packets;
+    uint64_t render_object_packets_tick_u64 = 0;
+
+    // Deterministic state fingerprint (9D fingerprint harness).
+    uint64_t state_fingerprint_u64 = 0;
+    uint64_t state_fingerprint_tick_u64 = 0;
+    bool determinism_ref_loaded = false;
+    std::vector<uint64_t> determinism_ref_fingerprints;
+
+    // XR per-eye projected view packets. The viewport submits raw eye poses as observations,
+    // but the substrate computes and projects view matrices deterministically.
+    struct EwXrEyePoseF32 {
+        float pos_xyz_f32[3] = {0.f,0.f,0.f};
+        float rot_xyzw_f32[4] = {0.f,0.f,0.f,1.f};
+        uint64_t tick_u64 = 0;
+        uint32_t valid_u32 = 0;
+    } xr_eye_pose_f32[2];
+
+    EwRenderXrEyePacket render_xr_eye_packet[2];
+    uint64_t render_xr_eye_packet_tick_u64[2] = {0,0};
 
     // -----------------------------------------------------------------
     // Control packet inbox (UI/editor/input -> AI substrate)
@@ -422,6 +486,24 @@ public:
 
     bool control_packet_push(const EwControlPacket& p);
     bool control_packet_pop(EwControlPacket& out);
+
+    // -----------------------------------------------------------------
+    // Bounded trajectory / pulse admission telemetry
+    // -----------------------------------------------------------------
+    // Fixed per-anchor pulse budget used to prevent unbounded per-tick work.
+    // This is a CPU-side gate; authoritative evolution still occurs in the
+    // substrate operators.
+    static constexpr uint32_t TRAJ_SLOTS_PER_ANCHOR_U32 = 8u;
+
+    // Telemetry (updated once per canonical tick).
+    uint32_t pulses_seen_last_tick_u32 = 0u;
+    uint32_t pulses_dropped_last_tick_u32 = 0u;
+
+    // XR eye pose observation ingress.
+    void submit_xr_eye_pose_f32(uint32_t eye_index_u32, const float pos_xyz_f32[3], const float rot_xyzw_f32[4], uint64_t tick_u64);
+
+    // XR per-eye projected view packet.
+    bool get_render_xr_eye_packet(uint32_t eye_index_u32, EwRenderXrEyePacket* out) const;
 
     // -----------------------------------------------------------------
     // Pending compute-bus requests (hard no-direct-compute rule)
@@ -497,6 +579,18 @@ public:
     // Canonical camera anchor id.
     uint32_t camera_anchor_id_u32 = 0;
 
+    // Global coherence bus anchor id (mass-leakage -> coherence-frequency bus).
+    uint32_t coherence_bus_anchor_id_u32 = 0;
+
+    // Bootstrap spectral field anchor id (Fourier fan-out microprocessor).
+    uint32_t spectral_field_anchor_id_u32 = 0;
+
+    // Bootstrap voxel coupling anchor id (dense persistence + boundary coupling).
+    uint32_t voxel_coupling_anchor_id_u32 = 0;
+
+    // Collision environment anchor id (solver-facing constraints inbox).
+    uint32_t collision_env_anchor_id_u32 = 0;
+
     uint32_t alloc_anchor_id();
 
 
@@ -517,9 +611,11 @@ public:
     // Last per-tick context snapshot used by operator packets and deterministic bindings.
     EwCtx ctx_snapshot;
 
-    // Compatibility surface: some subsystems reference sm->ctx as the live
-    // per-tick context. This is kept byte-identical to ctx_snapshot.
+    // Compatibility surface: some subsystems reference sm->ctx as the live per-tick context.
+    // This is kept byte-identical to ctx_snapshot.
     EwCtx ctx;
+
+    // per-tick context. This is kept byte-identical to ctx_snapshot.
 
     // ΩA operator packet execution surface (Equations appendix ΩA).
     std::vector<EwAnchorOpPackedV1Bytes> operator_packets_v1;
@@ -1130,7 +1226,7 @@ std::deque<std::string> ui_out_q;
         (1LL << 32), (1LL << 32), (1LL << 32), (1LL << 32)
     };
 
-    explicit SubstrateMicroprocessor(size_t count);
+    explicit SubstrateManager(size_t count);
 
     // Record an AI action event deterministically (ring buffer).
     void ai_log_event(const EwAiActionEvent& e);

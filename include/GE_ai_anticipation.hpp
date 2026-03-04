@@ -3,7 +3,7 @@
 #include <cstdint>
 
 // Forward declaration to avoid heavy includes.
-class SubstrateMicroprocessor;
+class SubstrateManager;
 
 // -----------------------------------------------------------------------------
 // EwAiAnticipator
@@ -25,7 +25,7 @@ class SubstrateMicroprocessor;
 struct EwAiAnticipator {
     // Returns true if a rewrite is suggested. out_line is the suggested command
     // line. ui_tag is an optional UI telemetry string.
-    bool route(SubstrateMicroprocessor* sm,
+    bool route(SubstrateManager* sm,
                const std::string& in_line,
                std::string& out_line,
                std::string& ui_tag) const;

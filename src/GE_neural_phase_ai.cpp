@@ -38,7 +38,7 @@ uint64_t EwNeuralPhaseAI::sig9_fold(uint64_t acc, uint64_t x) {
     return acc;
 }
 
-uint64_t EwNeuralPhaseAI::sig9_from_state(const SubstrateMicroprocessor* sm) {
+uint64_t EwNeuralPhaseAI::sig9_from_state(const SubstrateManager* sm) {
     uint64_t acc = 0;
     acc = sig9_fold(acc, sm->canonical_tick);
     acc = sig9_fold(acc, (uint64_t)sm->anchors.size());
@@ -86,7 +86,7 @@ uint32_t EwNeuralPhaseAI::class_id_from_sig9(uint64_t sig9_u64) {
     return (uint32_t)((sig9_u64 >> 40) & 0xFFULL);
 }
 
-int64_t EwNeuralPhaseAI::confidence_from_state(const SubstrateMicroprocessor* sm) {
+int64_t EwNeuralPhaseAI::confidence_from_state(const SubstrateManager* sm) {
     if (sm->anchors.empty()) return (1LL << 31);
 
     int64_t sum_chi = 0;
@@ -119,7 +119,7 @@ int64_t EwNeuralPhaseAI::confidence_from_state(const SubstrateMicroprocessor* sm
     return mul_q32_32(chi_q32_32, pen_q32_32);
 }
 
-void EwNeuralPhaseAI::pre_tick(SubstrateMicroprocessor* sm) {
+void EwNeuralPhaseAI::pre_tick(SubstrateManager* sm) {
     if (!sm) return;
 
     // ---------------------------------------------------------------------
@@ -313,7 +313,7 @@ void EwNeuralPhaseAI::pre_tick(SubstrateMicroprocessor* sm) {
     sm->ai_log_event(evp);
 }
 
-void EwNeuralPhaseAI::post_tick(SubstrateMicroprocessor* sm) {
+void EwNeuralPhaseAI::post_tick(SubstrateManager* sm) {
     if (!sm) return;
 
     status_.tick_u64 = sm->canonical_tick;

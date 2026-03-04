@@ -1,4 +1,16 @@
-#include "GE_app.hpp"
+#include
+
+    // Snap controls (editor-side convenience; still emits packets only).
+        hwnd_xform_snap_ = CreateWindowW(L"BUTTON", L"Snap",
+                                         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                                         10, 312, 60, 20,
+                                         hwnd_panel_, (HMENU)2020, GetModuleHandleW(nullptr), nullptr);
+        hwnd_xform_step_label_ = CreateWindowW(L"STATIC", L"Step (m):",
+                                               WS_CHILD | WS_VISIBLE,
+                                               80, 314, 60, 18,
+                                               hwnd_panel_, (HMENU)2021, GetModuleHandleW(nullptr), nullptr);
+    
+ "GE_app.hpp"
 
 #include <vulkan/vulkan.h>
 #include <shellscalingapi.h>
@@ -13,7 +25,7 @@
 #include <sstream>
 #include <cstdlib>
 
-#include "GE_runtime.hpp" // SubstrateMicroprocessor
+#include "GE_runtime.hpp" // SubstrateManager
 #include "ew_runtime.h"      // ew_runtime_project_points
 #include "GE_object_memory.hpp"
 #include "field_lattice_cpu.hpp"
@@ -46,7 +58,7 @@ struct EwBindingsEditorWin32 {
     HWND edit = nullptr;
     HWND btn_save = nullptr;
     std::string path_utf8;
-    EigenWare::SubstrateMicroprocessor* sm = nullptr;
+    EigenWare::SubstrateManager* sm = nullptr;
 };
 
 static EwBindingsEditorWin32 g_bind_editor;
@@ -135,7 +147,7 @@ static LRESULT CALLBACK EwBindingsEditorProc(HWND h, UINT msg, WPARAM w, LPARAM 
     return DefWindowProcW(h, msg, w, l);
 }
 
-static void ew_open_bindings_editor(EigenWare::SubstrateMicroprocessor* sm, const std::string& path_utf8) {
+static void ew_open_bindings_editor(EigenWare::SubstrateManager* sm, const std::string& path_utf8) {
     if (g_bind_editor.hwnd) {
         SetForegroundWindow(g_bind_editor.hwnd);
         return;
@@ -222,7 +234,7 @@ static bool write_ewmesh_v1(const std::string& out_path_utf8, const EwObjMesh& m
 }
 
 struct App::Scene {
-    EigenWare::SubstrateMicroprocessor sm;
+    EigenWare::SubstrateManager sm;
     uint64_t next_object_id_u64 = 1;
 
     // Default solar-system demo state (Earth orbit).
@@ -244,6 +256,21 @@ struct App::Scene {
         uint32_t albedo_rgba8 = 0xFFFFFFFFu;
         uint32_t atmosphere_rgba8 = 0x00000000u;
         float emissive_f32 = 0.0f;
+// Cached fixed-point representation for render-time (no draw-time float conversions).
+int32_t pos_q16_16[3] = {0,0,0};
+int32_t rot_quat_q16_16[4] = {0,0,0,65536};
+int32_t radius_q16_16 = 0;
+int32_t atmosphere_thickness_q16_16 = 0;
+int32_t emissive_q16_16 = 0;
+
+void refresh_fixed_cache() {
+    pos_q16_16[0] = (int32_t)llround((double)xf.pos[0] * 65536.0);
+    pos_q16_16[1] = (int32_t)llround((double)xf.pos[1] * 65536.0);
+    pos_q16_16[2] = (int32_t)llround((double)xf.pos[2] * 65536.0);
+    radius_q16_16 = (int32_t)llround((double)radius_m_f32 * 65536.0);
+    atmosphere_thickness_q16_16 = (int32_t)llround((double)atmosphere_thickness_m_f32 * 65536.0);
+    emissive_q16_16 = (int32_t)llround((double)emissive_f32 * 65536.0);
+}
     };
 
     std::vector<Object> objects;
@@ -289,6 +316,7 @@ struct App::Scene {
     sun.atmosphere_rgba8 = 0x00000000u;
     sun.atmosphere_thickness_m_f32 = 0.0f;
     sun.emissive_f32 = 40.0f;
+        sun.refresh_fixed_cache();
     objects.push_back(sun);
 
     Object earth{};
@@ -303,15 +331,74 @@ struct App::Scene {
     earth.atmosphere_rgba8 = 0x80FFAA55u; // bluish with alpha
     earth.atmosphere_thickness_m_f32 = 100000.0f; // ~100km
     earth.emissive_f32 = 0.0f;
+        earth.refresh_fixed_cache();
     objects.push_back(earth);
 
     selected = 1; // Earth selected by default
+
+    // Register default celestial bodies as planet anchors (authoritative transforms).
+    {
+        auto emit_planet = [&](const Object& o) {
+            EwControlPacket cp{};
+            cp.kind = EwControlPacketKind::ObjectRegister;
+            cp.source_u16 = 1;
+            cp.tick_u64 = sm.canonical_tick;
+            cp.payload.object_register.object_id_u64 = o.object_id_u64;
+            cp.payload.object_register.kind_u32 = EW_ANCHOR_KIND_PLANET;
+            cp.payload.object_register.pad0_u32 = 0u;
+            cp.payload.object_register.pos_q16_16[0] = (int32_t)llround((double)o.xf.pos[0] * 65536.0);
+            cp.payload.object_register.pos_q16_16[1] = (int32_t)llround((double)o.xf.pos[1] * 65536.0);
+            cp.payload.object_register.pos_q16_16[2] = (int32_t)llround((double)o.xf.pos[2] * 65536.0);
+            cp.payload.object_register.rot_quat_q16_16[0] = 0;
+            cp.payload.object_register.rot_quat_q16_16[1] = 0;
+            cp.payload.object_register.rot_quat_q16_16[2] = 0;
+            cp.payload.object_register.rot_quat_q16_16[3] = 65536;
+            cp.payload.object_register.radius_m_q16_16 = (int32_t)llround((double)o.radius_m_f32 * 65536.0);
+            cp.payload.object_register.albedo_rgba8 = o.albedo_rgba8;
+            cp.payload.object_register.atmosphere_rgba8 = o.atmosphere_rgba8;
+            cp.payload.object_register.atmosphere_thickness_m_q16_16 = (int32_t)llround((double)o.atmosphere_thickness_m_f32 * 65536.0);
+            cp.payload.object_register.emissive_q16_16 = (int32_t)llround((double)o.emissive_f32 * 65536.0);
+            (void)ew_runtime_submit_control_packet(&sm, &cp);
+        };
+        emit_planet(objects[0]);
+        emit_planet(objects[1]);
+    }
 }
     }
 
     
 void Tick() {
     sm.tick();
+
+
+    // Pull authoritative render-object packets from substrate (object/planet anchors).
+    {
+        const EwRenderObjectPacket* ptr = nullptr;
+        uint32_t count = 0u;
+        uint64_t tick_u64 = 0u;
+        if (ew_runtime_get_render_object_packets(&sm, &ptr, &count, &tick_u64) && ptr && count > 0u) {
+            // Update local scene cache for UI selection lists (not authoritative).
+            for (uint32_t i = 0u; i < count; ++i) {
+                const EwRenderObjectPacket& p = ptr[i];
+                for (auto& o : objects) {
+                    if (o.object_id_u64 == p.object_id_u64) {
+                        o.anchor_id_u32 = p.anchor_id_u32;
+                        o.xf.pos[0] = (float)p.pos_q16_16[0] / 65536.0f;
+                        o.xf.pos[1] = (float)p.pos_q16_16[1] / 65536.0f;
+                        o.xf.pos[2] = (float)p.pos_q16_16[2] / 65536.0f;
+                        for (int k = 0; k < 4; ++k) o.rot_quat_q16_16[k] = p.rot_quat_q16_16[k];
+                        o.radius_m_f32 = (float)p.radius_q16_16 / 65536.0f;
+                        o.albedo_rgba8 = p.albedo_rgba8;
+                        o.atmosphere_rgba8 = p.atmosphere_rgba8;
+                        o.atmosphere_thickness_m_f32 = (float)p.atmosphere_thickness_q16_16 / 65536.0f;
+                        o.emissive_f32 = (float)p.emissive_q16_16 / 65536.0f;
+                        o.refresh_fixed_cache();
+                        break;
+                    }
+                }
+            }
+        }
+    }
 
     // ------------------------------------------------------------
     // Minimal solar-system demo: Earth orbiting Sun.
@@ -329,9 +416,9 @@ void Tick() {
     const float AU = 149597870700.0f;
     if (objects.size() >= 2) {
         Object& earth = objects[1];
-        earth.xf.pos[0] = (float)(AU * std::cos(earth_orbit_angle_rad));
-        earth.xf.pos[1] = (float)(AU * std::sin(earth_orbit_angle_rad));
-        earth.xf.pos[2] = 0.0f;
+        // Orbit updates are substrate-authoritative; viewport does not compute analytic motion.
+        // Earth position is updated from substrate-projected object packets when available.
+        (void)earth_orbit_angle_rad;
     }
 
     lattice.step_one_tick();
@@ -486,17 +573,38 @@ void Tick() {
         const std::string out_mesh = out_dir + e.label_utf8 + ".ewmesh";
         (void)write_ewmesh_v1(out_mesh, m);
 
-        const uint32_t anchor_id = (uint32_t)objects.size();
-        if (anchor_id < sm.anchors.size()) {
-            sm.anchors[anchor_id].object_id_u64 = object_id;
-            sm.anchors[anchor_id].object_phase_seed_u64 = e.phase_seed_u64;
+        // Register object anchor (authoritative transform lives in substrate).
+        {
+            EwControlPacket cp{};
+            cp.kind = EwControlPacketKind::ObjectRegister;
+            cp.source_u16 = 1;
+            cp.tick_u64 = sm.canonical_tick;
+            cp.payload.object_register.object_id_u64 = object_id;
+            cp.payload.object_register.kind_u32 = EW_ANCHOR_KIND_OBJECT;
+            cp.payload.object_register.pad0_u32 = 0u;
+            cp.payload.object_register.pos_q16_16[0] = 0;
+            cp.payload.object_register.pos_q16_16[1] = 0;
+            cp.payload.object_register.pos_q16_16[2] = 0;
+            cp.payload.object_register.rot_quat_q16_16[0] = 0;
+            cp.payload.object_register.rot_quat_q16_16[1] = 0;
+            cp.payload.object_register.rot_quat_q16_16[2] = 0;
+            cp.payload.object_register.rot_quat_q16_16[3] = 65536;
+            const float r = 0.5f * ((ex > ey) ? ((ex > ez) ? ex : ez) : ((ey > ez) ? ey : ez));
+            cp.payload.object_register.radius_m_q16_16 = (int32_t)llround((double)r * 65536.0);
+            cp.payload.object_register.albedo_rgba8 = 0xFFFFFFFFu;
+            cp.payload.object_register.atmosphere_rgba8 = 0x00000000u;
+            cp.payload.object_register.atmosphere_thickness_m_q16_16 = 0;
+            cp.payload.object_register.emissive_q16_16 = 0;
+            (void)ew_runtime_submit_control_packet(&sm, &cp);
         }
+
 
         Object o;
         o.name_utf8 = path_utf8;
         o.mesh = std::move(m);
         o.object_id_u64 = object_id;
-        o.anchor_id_u32 = anchor_id;
+        o.anchor_id_u32 = 0;
+        o.refresh_fixed_cache();
         objects.push_back(std::move(o));
         selected = (int)objects.size() - 1;
         return true;
@@ -537,6 +645,27 @@ struct App::VkCtx {
     VkDescriptorPool ds_pool = VK_NULL_HANDLE;
     VkDescriptorSet ds = VK_NULL_HANDLE;
 
+    // Depth buffer (required for camera sensor histogram)
+    VkImage depth_image = VK_NULL_HANDLE;
+    VkDeviceMemory depth_mem = VK_NULL_HANDLE;
+    VkImageView depth_view = VK_NULL_HANDLE;
+    VkSampler depth_sampler = VK_NULL_HANDLE;
+    VkFormat depth_format = VK_FORMAT_D32_SFLOAT;
+
+    // Camera sensor compute pipelines
+    VkDescriptorSetLayout cam_ds_layout = VK_NULL_HANDLE;
+    VkPipelineLayout cam_pipe_layout = VK_NULL_HANDLE;
+    VkPipeline cam_hist_pipe = VK_NULL_HANDLE;
+    VkPipeline cam_median_pipe = VK_NULL_HANDLE;
+    VkDescriptorPool cam_ds_pool = VK_NULL_HANDLE;
+    VkDescriptorSet cam_hist_ds = VK_NULL_HANDLE;
+    VkDescriptorSet cam_median_ds = VK_NULL_HANDLE;
+    VkBuffer cam_hist_buf = VK_NULL_HANDLE;
+    VkDeviceMemory cam_hist_mem = VK_NULL_HANDLE;
+    VkBuffer cam_out_buf = VK_NULL_HANDLE;
+    VkDeviceMemory cam_out_mem = VK_NULL_HANDLE;
+    void* cam_out_mapped = nullptr;
+
     // Production virtual texture system: atlas + page table.
     VkImage vt_atlas_image = VK_NULL_HANDLE;
     VkDeviceMemory vt_atlas_mem = VK_NULL_HANDLE;
@@ -569,6 +698,10 @@ struct App::VkCtx {
         for (auto v : swap_views) if (v) vkDestroyImageView(dev, v, nullptr);
         swap_views.clear();
         swap_images.clear();
+        if (depth_sampler) { vkDestroySampler(dev, depth_sampler, nullptr); depth_sampler = VK_NULL_HANDLE; }
+        if (depth_view) { vkDestroyImageView(dev, depth_view, nullptr); depth_view = VK_NULL_HANDLE; }
+        if (depth_image) { vkDestroyImage(dev, depth_image, nullptr); depth_image = VK_NULL_HANDLE; }
+        if (depth_mem) { vkFreeMemory(dev, depth_mem, nullptr); depth_mem = VK_NULL_HANDLE; }
         if (swap) vkDestroySwapchainKHR(dev, swap, nullptr);
         swap = VK_NULL_HANDLE;
     }
@@ -582,6 +715,20 @@ struct App::VkCtx {
             if (pipe_layout) vkDestroyPipelineLayout(dev, pipe_layout, nullptr);
             if (ds_layout) vkDestroyDescriptorSetLayout(dev, ds_layout, nullptr);
             if (ds_pool) vkDestroyDescriptorPool(dev, ds_pool, nullptr);
+
+            if (cam_hist_pipe) vkDestroyPipeline(dev, cam_hist_pipe, nullptr);
+            if (cam_median_pipe) vkDestroyPipeline(dev, cam_median_pipe, nullptr);
+            if (cam_pipe_layout) vkDestroyPipelineLayout(dev, cam_pipe_layout, nullptr);
+            if (cam_ds_layout) vkDestroyDescriptorSetLayout(dev, cam_ds_layout, nullptr);
+            if (cam_ds_pool) vkDestroyDescriptorPool(dev, cam_ds_pool, nullptr);
+            if (cam_hist_buf) { vkDestroyBuffer(dev, cam_hist_buf, nullptr); cam_hist_buf = VK_NULL_HANDLE; }
+            if (cam_hist_mem) { vkFreeMemory(dev, cam_hist_mem, nullptr); cam_hist_mem = VK_NULL_HANDLE; }
+            if (cam_out_buf) {
+                if (cam_out_mapped) { vkUnmapMemory(dev, cam_out_mem); cam_out_mapped = nullptr; }
+                vkDestroyBuffer(dev, cam_out_buf, nullptr);
+                cam_out_buf = VK_NULL_HANDLE;
+            }
+            if (cam_out_mem) { vkFreeMemory(dev, cam_out_mem, nullptr); cam_out_mem = VK_NULL_HANDLE; }
 
             if (vt_atlas_sampler) vkDestroySampler(dev, vt_atlas_sampler, nullptr);
             if (vt_atlas_view) vkDestroyImageView(dev, vt_atlas_view, nullptr);
@@ -1289,6 +1436,73 @@ static void create_swap(App::VkCtx& vk, uint32_t w, uint32_t h) {
     vk.swap_format = fmt.format;
     vk.swap_extent = extent;
 
+    // Depth buffer for sensor histogram + proper 3D depth.
+    {
+        // Destroy previous if any (swap resize).
+        if (vk.depth_sampler) { vkDestroySampler(vk.dev, vk.depth_sampler, nullptr); vk.depth_sampler = VK_NULL_HANDLE; }
+        if (vk.depth_view) { vkDestroyImageView(vk.dev, vk.depth_view, nullptr); vk.depth_view = VK_NULL_HANDLE; }
+        if (vk.depth_image) { vkDestroyImage(vk.dev, vk.depth_image, nullptr); vk.depth_image = VK_NULL_HANDLE; }
+        if (vk.depth_mem) { vkFreeMemory(vk.dev, vk.depth_mem, nullptr); vk.depth_mem = VK_NULL_HANDLE; }
+
+        VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        ici.imageType = VK_IMAGE_TYPE_2D;
+        ici.format = vk.depth_format;
+        ici.extent = {extent.width, extent.height, 1};
+        ici.mipLevels = 1;
+        ici.arrayLayers = 1;
+        ici.samples = VK_SAMPLE_COUNT_1_BIT;
+        ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ici.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        vk_check(vkCreateImage(vk.dev, &ici, nullptr, &vk.depth_image), "vkCreateImage(depth)");
+
+        VkMemoryRequirements req{};
+        vkGetImageMemoryRequirements(vk.dev, vk.depth_image, &req);
+        uint32_t mt = ew_find_memory_type(vk.phys, req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        mai.allocationSize = req.size;
+        mai.memoryTypeIndex = mt;
+        vk_check(vkAllocateMemory(vk.dev, &mai, nullptr, &vk.depth_mem), "vkAllocateMemory(depth)");
+        vk_check(vkBindImageMemory(vk.dev, vk.depth_image, vk.depth_mem, 0), "vkBindImageMemory(depth)");
+
+        VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        vci.image = vk.depth_image;
+        vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vci.format = vk.depth_format;
+        vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+        vci.subresourceRange.levelCount = 1;
+        vci.subresourceRange.layerCount = 1;
+        vk_check(vkCreateImageView(vk.dev, &vci, nullptr, &vk.depth_view), "vkCreateImageView(depth)");
+
+        VkSamplerCreateInfo sci_s{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+        sci_s.magFilter = VK_FILTER_NEAREST;
+        sci_s.minFilter = VK_FILTER_NEAREST;
+        sci_s.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        sci_s.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sci_s.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sci_s.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sci_s.minLod = 0.0f;
+        sci_s.maxLod = 0.0f;
+        vk_check(vkCreateSampler(vk.dev, &sci_s, nullptr, &vk.depth_sampler), "vkCreateSampler(depth)");
+    }
+
+    // If camera sensor descriptor sets exist, refresh depth binding.
+    if (vk.cam_hist_ds && vk.cam_median_ds) {
+        VkDescriptorImageInfo di{};
+        di.sampler = vk.depth_sampler;
+        di.imageView = vk.depth_view;
+        di.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        w.dstBinding = 0;
+        w.descriptorCount = 1;
+        w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w.pImageInfo = &di;
+        w.dstSet = vk.cam_hist_ds;
+        vkUpdateDescriptorSets(vk.dev, 1, &w, 0, nullptr);
+        w.dstSet = vk.cam_median_ds;
+        vkUpdateDescriptorSets(vk.dev, 1, &w, 0, nullptr);
+    }
+
     // Command buffers sized to swap.
     vk.cmdbufs.resize(nimg);
     VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
@@ -1443,6 +1657,13 @@ VkPushConstantRange pcr{};
     cb.attachmentCount = 1;
     cb.pAttachments = &cba;
 
+    VkPipelineDepthStencilStateCreateInfo dss{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    dss.depthTestEnable = VK_TRUE;
+    dss.depthWriteEnable = VK_TRUE;
+    dss.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+    dss.depthBoundsTestEnable = VK_FALSE;
+    dss.stencilTestEnable = VK_FALSE;
+
     VkDynamicState dyns[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
     VkPipelineDynamicStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
     ds.dynamicStateCount = 2;
@@ -1451,6 +1672,7 @@ VkPushConstantRange pcr{};
     VkPipelineRenderingCreateInfo pr{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
     pr.colorAttachmentCount = 1;
     pr.pColorAttachmentFormats = &vk.swap_format;
+    pr.depthAttachmentFormat = vk.depth_format;
 
     VkGraphicsPipelineCreateInfo pci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
     pci.pNext = &pr;
@@ -1462,6 +1684,7 @@ VkPushConstantRange pcr{};
     pci.pRasterizationState = &rs;
     pci.pMultisampleState = &ms;
     pci.pColorBlendState = &cb;
+    pci.pDepthStencilState = &dss;
     pci.pDynamicState = &ds;
     pci.layout = vk.pipe_layout;
     pci.renderPass = VK_NULL_HANDLE;
@@ -1471,6 +1694,169 @@ VkPushConstantRange pcr{};
 
     vkDestroyShaderModule(vk.dev, vs, nullptr);
     vkDestroyShaderModule(vk.dev, fs, nullptr);
+
+    // -----------------------------------------------------------------
+    // Camera sensor compute pipelines (depth histogram + deterministic median)
+    // -----------------------------------------------------------------
+    if (!vk.cam_ds_layout) {
+        VkDescriptorSetLayoutBinding cb[3]{};
+        // binding0: depth sampler
+        cb[0].binding = 0;
+        cb[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        cb[0].descriptorCount = 1;
+        cb[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        // binding1: histogram SSBO
+        cb[1].binding = 1;
+        cb[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        cb[1].descriptorCount = 1;
+        cb[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        // binding2: out SSBO
+        cb[2].binding = 2;
+        cb[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        cb[2].descriptorCount = 1;
+        cb[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+        VkDescriptorSetLayoutCreateInfo dl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        dl.bindingCount = 3;
+        dl.pBindings = cb;
+        vk_check(vkCreateDescriptorSetLayout(vk.dev, &dl, nullptr, &vk.cam_ds_layout), "vkCreateDescriptorSetLayout(cam)");
+
+        VkPushConstantRange pcr{};
+        pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        pcr.offset = 0;
+        pcr.size = 8; // width,height
+
+        VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        pl.setLayoutCount = 1;
+        pl.pSetLayouts = &vk.cam_ds_layout;
+        pl.pushConstantRangeCount = 1;
+        pl.pPushConstantRanges = &pcr;
+        vk_check(vkCreatePipelineLayout(vk.dev, &pl, nullptr, &vk.cam_pipe_layout), "vkCreatePipelineLayout(cam)");
+
+        // Buffers
+        {
+            VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+            bci.size = sizeof(uint32_t) * 256;
+            bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+            vk_check(vkCreateBuffer(vk.dev, &bci, nullptr, &vk.cam_hist_buf), "vkCreateBuffer(cam_hist)");
+            VkMemoryRequirements breq{};
+            vkGetBufferMemoryRequirements(vk.dev, vk.cam_hist_buf, &breq);
+            uint32_t mt = ew_find_memory_type(vk.phys, breq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+            VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+            mai.allocationSize = breq.size;
+            mai.memoryTypeIndex = mt;
+            vk_check(vkAllocateMemory(vk.dev, &mai, nullptr, &vk.cam_hist_mem), "vkAllocateMemory(cam_hist)");
+            vk_check(vkBindBufferMemory(vk.dev, vk.cam_hist_buf, vk.cam_hist_mem, 0), "vkBindBufferMemory(cam_hist)");
+        }
+        {
+            VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+            bci.size = sizeof(uint32_t) * 2;
+            bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+            vk_check(vkCreateBuffer(vk.dev, &bci, nullptr, &vk.cam_out_buf), "vkCreateBuffer(cam_out)");
+            VkMemoryRequirements breq{};
+            vkGetBufferMemoryRequirements(vk.dev, vk.cam_out_buf, &breq);
+            uint32_t mt = ew_find_memory_type(vk.phys, breq.memoryTypeBits,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+            VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+            mai.allocationSize = breq.size;
+            mai.memoryTypeIndex = mt;
+            vk_check(vkAllocateMemory(vk.dev, &mai, nullptr, &vk.cam_out_mem), "vkAllocateMemory(cam_out)");
+            vk_check(vkBindBufferMemory(vk.dev, vk.cam_out_buf, vk.cam_out_mem, 0), "vkBindBufferMemory(cam_out)");
+            vk_check(vkMapMemory(vk.dev, vk.cam_out_mem, 0, VK_WHOLE_SIZE, 0, &vk.cam_out_mapped), "vkMapMemory(cam_out)");
+        }
+
+        // Descriptor pool + sets
+        VkDescriptorPoolSize ps[3]{};
+        ps[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        ps[0].descriptorCount = 1;
+        ps[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        ps[1].descriptorCount = 2;
+        ps[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        ps[2].descriptorCount = 2;
+        VkDescriptorPoolCreateInfo dp{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        dp.maxSets = 2;
+        dp.poolSizeCount = 3;
+        dp.pPoolSizes = ps;
+        vk_check(vkCreateDescriptorPool(vk.dev, &dp, nullptr, &vk.cam_ds_pool), "vkCreateDescriptorPool(cam)");
+
+        VkDescriptorSetLayout layouts[2] = {vk.cam_ds_layout, vk.cam_ds_layout};
+        VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        ai.descriptorPool = vk.cam_ds_pool;
+        ai.descriptorSetCount = 2;
+        ai.pSetLayouts = layouts;
+        VkDescriptorSet sets[2]{};
+        vk_check(vkAllocateDescriptorSets(vk.dev, &ai, sets), "vkAllocateDescriptorSets(cam)");
+        vk.cam_hist_ds = sets[0];
+        vk.cam_median_ds = sets[1];
+
+        // Update descriptors
+        VkDescriptorImageInfo di{};
+        di.sampler = vk.depth_sampler;
+        di.imageView = vk.depth_view;
+        di.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        VkDescriptorBufferInfo bi_hist{};
+        bi_hist.buffer = vk.cam_hist_buf;
+        bi_hist.offset = 0;
+        bi_hist.range = VK_WHOLE_SIZE;
+
+        VkDescriptorBufferInfo bi_out{};
+        bi_out.buffer = vk.cam_out_buf;
+        bi_out.offset = 0;
+        bi_out.range = VK_WHOLE_SIZE;
+
+        VkWriteDescriptorSet w[3]{};
+        w[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        w[0].dstSet = vk.cam_hist_ds;
+        w[0].dstBinding = 0;
+        w[0].descriptorCount = 1;
+        w[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w[0].pImageInfo = &di;
+        w[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        w[1].dstSet = vk.cam_hist_ds;
+        w[1].dstBinding = 1;
+        w[1].descriptorCount = 1;
+        w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        w[1].pBufferInfo = &bi_hist;
+        w[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        w[2].dstSet = vk.cam_hist_ds;
+        w[2].dstBinding = 2;
+        w[2].descriptorCount = 1;
+        w[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        w[2].pBufferInfo = &bi_out;
+        vkUpdateDescriptorSets(vk.dev, 3, w, 0, nullptr);
+
+        VkWriteDescriptorSet w2[3]{};
+        w2[0] = w[0]; w2[0].dstSet = vk.cam_median_ds;
+        w2[1] = w[1]; w2[1].dstSet = vk.cam_median_ds;
+        w2[2] = w[2]; w2[2].dstSet = vk.cam_median_ds;
+        vkUpdateDescriptorSets(vk.dev, 3, w2, 0, nullptr);
+
+        // Pipelines
+        std::wstring hist_path = utf8_to_wide(std::string(EW_SHADER_OUT_DIR) + "\\cam_hist.comp.spv");
+        std::wstring med_path  = utf8_to_wide(std::string(EW_SHADER_OUT_DIR) + "\\cam_median.comp.spv");
+        auto hist_spv = ew_read_spv_u32(hist_path);
+        auto med_spv  = ew_read_spv_u32(med_path);
+        if (hist_spv.empty() || med_spv.empty()) {
+            MessageBoxA(nullptr, "Missing camera sensor compute shader SPIR-V.", "GenesisEngineVulkan", MB_ICONERROR | MB_OK);
+            abort();
+        }
+        VkShaderModule hs = ew_make_shader(vk.dev, hist_spv);
+        VkShaderModule ms = ew_make_shader(vk.dev, med_spv);
+
+        VkComputePipelineCreateInfo cpi{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+        cpi.layout = vk.cam_pipe_layout;
+        cpi.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+        cpi.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        cpi.stage.module = hs;
+        cpi.stage.pName = "main";
+        vk_check(vkCreateComputePipelines(vk.dev, VK_NULL_HANDLE, 1, &cpi, nullptr, &vk.cam_hist_pipe), "vkCreateComputePipelines(hist)");
+        cpi.stage.module = ms;
+        vk_check(vkCreateComputePipelines(vk.dev, VK_NULL_HANDLE, 1, &cpi, nullptr, &vk.cam_median_pipe), "vkCreateComputePipelines(median)");
+
+        vkDestroyShaderModule(vk.dev, hs, nullptr);
+        vkDestroyShaderModule(vk.dev, ms, nullptr);
+    }
 }
 
 App::App(const AppConfig& cfg) : cfg_(cfg) {
@@ -1563,12 +1949,38 @@ void App::CreateChildWindows() {
                                   WS_CHILD | WS_VISIBLE | WS_BORDER | LBS_NOTIFY,
                                   10, 76, 400, 180,
                                   hwnd_panel_, (HMENU)2004, GetModuleHandleW(nullptr), nullptr);
+    // Transform controls (position in meters). UI emits ObjectSetTransform packets.
+    CreateWindowW(L"STATIC", L"Pos X", WS_CHILD | WS_VISIBLE, 10, 266, 44, 18, hwnd_panel_, nullptr, GetModuleHandleW(nullptr), nullptr);
+    hwnd_posx_ = CreateWindowW(L"EDIT", L"0", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 58, 262, 90, 24, hwnd_panel_, (HMENU)2010, GetModuleHandleW(nullptr), nullptr);
+    CreateWindowW(L"STATIC", L"Y", WS_CHILD | WS_VISIBLE, 154, 266, 14, 18, hwnd_panel_, nullptr, GetModuleHandleW(nullptr), nullptr);
+    hwnd_posy_ = CreateWindowW(L"EDIT", L"0", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 172, 262, 90, 24, hwnd_panel_, (HMENU)2011, GetModuleHandleW(nullptr), nullptr);
+    CreateWindowW(L"STATIC", L"Z", WS_CHILD | WS_VISIBLE, 268, 266, 14, 18, hwnd_panel_, nullptr, GetModuleHandleW(nullptr), nullptr);
+    hwnd_posz_ = CreateWindowW(L"EDIT", L"0", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 286, 262, 90, 24, hwnd_panel_, (HMENU)2012, GetModuleHandleW(nullptr), nullptr);
+    hwnd_apply_xform_ = CreateWindowW(L"BUTTON", L"Apply", WS_CHILD | WS_VISIBLE, 10, 292, 80, 26, hwnd_panel_, (HMENU)2013, GetModuleHandleW(nullptr), nullptr);
+
+    // Gizmo + snap controls.
+    hwnd_mode_translate_ = CreateWindowW(L"BUTTON", L"Translate", WS_CHILD | WS_VISIBLE, 100, 292, 90, 26, hwnd_panel_, (HMENU)2020, GetModuleHandleW(nullptr), nullptr);
+    hwnd_mode_rotate_    = CreateWindowW(L"BUTTON", L"Rotate", WS_CHILD | WS_VISIBLE, 196, 292, 70, 26, hwnd_panel_, (HMENU)2021, GetModuleHandleW(nullptr), nullptr);
+    hwnd_frame_sel_      = CreateWindowW(L"BUTTON", L"Frame", WS_CHILD | WS_VISIBLE, 272, 292, 60, 26, hwnd_panel_, (HMENU)2022, GetModuleHandleW(nullptr), nullptr);
+// Axis constraint + undo/redo.
+hwnd_axis_none_ = CreateWindowW(L"BUTTON", L"Axis:None", WS_CHILD | WS_VISIBLE, 10, 350, 80, 24, hwnd_panel_, (HMENU)2026, GetModuleHandleW(nullptr), nullptr);
+hwnd_axis_x_    = CreateWindowW(L"BUTTON", L"X", WS_CHILD | WS_VISIBLE, 96, 350, 28, 24, hwnd_panel_, (HMENU)2027, GetModuleHandleW(nullptr), nullptr);
+hwnd_axis_y_    = CreateWindowW(L"BUTTON", L"Y", WS_CHILD | WS_VISIBLE, 128, 350, 28, 24, hwnd_panel_, (HMENU)2028, GetModuleHandleW(nullptr), nullptr);
+hwnd_axis_z_    = CreateWindowW(L"BUTTON", L"Z", WS_CHILD | WS_VISIBLE, 160, 350, 28, 24, hwnd_panel_, (HMENU)2029, GetModuleHandleW(nullptr), nullptr);
+hwnd_undo_      = CreateWindowW(L"BUTTON", L"Undo", WS_CHILD | WS_VISIBLE, 196, 350, 60, 24, hwnd_panel_, (HMENU)2030, GetModuleHandleW(nullptr), nullptr);
+hwnd_redo_      = CreateWindowW(L"BUTTON", L"Redo", WS_CHILD | WS_VISIBLE, 262, 350, 60, 24, hwnd_panel_, (HMENU)2031, GetModuleHandleW(nullptr), nullptr);
+
+    hwnd_snap_enable_ = CreateWindowW(L"BUTTON", L"Snap", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 338, 296, 70, 22, hwnd_panel_, (HMENU)2023, GetModuleHandleW(nullptr), nullptr);
+    // Grid/angle fields
+    CreateWindowW(L"STATIC", L"Grid(m)", WS_CHILD | WS_VISIBLE, 10, 322, 56, 18, hwnd_panel_, nullptr, GetModuleHandleW(nullptr), nullptr);
+    hwnd_grid_step_ = CreateWindowW(L"EDIT", L"1.0", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 68, 318, 72, 24, hwnd_panel_, (HMENU)2024, GetModuleHandleW(nullptr), nullptr);
+    CreateWindowW(L"STATIC", L"Angle(deg)", WS_CHILD | WS_VISIBLE, 150, 322, 72, 18, hwnd_panel_, nullptr, GetModuleHandleW(nullptr), nullptr);
+    hwnd_angle_step_ = CreateWindowW(L"EDIT", L"15", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 226, 318, 60, 24, hwnd_panel_, (HMENU)2025, GetModuleHandleW(nullptr), nullptr);
 
     hwnd_output_ = CreateWindowW(L"EDIT", L"",
                                  WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL,
-                                 10, 266, 400, client_h_ - 276,
+                                 10, 350, 400, client_h_ - 360,
                                  hwnd_panel_, (HMENU)2005, GetModuleHandleW(nullptr), nullptr);
-
     LayoutChildren(client_w_, client_h_);
 }
 
@@ -1577,7 +1989,7 @@ void App::LayoutChildren(int w, int h) {
     MoveWindow(hwnd_viewport_, 0, 0, w - panel_w, h, TRUE);
     MoveWindow(hwnd_panel_, w - panel_w, 0, panel_w, h, TRUE);
 
-    MoveWindow(hwnd_output_, 10, 266, panel_w - 20, h - 276, TRUE);
+    MoveWindow(hwnd_output_, 10, 350, panel_w - 20, h - 360, TRUE);
 }
 
 int App::Run(HINSTANCE hInst) {
@@ -1663,6 +2075,8 @@ int App::Run(HINSTANCE hInst) {
     return 0;
 }
 
+static inline float ew_clampf(float v, float lo, float hi) { return (v < lo) ? lo : (v > hi) ? hi : v; }
+
 void App::Tick() {
     static auto last = std::chrono::high_resolution_clock::now();
     static float acc = 0.0f;
@@ -1711,6 +2125,296 @@ void App::Tick() {
     }
     // If we fell behind, drop excess accumulated time deterministically.
     if (acc > tick_dt * (float)kMaxTicksPerFrame) acc = 0.0f;
+
+    // ------------------------------------------------------------------
+    // Editor interaction polish (production-grade feel)
+    // - Orbit/Pan/Dolly camera rig emitting CameraSet packets
+    // - Viewport click selection (ray-sphere pick)
+    // - Translate/Rotate gizmo drag emitting ObjectSetTransform packets
+    // All authoritative state remains in anchors; UI only emits control packets.
+    // ------------------------------------------------------------------
+    const int panel_w = 420;
+    const int viewport_w = (client_w_ > panel_w) ? (client_w_ - panel_w) : client_w_;
+    const int viewport_h = client_h_;
+    const bool mouse_in_view = (input_.mouse_x >= 0 && input_.mouse_y >= 0 &&
+                               input_.mouse_x < viewport_w && input_.mouse_y < viewport_h);
+
+    // Hotkeys: W/E for gizmo mode, F to frame.
+    static bool prev_w = false, prev_e = false, prev_f = false;
+    const bool w_now = (input_.key_down['W'] || input_.key_down['w']);
+    const bool e_now = (input_.key_down['E'] || input_.key_down['e']);
+    const bool f_now = (input_.key_down['F'] || input_.key_down['f']);
+    if (w_now && !prev_w) { editor_gizmo_mode_u8_ = 1; EmitEditorGizmo(); }
+    if (e_now && !prev_e) { editor_gizmo_mode_u8_ = 2; EmitEditorGizmo(); }
+    prev_w = w_now;
+    prev_e = e_now;
+
+// Axis constraint hotkeys: X/Y/Z toggles axis constraint (no Alt). Press again to clear.
+static bool prev_x = false, prev_yk = false, prev_zk = false;
+const bool x_now = (input_.key_down['X'] || input_.key_down['x']);
+const bool y_now2 = (input_.key_down['Y'] || input_.key_down['y']);
+const bool z_now2 = (input_.key_down['Z'] || input_.key_down['z']);
+if (mouse_in_view && !input_.alt) {
+    if (x_now && !prev_x) { editor_axis_constraint_u8_ = (editor_axis_constraint_u8_ == 1) ? 0 : 1; EmitEditorAxisConstraint(); }
+    if (y_now2 && !prev_yk) { editor_axis_constraint_u8_ = (editor_axis_constraint_u8_ == 2) ? 0 : 2; EmitEditorAxisConstraint(); }
+    if (z_now2 && !prev_zk) { editor_axis_constraint_u8_ = (editor_axis_constraint_u8_ == 3) ? 0 : 3; EmitEditorAxisConstraint(); }
+}
+prev_x = x_now;
+prev_yk = y_now2;
+prev_zk = z_now2;
+
+// Undo/redo hotkeys: Ctrl+Z / Ctrl+Y.
+static bool prev_uz = false, prev_uy = false;
+const bool uz_now = (input_.ctrl && (input_.key_down['Z'] || input_.key_down['z']));
+const bool uy_now = (input_.ctrl && (input_.key_down['Y'] || input_.key_down['y']));
+if (uz_now && !prev_uz) { EmitEditorUndo(); }
+if (uy_now && !prev_uy) { EmitEditorRedo(); }
+prev_uz = uz_now;
+prev_uy = uy_now;
+
+    // Camera rig controls (Alt + mouse):
+    //   Alt+LMB orbit, Alt+MMB pan, wheel dolly.
+    if (mouse_in_view) {
+        if (input_.alt && input_.lmb) {
+            cam_yaw_rad_   += (float)input_.mouse_dx * 0.005f;
+            cam_pitch_rad_ += (float)-input_.mouse_dy * 0.005f;
+            cam_pitch_rad_ = ew_clampf(cam_pitch_rad_, -1.5f, 1.5f);
+        }
+        if (input_.alt && input_.mmb) {
+            // Pan in camera plane (approx): move target along yaw basis.
+            const float cy = cosf(cam_yaw_rad_);
+            const float sy = sinf(cam_yaw_rad_);
+            float right[3] = {-sy, cy, 0.0f};
+            float up[3] = {0.0f, 0.0f, 1.0f};
+            const float pan_scale = cam_dist_m_ * 0.0015f;
+            cam_target_[0] += right[0] * (float)-input_.mouse_dx * pan_scale + up[0] * (float)input_.mouse_dy * pan_scale;
+            cam_target_[1] += right[1] * (float)-input_.mouse_dx * pan_scale + up[1] * (float)input_.mouse_dy * pan_scale;
+            cam_target_[2] += right[2] * (float)-input_.mouse_dx * pan_scale + up[2] * (float)input_.mouse_dy * pan_scale;
+        }
+        if (input_.wheel_delta != 0) {
+            const int steps = (input_.wheel_delta > 0) ? 1 : -1;
+            const float s = (steps > 0) ? 0.9f : 1.1111111f;
+            cam_dist_m_ *= s;
+            if (cam_dist_m_ < 0.1f) cam_dist_m_ = 0.1f;
+        }
+    }
+
+    // Frame selection (F): sets camera target to selected object and distances to radius.
+    if (f_now && !prev_f) {
+        if (scene_ && scene_->selected >= 0 && scene_->selected < (int)scene_->objects.size()) {
+            const auto& o = scene_->objects[(size_t)scene_->selected];
+            cam_target_[0] = (float)o.pos_q16_16[0] / 65536.0f;
+            cam_target_[1] = (float)o.pos_q16_16[1] / 65536.0f;
+            cam_target_[2] = (float)o.pos_q16_16[2] / 65536.0f;
+            const float r = (float)o.radius_q16_16 / 65536.0f;
+            cam_dist_m_ = (r > 0.001f) ? (r * 3.0f) : 5.0f;
+        }
+    }
+    prev_f = f_now;
+
+    // Emit camera packet from rig every tick (authoritative camera lives in anchor).
+    EmitCameraSetFromRig();
+
+    // Viewport click selection (no Alt): ray-sphere pick against cached object bounds.
+    static bool prev_lmb = false;
+    const bool lmb_edge = (input_.lmb && !prev_lmb);
+    prev_lmb = input_.lmb;
+    if (mouse_in_view && lmb_edge && !input_.alt && !input_.ctrl) {
+        // Compute ray from camera rig.
+        const float aspect = (viewport_h > 0) ? (float)viewport_w / (float)viewport_h : 1.0f;
+        const float fov = 60.0f * 0.01745329251994329577f;
+        const float tanh = tanf(fov * 0.5f);
+        const float nx = ((float)input_.mouse_x / (float)viewport_w) * 2.0f - 1.0f;
+        const float ny = 1.0f - ((float)input_.mouse_y / (float)viewport_h) * 2.0f;
+
+        // Camera basis from rig.
+        const float cy = cosf(cam_yaw_rad_);
+        const float sy = sinf(cam_yaw_rad_);
+        const float cp = cosf(cam_pitch_rad_);
+        const float sp = sinf(cam_pitch_rad_);
+        float cam_pos[3] = { cam_target_[0] + cy*cp*cam_dist_m_, cam_target_[1] + sy*cp*cam_dist_m_, cam_target_[2] + sp*cam_dist_m_ };
+        float fwd[3] = { cam_target_[0]-cam_pos[0], cam_target_[1]-cam_pos[1], cam_target_[2]-cam_pos[2] };
+        float fl = sqrtf(fwd[0]*fwd[0] + fwd[1]*fwd[1] + fwd[2]*fwd[2]);
+        if (fl > 1e-6f) { fwd[0]/=fl; fwd[1]/=fl; fwd[2]/=fl; }
+        float up[3] = {0,0,1};
+        float right[3] = { fwd[1]*up[2]-fwd[2]*up[1], fwd[2]*up[0]-fwd[0]*up[2], fwd[0]*up[1]-fwd[1]*up[0] };
+        float rl = sqrtf(right[0]*right[0] + right[1]*right[1] + right[2]*right[2]);
+        if (rl < 1e-6f) { right[0]=1; right[1]=0; right[2]=0; rl=1; }
+        right[0]/=rl; right[1]/=rl; right[2]/=rl;
+        float u2[3] = { right[1]*fwd[2]-right[2]*fwd[1], right[2]*fwd[0]-right[0]*fwd[2], right[0]*fwd[1]-right[1]*fwd[0] };
+
+        float dir[3] = {
+            fwd[0] + right[0] * (nx * aspect * tanh) + u2[0] * (ny * tanh),
+            fwd[1] + right[1] * (nx * aspect * tanh) + u2[1] * (ny * tanh),
+            fwd[2] + right[2] * (nx * aspect * tanh) + u2[2] * (ny * tanh),
+        };
+        float dl = sqrtf(dir[0]*dir[0] + dir[1]*dir[1] + dir[2]*dir[2]);
+        if (dl > 1e-6f) { dir[0]/=dl; dir[1]/=dl; dir[2]/=dl; }
+
+        int best_idx = -1;
+        float best_t = 1e30f;
+        if (scene_) {
+            for (int i = 0; i < (int)scene_->objects.size(); ++i) {
+                const auto& o = scene_->objects[(size_t)i];
+                const float cx = (float)o.pos_q16_16[0] / 65536.0f;
+                const float cy2 = (float)o.pos_q16_16[1] / 65536.0f;
+                const float cz2 = (float)o.pos_q16_16[2] / 65536.0f;
+                const float r = (float)o.radius_q16_16 / 65536.0f;
+                if (r <= 0.0f) continue;
+                // Ray-sphere intersection (closest positive t)
+                const float ox = cam_pos[0] - cx;
+                const float oy = cam_pos[1] - cy2;
+                const float oz = cam_pos[2] - cz2;
+                const float b = ox*dir[0] + oy*dir[1] + oz*dir[2];
+                const float c = ox*ox + oy*oy + oz*oz - r*r;
+                const float disc = b*b - c;
+                if (disc < 0.0f) continue;
+                const float t0 = -b - sqrtf(disc);
+                if (t0 > 0.0f && t0 < best_t) { best_t = t0; best_idx = i; }
+            }
+        }
+        if (best_idx >= 0 && scene_) {
+            scene_->selected = best_idx;
+            SendMessageW(hwnd_objlist_, LB_SETCURSEL, (WPARAM)best_idx, 0);
+            editor_selected_object_id_u64_ = scene_->objects[(size_t)best_idx].object_id_u64;
+            if (input_.shift) {
+                EmitEditorToggleSelection(editor_selected_object_id_u64_);
+            } else {
+                EmitEditorSelection(editor_selected_object_id_u64_);
+            }
+        }
+    }
+
+    // Gizmo drag (no Alt):
+    // Translate: drag in camera plane (approx)
+    // Rotate: drag yaw about world up
+    if (scene_ && scene_->selected >= 0 && scene_->selected < (int)scene_->objects.size()) {
+        auto& o = scene_->objects[(size_t)scene_->selected];
+        const bool can_drag = mouse_in_view && !input_.alt;
+        if (can_drag && input_.lmb && !gizmo_drag_active_) {
+            gizmo_drag_active_ = true;
+            drag_start_mouse_x_ = input_.mouse_x;
+            drag_start_mouse_y_ = input_.mouse_y;
+            drag_start_pos_q16_16_[0] = o.pos_q16_16[0];
+            drag_start_pos_q16_16_[1] = o.pos_q16_16[1];
+            drag_start_pos_q16_16_[2] = o.pos_q16_16[2];
+            for (int k = 0; k < 4; ++k) drag_start_rot_q16_16_[k] = o.rot_quat_q16_16[k];
+            drag_last_pos_q16_16_[0] = drag_start_pos_q16_16_[0];
+            drag_last_pos_q16_16_[1] = drag_start_pos_q16_16_[1];
+            drag_last_pos_q16_16_[2] = drag_start_pos_q16_16_[2];
+            for (int k = 0; k < 4; ++k) drag_last_rot_q16_16_[k] = drag_start_rot_q16_16_[k];
+        }
+        if (gizmo_drag_active_ && !input_.lmb) {
+            // Commit one undo step for the whole drag.
+            EmitEditorCommitTransformTxn(o.object_id_u64,
+                                       drag_start_pos_q16_16_,
+                                       drag_start_rot_q16_16_,
+                                       drag_last_pos_q16_16_,
+                                       drag_last_rot_q16_16_);
+            gizmo_drag_active_ = false;
+        }
+
+        if (gizmo_drag_active_) {
+            const int dx = input_.mouse_x - drag_start_mouse_x_;
+            const int dy = input_.mouse_y - drag_start_mouse_y_;
+
+            EwControlPacket cp{};
+            cp.kind = EwControlPacketKind::ObjectSetTransform;
+            cp.source_u16 = 1;
+            cp.tick_u64 = scene_->sm.canonical_tick;
+            cp.payload.object_set_transform.object_id_u64 = o.object_id_u64;
+            cp.payload.object_set_transform.pad0_u32 = 0u;
+            cp.payload.object_set_transform.pad1_u32 = 0u;
+
+            if (editor_gizmo_mode_u8_ == 1) {
+                // Translate in yaw-plane basis.
+                const float cy = cosf(cam_yaw_rad_);
+                const float sy = sinf(cam_yaw_rad_);
+                float right[3] = {-sy, cy, 0.0f};
+                float up[3] = {0.0f, 0.0f, 1.0f};
+                const float scale = cam_dist_m_ * 0.0015f;
+                float tx = right[0] * (float)dx * scale + up[0] * (float)-dy * scale;
+                float ty = right[1] * (float)dx * scale + up[1] * (float)-dy * scale;
+                float tz = right[2] * (float)dx * scale + up[2] * (float)-dy * scale;
+
+                // Axis constraint (world axes).
+                if (editor_axis_constraint_u8_ == 1) { ty = 0.0f; tz = 0.0f; }
+                else if (editor_axis_constraint_u8_ == 2) { tx = 0.0f; tz = 0.0f; }
+                else if (editor_axis_constraint_u8_ == 3) { tx = 0.0f; ty = 0.0f; }
+
+                int32_t nx_q = drag_start_pos_q16_16_[0] + (int32_t)llround((double)tx * 65536.0);
+                int32_t ny_q = drag_start_pos_q16_16_[1] + (int32_t)llround((double)ty * 65536.0);
+                int32_t nz_q = drag_start_pos_q16_16_[2] + (int32_t)llround((double)tz * 65536.0);
+                if (editor_snap_enabled_u8_) {
+                    const int32_t step = (editor_grid_step_m_q16_16_ > 0) ? editor_grid_step_m_q16_16_ : (int32_t)65536;
+                    auto snap = [&](int32_t v)->int32_t {
+                        const int64_t half = (int64_t)step / 2;
+                        const int64_t vv = (int64_t)v;
+                        const int64_t s = (vv >= 0) ? (vv + half) : (vv - half);
+                        return (int32_t)((s / step) * step);
+                    };
+                    nx_q = snap(nx_q);
+                    ny_q = snap(ny_q);
+                    nz_q = snap(nz_q);
+                }
+                cp.payload.object_set_transform.pos_q16_16[0] = nx_q;
+                cp.payload.object_set_transform.pos_q16_16[1] = ny_q;
+                cp.payload.object_set_transform.pos_q16_16[2] = nz_q;
+                for (int k = 0; k < 4; ++k) cp.payload.object_set_transform.rot_quat_q16_16[k] = drag_start_rot_q16_16_[k];
+            } else if (editor_gizmo_mode_u8_ == 2) {
+                // Rotate about world up using horizontal drag.
+                const float deg_per_px = 0.15f;
+                float yaw_deg = (float)dx * deg_per_px;
+                if (editor_snap_enabled_u8_) {
+                    const float step = (float)editor_angle_step_deg_q16_16_ / 65536.0f;
+                    if (step > 0.01f) {
+                        const float s = (yaw_deg >= 0.0f) ? (yaw_deg + 0.5f*step) : (yaw_deg - 0.5f*step);
+                        yaw_deg = floorf(s / step) * step;
+                    }
+                }
+                const float rad = yaw_deg * 0.01745329251994329577f;
+                const float sh = sinf(rad * 0.5f);
+                const float ch = cosf(rad * 0.5f);
+                // Axis-angle quaternion (world axis): (axis*sin(theta/2), cos(theta/2)) in Q16.16.
+int32_t dq[4] = {0,0,0,(int32_t)llround((double)ch * 65536.0)};
+if (editor_axis_constraint_u8_ == 1) {
+    dq[0] = (int32_t)llround((double)sh * 65536.0);
+} else if (editor_axis_constraint_u8_ == 2) {
+    dq[1] = (int32_t)llround((double)sh * 65536.0);
+} else {
+    // Default Z.
+    dq[2] = (int32_t)llround((double)sh * 65536.0);
+}
+                // Multiply dq * start (approx, not renormalized; quantization is the stability gate).
+                const int64_t ax = dq[0], ay = dq[1], az = dq[2], aw = dq[3];
+                const int64_t bx = drag_start_rot_q16_16_[0], by = drag_start_rot_q16_16_[1], bz = drag_start_rot_q16_16_[2], bw = drag_start_rot_q16_16_[3];
+                int32_t qx = (int32_t)((aw*bx + ax*bw + ay*bz - az*by) >> 16);
+                int32_t qy = (int32_t)((aw*by - ax*bz + ay*bw + az*bx) >> 16);
+                int32_t qz = (int32_t)((aw*bz + ax*by - ay*bx + az*bw) >> 16);
+                int32_t qw = (int32_t)((aw*bw - ax*bx - ay*by - az*bz) >> 16);
+                cp.payload.object_set_transform.pos_q16_16[0] = drag_start_pos_q16_16_[0];
+                cp.payload.object_set_transform.pos_q16_16[1] = drag_start_pos_q16_16_[1];
+                cp.payload.object_set_transform.pos_q16_16[2] = drag_start_pos_q16_16_[2];
+                cp.payload.object_set_transform.rot_quat_q16_16[0] = qx;
+                cp.payload.object_set_transform.rot_quat_q16_16[1] = qy;
+                cp.payload.object_set_transform.rot_quat_q16_16[2] = qz;
+                cp.payload.object_set_transform.rot_quat_q16_16[3] = qw;
+            } else {
+                cp.payload.object_set_transform.pos_q16_16[0] = drag_start_pos_q16_16_[0];
+                cp.payload.object_set_transform.pos_q16_16[1] = drag_start_pos_q16_16_[1];
+                cp.payload.object_set_transform.pos_q16_16[2] = drag_start_pos_q16_16_[2];
+                for (int k = 0; k < 4; ++k) cp.payload.object_set_transform.rot_quat_q16_16[k] = drag_start_rot_q16_16_[k];
+            }
+
+            // Cache last emitted transform for undo commit stability.
+            drag_last_pos_q16_16_[0] = cp.payload.object_set_transform.pos_q16_16[0];
+            drag_last_pos_q16_16_[1] = cp.payload.object_set_transform.pos_q16_16[1];
+            drag_last_pos_q16_16_[2] = cp.payload.object_set_transform.pos_q16_16[2];
+            for (int k = 0; k < 4; ++k) drag_last_rot_q16_16_[k] = cp.payload.object_set_transform.rot_quat_q16_16[k];
+
+            (void)ew_runtime_submit_control_packet(&scene_->sm, &cp);
+        }
+    }
 
     // Immersion: camera subject-lock should be implemented as substrate ops.
     // Hard rule: no direct camera math/state mutation here.
@@ -1774,6 +2478,10 @@ void App::Tick() {
         ew_camera_apply_render_packet(cam_, rp);
     }
 
+    // Assist coefficients for focus/LOD, derived inside substrate.
+    EwRenderAssistPacket ra{};
+    bool have_ra = ew_runtime_get_render_assist_packet(&scene_->sm, &ra);
+
     // Camera-space position from projected view matrix (Q16.16), used for culling/LOD.
     auto camera_space_pos = [&](float wx, float wy, float wz, float& out_cx, float& out_cy, float& out_cz) {
         if (!have_rp) { out_cx = wx; out_cy = wy; out_cz = wz; return; }
@@ -1824,20 +2532,54 @@ void App::Tick() {
         const float dz = o.xf.pos[2] - cam_.pos[2];
         float cx = 0.0f, cy = 0.0f, cz = 0.0f;
         camera_space_pos(o.xf.pos[0], o.xf.pos[1], o.xf.pos[2], cx, cy, cz);
-        // View-driven LOD: distance + focus (deterministic, meters).
-        const float dist_m = std::sqrt(dx*dx + dy*dy + dz*dz);
-        const float d_focus = cam_.focal_distance_m;
-        const float w_focus = (cam_.focus_band_m > 1.0e-6f) ? cam_.focus_band_m : 0.06f;
-        const float focus_w = std::fmax(0.0f, 1.0f - std::fabs(dist_m - d_focus) / w_focus);
-        const float d_min32k = 0.0762f;  // 0.25 ft
-        const float d_max32k = 0.3048f;  // 1.0 ft
-        float near_w = 0.0f;
-        if (dist_m <= d_min32k) near_w = 1.0f;
-        else if (dist_m < d_max32k) near_w = (d_max32k - dist_m) / (d_max32k - d_min32k);
-        // Screen-space proxy: larger projected objects justify higher LOD.
-        const float screen_w = std::fmin(1.0f, std::fmax(0.0f, (o.radius_m_f32 / std::fmax(dist_m, 1.0e-3f)) * 8.0f));
-        const float clarity = std::fmin(1.0f, std::fmax(0.0f, focus_w * near_w * screen_w));
-        const float lod_bias = -cam_.lod_boost_max * clarity;
+        // View-driven LOD: focus assist derived in substrate.
+        // Renderer avoids sqrt/fabs; uses squared-distance domain with
+        // multiply-add + clamp only.
+        const float dist2_m2 = dx*dx + dy*dy + dz*dz;
+        float clarity = 0.0f;
+        float lod_bias = 0.0f;
+        if (have_ra) {
+            const float near2 = (float)ra.focus_near_m2_q32_32 / 4294967296.0f;
+            const float far2  = (float)ra.focus_far_m2_q32_32 / 4294967296.0f;
+            float focus_w = 0.0f;
+            if (dist2_m2 <= near2) focus_w = 1.0f;
+            else if (dist2_m2 >= far2) focus_w = 0.0f;
+            else {
+                const float inv = (float)ra.inv_focus_range_m2_q16_16 / 65536.0f;
+                focus_w = 1.0f - (dist2_m2 - near2) * inv;
+                if (focus_w < 0.0f) focus_w = 0.0f;
+                if (focus_w > 1.0f) focus_w = 1.0f;
+            }
+
+            const float nmin2 = (float)ra.near_min_m2_q32_32 / 4294967296.0f;
+            const float nmax2 = (float)ra.near_max_m2_q32_32 / 4294967296.0f;
+            float near_w = 0.0f;
+            if (dist2_m2 <= nmin2) near_w = 1.0f;
+            else if (dist2_m2 >= nmax2) near_w = 0.0f;
+            else {
+                const float invn = (float)ra.inv_near_range_m2_q16_16 / 65536.0f;
+                near_w = 1.0f - (dist2_m2 - nmin2) * invn;
+                if (near_w < 0.0f) near_w = 0.0f;
+                if (near_w > 1.0f) near_w = 1.0f;
+            }
+
+            // Screen proxy in squared-distance domain (no sqrt):
+            // screen_w ~= clamp01((radius^2 / dist^2) * scale).
+            float screen_w = 0.0f;
+            if (dist2_m2 > 1.0e-6f) {
+                const float sps = (float)ra.screen_proxy_scale_q16_16 / 65536.0f;
+                const float r2 = o.radius_m_f32 * o.radius_m_f32;
+                screen_w = (r2 / dist2_m2) * sps;
+                if (screen_w < 0.0f) screen_w = 0.0f;
+                if (screen_w > 1.0f) screen_w = 1.0f;
+            }
+
+            clarity = focus_w * near_w * screen_w;
+            if (clarity < 0.0f) clarity = 0.0f;
+            if (clarity > 1.0f) clarity = 1.0f;
+            const float lodmax = (float)ra.lod_boost_max_q16_16 / 65536.0f;
+            lod_bias = -lodmax * clarity;
+        }
 
 EwRenderInstance inst{};
 inst.object_id_u64 = o.object_id_u64;
@@ -1951,6 +2693,17 @@ void App::Render() {
     vk_check(vkWaitForFences(vk_->dev, 1, &vk_->fence, VK_TRUE, UINT64_MAX), "vkWaitForFences");
     vk_check(vkResetFences(vk_->dev, 1, &vk_->fence), "vkResetFences");
 
+    // Read last frame's camera histogram median (written by compute) and
+    // submit as an observation ingress packet to the substrate.
+    if (scene_ && vk_->cam_out_mapped) {
+        const uint32_t* out_u32 = (const uint32_t*)vk_->cam_out_mapped;
+        const uint32_t median_q16 = out_u32[0];
+        const uint32_t total = out_u32[1];
+        if (total > 0u) {
+            ew_runtime_submit_camera_sensor_median_norm(&scene_->sm, (int32_t)median_q16, scene_->sm.canonical_tick);
+        }
+    }
+
     // ------------------------------------------------------------
     // OpenXR stereo presentation (Vulkan path)
     // ------------------------------------------------------------
@@ -1980,25 +2733,18 @@ void App::Render() {
         };
 
         // Helper: build camera-relative instances for a given eye pose.
-        auto build_instances_for_eye = [&](const float eye_pos[3], const float eye_quat[4]) {
-            // Eye forward (-Z) from quaternion.
-            const float x = eye_quat[0], y = eye_quat[1], z = eye_quat[2], w = eye_quat[3];
-            float vx = 0.f, vy = 0.f, vz = -1.f;
-            float tx = 2.f * (y*vz - z*vy);
-            float ty = 2.f * (z*vx - x*vz);
-            float tz = 2.f * (x*vy - y*vx);
-            float fx = vx + w*tx + (y*tz - z*ty);
-            float fy = vy + w*ty + (z*tx - x*tz);
-            float fz = vz + w*tz + (x*ty - y*tx);
-            float fl = std::sqrt(fx*fx + fy*fy + fz*fz);
-            if (fl > 1e-6f) { fx/=fl; fy/=fl; fz/=fl; }
-            float right[3] = { fy, -fx, 0.f };
-            float rl = std::sqrt(right[0]*right[0] + right[1]*right[1] + right[2]*right[2]);
-            if (rl > 1e-6f) { right[0]/=rl; right[1]/=rl; right[2]/=rl; }
-            float up[3] = {
-                right[1]*fz - right[2]*fy,
-                right[2]*fx - right[0]*fz,
-                right[0]*fy - right[1]*fx
+        auto build_instances_for_eye = [&](uint32_t eye_index_u32) {
+            // The viewport must not normalize basis from raw eye poses.
+            // It submits poses as observations; the substrate projects per-eye view matrices.
+            EwRenderXrEyePacket xrep{};
+            const bool have_eye = ew_runtime_get_render_xr_eye_packet(&scene_->sm, eye_index_u32, &xrep);
+
+            auto row_dot_eye = [&](int row, int64_t bx, int64_t by, int64_t bz) -> int64_t {
+                const int64_t m0 = (int64_t)xrep.view_mat_q16_16[row*4 + 0];
+                const int64_t m1 = (int64_t)xrep.view_mat_q16_16[row*4 + 1];
+                const int64_t m2 = (int64_t)xrep.view_mat_q16_16[row*4 + 2];
+                const int64_t m3 = (int64_t)xrep.view_mat_q16_16[row*4 + 3];
+                return ((m0 * bx + m1 * by + m2 * bz) >> 16) + m3;
             };
 
             scene_->instances.clear();
@@ -2023,32 +2769,97 @@ void App::Render() {
                 return ew_clamp_i32(num / (int64_t)TURN_SCALE, 0, (int32_t)65536);
             };
             for (const auto& o : scene_->objects) {
-                const float dx = o.xf.pos[0] - eye_pos[0];
-                const float dy = o.xf.pos[1] - eye_pos[1];
-                const float dz = o.xf.pos[2] - eye_pos[2];
-                const float cx = dx*right[0] + dy*right[1] + dz*right[2];
-                const float cy = dx*up[0]    + dy*up[1]    + dz*up[2];
-                const float cz = dx*fx       + dy*fy       + dz*fz;
+                int32_t rel_q16_16[3] = {0,0,0};
 
-                // View-driven LOD uses the app camera's focus distance/band.
-                const float dist_m = std::sqrt(dx*dx + dy*dy + dz*dz);
-                const float d_focus = cam_.focal_distance_m;
-                const float w_focus = (cam_.focus_band_m > 1.0e-6f) ? cam_.focus_band_m : 0.06f;
-                const float focus_w = std::fmax(0.0f, 1.0f - std::fabs(dist_m - d_focus) / w_focus);
-                const float d_min32k = 0.0762f;
-                const float d_max32k = 0.3048f;
-                float near_w = 0.0f;
-                if (dist_m <= d_min32k) near_w = 1.0f;
-                else if (dist_m < d_max32k) near_w = (d_max32k - dist_m) / (d_max32k - d_min32k);
-
-                // Screen-space proxy based on radius and depth.
-                float screen_w = 0.0f;
-                if (std::fabs(cz) > 1e-3f) {
-                    screen_w = std::fmin(1.0f, (o.radius_m_f32 / std::fabs(cz)) * 10.0f);
+                if (have_eye) {
+                    const int64_t wx_q = (int64_t)o.pos_q16_16[0];
+                    const int64_t wy_q = (int64_t)o.pos_q16_16[1];
+                    const int64_t wz_q = (int64_t)o.pos_q16_16[2];
+                    const int64_t cx_q = row_dot_eye(0, wx_q, wy_q, wz_q);
+                    const int64_t cy_q = row_dot_eye(1, wx_q, wy_q, wz_q);
+                    const int64_t cz_q = row_dot_eye(2, wx_q, wy_q, wz_q);
+                    rel_q16_16[0] = (int32_t)cx_q;
+                    rel_q16_16[1] = (int32_t)cy_q;
+                    rel_q16_16[2] = (int32_t)cz_q;
+                } else {
+                    // Fail-closed fallback: translation only.
+                    rel_q16_16[0] = (int32_t)llround((double)dx * 65536.0);
+                    rel_q16_16[1] = (int32_t)llround((double)dy * 65536.0);
+                    rel_q16_16[2] = (int32_t)llround((double)dz * 65536.0);
                 }
 
-                const float clarity = std::fmax(0.0f, std::fmin(1.0f, focus_w * near_w * screen_w));
-                const float lod_bias = -cam_.lod_boost_max * clarity;
+                const float cx = (float)rel_q16_16[0] / 65536.0f;
+                const float cy = (float)rel_q16_16[1] / 65536.0f;
+                const float cz = (float)rel_q16_16[2] / 65536.0f;
+
+                // XR instance LOD/clarity MUST NOT be computed from local app camera state.
+                // Use substrate-derived RenderAssistPacket coefficients and only simple
+                // fixed-point multiply-add + clamps here (no sqrt/fabs focus-band math).
+                // Distance is evaluated in squared-distance domain (m^2) to avoid sqrt.
+                const double dist2_m2 = (double)dx*(double)dx + (double)dy*(double)dy + (double)dz*(double)dz;
+                const uint64_t dist2_m2_q32_32 = (uint64_t)std::llround(dist2_m2 * (double)(1ull<<32));
+
+                int32_t focus_w_q16_16 = 0;
+                int32_t near_w_q16_16 = 0;
+                int32_t screen_w_q16_16 = 0;
+                int32_t clarity_q16_16 = 0;
+                int32_t lod_bias_q16_16 = 0;
+                if (have_ra) {
+                    // Focus weight: triangular ramp in squared-distance domain.
+                    const uint64_t near2 = ra.focus_near_m2_q32_32;
+                    const uint64_t far2  = ra.focus_far_m2_q32_32;
+                    if (far2 > near2 && dist2_m2_q32_32 > near2 && dist2_m2_q32_32 < far2) {
+                        const uint64_t center2 = near2 + ((far2 - near2) >> 1);
+                        const uint64_t absd2 = (dist2_m2_q32_32 > center2) ? (dist2_m2_q32_32 - center2) : (center2 - dist2_m2_q32_32);
+                        const int64_t absd2_q16_16 = (int64_t)(absd2 >> 16);
+                        const int64_t inv_half_q16_16 = (int64_t)ra.inv_focus_range_m2_q16_16 * 2; // 2/(far2-near2)
+                        int64_t t_q16_16 = (absd2_q16_16 * inv_half_q16_16) >> 16;
+                        if (t_q16_16 < 0) t_q16_16 = 0;
+                        if (t_q16_16 > 65536) t_q16_16 = 65536;
+                        int64_t fw = 65536 - t_q16_16;
+                        if (fw < 0) fw = 0;
+                        focus_w_q16_16 = (int32_t)fw;
+                    }
+
+                    // Near boost weight in squared-distance domain.
+                    const uint64_t nmin2 = ra.near_min_m2_q32_32;
+                    const uint64_t nmax2 = ra.near_max_m2_q32_32;
+                    if (nmax2 > nmin2) {
+                        if (dist2_m2_q32_32 <= nmin2) {
+                            near_w_q16_16 = 65536;
+                        } else if (dist2_m2_q32_32 < nmax2) {
+                            const uint64_t rem = (nmax2 - dist2_m2_q32_32);
+                            const int64_t rem_q16_16 = (int64_t)(rem >> 16);
+                            int64_t nw = (rem_q16_16 * (int64_t)ra.inv_near_range_m2_q16_16) >> 16;
+                            if (nw < 0) nw = 0;
+                            if (nw > 65536) nw = 65536;
+                            near_w_q16_16 = (int32_t)nw;
+                        } else {
+                            near_w_q16_16 = 0;
+                        }
+                    }
+
+                    // Screen proxy weight: (radius/|cz|)*scale, evaluated in fixed-point.
+                    const int32_t cz_q16_16 = (int32_t)std::llround(cz * 65536.0);
+                    int32_t abs_cz_q16_16 = (cz_q16_16 < 0) ? -cz_q16_16 : cz_q16_16;
+                    if (abs_cz_q16_16 < (int32_t)256) abs_cz_q16_16 = (int32_t)256; // avoid blow-up
+                    const int32_t radius_q16_16 = (int32_t)std::llround(o.radius_m_f32 * 65536.0);
+                    const int64_t ratio_q16_16 = ((int64_t)radius_q16_16 << 16) / (int64_t)abs_cz_q16_16;
+                    int64_t sw = (ratio_q16_16 * (int64_t)ra.screen_proxy_scale_q16_16) >> 16;
+                    if (sw < 0) sw = 0;
+                    if (sw > 65536) sw = 65536;
+                    screen_w_q16_16 = (int32_t)sw;
+
+                    // clarity = focus * near * screen
+                    int64_t c = ((int64_t)focus_w_q16_16 * (int64_t)near_w_q16_16) >> 16;
+                    c = (c * (int64_t)screen_w_q16_16) >> 16;
+                    if (c < 0) c = 0;
+                    if (c > 65536) c = 65536;
+                    clarity_q16_16 = (int32_t)c;
+
+                    // lod_bias = -lod_boost_max * clarity
+                    lod_bias_q16_16 = (int32_t)(-(((int64_t)ra.lod_boost_max_q16_16 * (int64_t)clarity_q16_16) >> 16));
+                }
 
                 EwRenderInstance inst{};
                 inst.object_id_u64 = o.object_id_u64;
@@ -2057,14 +2868,14 @@ void App::Render() {
                 else if (o.name_utf8 == "Earth") inst.kind_u32 = 2u;
                 inst.albedo_rgba8 = o.albedo_rgba8;
                 inst.atmosphere_rgba8 = o.atmosphere_rgba8;
-                inst.rel_pos_q16_16[0] = (int32_t)std::llround(cx * 65536.0);
-                inst.rel_pos_q16_16[1] = (int32_t)std::llround(cy * 65536.0);
-                inst.rel_pos_q16_16[2] = (int32_t)std::llround(cz * 65536.0);
+                inst.rel_pos_q16_16[0] = rel_q16_16[0];
+                inst.rel_pos_q16_16[1] = rel_q16_16[1];
+                inst.rel_pos_q16_16[2] = rel_q16_16[2];
                 inst.radius_q16_16 = (int32_t)std::llround(o.radius_m_f32 * 65536.0);
                 inst.emissive_q16_16 = (int32_t)std::llround(o.emissive_f32 * 65536.0);
                 inst.atmosphere_thickness_q16_16 = (int32_t)std::llround(o.atmosphere_thickness_m_f32 * 65536.0);
-                inst.lod_bias_q16_16 = (int32_t)std::llround(lod_bias * 65536.0);
-                inst.clarity_q16_16 = (int32_t)std::llround(clarity * 65536.0);
+                inst.lod_bias_q16_16 = lod_bias_q16_16;
+                inst.clarity_q16_16 = clarity_q16_16;
 
                 if (inst.anchor_id_u32 < scene_->sm.anchors.size()) {
                     const uint32_t n = (uint32_t)scene_->sm.anchors.size();
@@ -2111,7 +2922,9 @@ void App::Render() {
             if (!xr_img || !xr_view) continue;
 
             // Build instances for this eye.
-            build_instances_for_eye(pos, quat);
+            // Submit XR pose as observation for substrate projection.
+            ew_runtime_submit_xr_eye_pose_f32(&scene_->sm, vi, pos, quat, scene_->sm.canonical_tick);
+            build_instances_for_eye(vi);
 
             // Upload instances.
             VkDeviceSize bytes = (VkDeviceSize)(scene_->instances.size() * sizeof(EwRenderInstance));
@@ -2156,6 +2969,25 @@ void App::Render() {
             dep.pImageMemoryBarriers = &bar;
             vkCmdPipelineBarrier2(cmd, &dep);
 
+            // Ensure depth is in attachment layout for this frame.
+            if (vk_->depth_image) {
+                VkImageMemoryBarrier2 dbar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                dbar.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+                dbar.srcAccessMask = 0;
+                dbar.dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+                dbar.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                dbar.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                dbar.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+                dbar.image = vk_->depth_image;
+                dbar.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+                dbar.subresourceRange.levelCount = 1;
+                dbar.subresourceRange.layerCount = 1;
+                VkDependencyInfo ddep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                ddep.imageMemoryBarrierCount = 1;
+                ddep.pImageMemoryBarriers = &dbar;
+                vkCmdPipelineBarrier2(cmd, &ddep);
+            }
+
             VkClearValue clear{};
             clear.color.float32[0] = 0.0f;
             clear.color.float32[1] = 0.0f;
@@ -2175,6 +3007,15 @@ void App::Render() {
             ri.layerCount = 1;
             ri.colorAttachmentCount = 1;
             ri.pColorAttachments = &color;
+            VkClearValue dclear{};
+            dclear.depthStencil.depth = 1.0f;
+            VkRenderingAttachmentInfo depth{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+            depth.imageView = vk_->depth_view;
+            depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            depth.clearValue = dclear;
+            ri.pDepthAttachment = &depth;
 
             vkCmdBeginRendering(cmd, &ri);
             VkViewport vp{};
@@ -2320,9 +3161,24 @@ void App::Render() {
     barrier.subresourceRange.levelCount = 1;
     barrier.subresourceRange.layerCount = 1;
 
+    VkImageMemoryBarrier2 barriers[2]{};
+    barriers[0] = barrier;
+    // Depth to attachment layout
+    barriers[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+    barriers[1].srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+    barriers[1].srcAccessMask = 0;
+    barriers[1].dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+    barriers[1].dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    barriers[1].oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barriers[1].newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    barriers[1].image = vk_->depth_image;
+    barriers[1].subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    barriers[1].subresourceRange.levelCount = 1;
+    barriers[1].subresourceRange.layerCount = 1;
+
     VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    dep.imageMemoryBarrierCount = 1;
-    dep.pImageMemoryBarriers = &barrier;
+    dep.imageMemoryBarrierCount = 2;
+    dep.pImageMemoryBarriers = barriers;
     vkCmdPipelineBarrier2(cmd, &dep);
 
     // Dynamic rendering begin
@@ -2344,12 +3200,24 @@ void App::Render() {
     color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     color.clearValue = clear;
 
+    VkClearValue dclear{};
+    dclear.depthStencil.depth = 1.0f;
+    dclear.depthStencil.stencil = 0;
+
+    VkRenderingAttachmentInfo depth{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    depth.imageView = vk_->depth_view;
+    depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    depth.clearValue = dclear;
+
     VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
     ri.renderArea.offset = {0,0};
     ri.renderArea.extent = vk_->swap_extent;
     ri.layerCount = 1;
     ri.colorAttachmentCount = 1;
     ri.pColorAttachments = &color;
+    ri.pDepthAttachment = &depth;
 
     vkCmdBeginRendering(cmd, &ri);
     // Draw instanced billboards for objects.
@@ -2401,6 +3269,87 @@ push.pointSize = 20000.0f;
         vkCmdDraw(cmd, 6, inst_n, 0, 0);
     }
     vkCmdEndRendering(cmd);
+
+    // ------------------------------------------------------------
+    // Camera sensor histogram + deterministic median (Vulkan compute)
+    // Produces median normalized depth (Q16.16) into cam_out_buf.
+    // ------------------------------------------------------------
+    if (vk_->cam_hist_pipe && vk_->cam_median_pipe) {
+        // Depth attachment -> shader read
+        VkImageMemoryBarrier2 db{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+        db.srcStageMask = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+        db.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        db.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        db.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+        db.oldLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        db.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        db.image = vk_->depth_image;
+        db.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+        db.subresourceRange.levelCount = 1;
+        db.subresourceRange.layerCount = 1;
+        VkDependencyInfo ddep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        ddep.imageMemoryBarrierCount = 1;
+        ddep.pImageMemoryBarriers = &db;
+        vkCmdPipelineBarrier2(cmd, &ddep);
+
+        // Clear histogram buffer deterministically.
+        vkCmdFillBuffer(cmd, vk_->cam_hist_buf, 0, sizeof(uint32_t) * 256, 0u);
+
+        VkBufferMemoryBarrier2 bb{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+        bb.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+        bb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        bb.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        bb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+        bb.buffer = vk_->cam_hist_buf;
+        bb.offset = 0;
+        bb.size = VK_WHOLE_SIZE;
+        VkDependencyInfo bdep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        bdep.bufferMemoryBarrierCount = 1;
+        bdep.pBufferMemoryBarriers = &bb;
+        vkCmdPipelineBarrier2(cmd, &bdep);
+
+        // Histogram pass
+        struct PC { uint32_t w; uint32_t h; } pc{vk_->swap_extent.width, vk_->swap_extent.height};
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, vk_->cam_hist_pipe);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, vk_->cam_pipe_layout, 0, 1, &vk_->cam_hist_ds, 0, nullptr);
+        vkCmdPushConstants(cmd, vk_->cam_pipe_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PC), &pc);
+        uint32_t gx = (pc.w + 15u) / 16u;
+        uint32_t gy = (pc.h + 15u) / 16u;
+        vkCmdDispatch(cmd, gx, gy, 1);
+
+        // Barrier for histogram writes
+        VkBufferMemoryBarrier2 bb2{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+        bb2.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        bb2.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+        bb2.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        bb2.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+        bb2.buffer = vk_->cam_hist_buf;
+        bb2.offset = 0;
+        bb2.size = VK_WHOLE_SIZE;
+        VkDependencyInfo bdep2{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        bdep2.bufferMemoryBarrierCount = 1;
+        bdep2.pBufferMemoryBarriers = &bb2;
+        vkCmdPipelineBarrier2(cmd, &bdep2);
+
+        // Median pass
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, vk_->cam_median_pipe);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, vk_->cam_pipe_layout, 0, 1, &vk_->cam_median_ds, 0, nullptr);
+        vkCmdDispatch(cmd, 1, 1, 1);
+
+        // Barrier for out buffer visibility to host (next frame read after fence)
+        VkBufferMemoryBarrier2 bo{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+        bo.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        bo.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+        bo.dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT;
+        bo.dstAccessMask = VK_ACCESS_2_HOST_READ_BIT;
+        bo.buffer = vk_->cam_out_buf;
+        bo.offset = 0;
+        bo.size = VK_WHOLE_SIZE;
+        VkDependencyInfo odep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        odep.bufferMemoryBarrierCount = 1;
+        odep.pBufferMemoryBarriers = &bo;
+        vkCmdPipelineBarrier2(cmd, &odep);
+    }
 
     // Transition to PRESENT
     VkImageMemoryBarrier2 barrier2{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
@@ -2493,6 +3442,227 @@ void App::OnBootstrapGame() {
 }
 
 
+
+
+void App::OnApplyTransform() {
+    if (!scene_ || scene_->selected < 0 || scene_->selected >= (int)scene_->objects.size()) return;
+    const auto& obj = scene_->objects[(size_t)scene_->selected];
+
+    auto read_f32 = [&](HWND h)->float {
+        wchar_t buf[128];
+        buf[0] = 0;
+        GetWindowTextW(h, buf, 128);
+        wchar_t* endp = nullptr;
+        double v = wcstod(buf, &endp);
+        if (!endp) v = 0.0;
+        return (float)v;
+    };
+
+    const float x = read_f32(hwnd_posx_);
+    const float y = read_f32(hwnd_posy_);
+    const float z = read_f32(hwnd_posz_);
+
+    EwControlPacket cp{};
+    cp.kind = EwControlPacketKind::ObjectSetTransform;
+    cp.source_u16 = 1;
+    cp.tick_u64 = scene_->sm.canonical_tick;
+    cp.payload.object_set_transform.object_id_u64 = obj.object_id_u64;
+    cp.payload.object_set_transform.pad0_u32 = 0u;
+    cp.payload.object_set_transform.pad1_u32 = 0u;
+    cp.payload.object_set_transform.pos_q16_16[0] = (int32_t)llround((double)x * 65536.0);
+    cp.payload.object_set_transform.pos_q16_16[1] = (int32_t)llround((double)y * 65536.0);
+    cp.payload.object_set_transform.pos_q16_16[2] = (int32_t)llround((double)z * 65536.0);
+    for (int i = 0; i < 4; ++i) cp.payload.object_set_transform.rot_quat_q16_16[i] = obj.rot_quat_q16_16[i];
+
+    (void)ew_runtime_submit_control_packet(&scene_->sm, &cp);
+    AppendOutputUtf8("EDITOR: ObjectSetTransform emitted");
+}
+
+static void ew_quat_from_lookat(float out_q[4], const float pos[3], const float target[3]) {
+    // Right-handed, Z-up. Forward points from camera to target.
+    float f[3] = {target[0]-pos[0], target[1]-pos[1], target[2]-pos[2]};
+    const float fl = sqrtf(f[0]*f[0] + f[1]*f[1] + f[2]*f[2]);
+    if (fl > 1e-6f) { f[0]/=fl; f[1]/=fl; f[2]/=fl; }
+    float up[3] = {0.0f, 0.0f, 1.0f};
+    // Right = f x up
+    float r[3] = { f[1]*up[2]-f[2]*up[1], f[2]*up[0]-f[0]*up[2], f[0]*up[1]-f[1]*up[0] };
+    float rl = sqrtf(r[0]*r[0] + r[1]*r[1] + r[2]*r[2]);
+    if (rl < 1e-6f) { r[0]=1; r[1]=0; r[2]=0; rl=1; }
+    r[0]/=rl; r[1]/=rl; r[2]/=rl;
+    // Recompute up = r x f
+    float u[3] = { r[1]*f[2]-r[2]*f[1], r[2]*f[0]-r[0]*f[2], r[0]*f[1]-r[1]*f[0] };
+
+    // Build rotation matrix with columns (r, u, f)
+    const float m00 = r[0], m01 = u[0], m02 = f[0];
+    const float m10 = r[1], m11 = u[1], m12 = f[1];
+    const float m20 = r[2], m21 = u[2], m22 = f[2];
+
+    const float tr = m00 + m11 + m22;
+    float qx=0,qy=0,qz=0,qw=1;
+    if (tr > 0.0f) {
+        float s = sqrtf(tr + 1.0f) * 2.0f;
+        qw = 0.25f * s;
+        qx = (m21 - m12) / s;
+        qy = (m02 - m20) / s;
+        qz = (m10 - m01) / s;
+    } else if (m00 > m11 && m00 > m22) {
+        float s = sqrtf(1.0f + m00 - m11 - m22) * 2.0f;
+        qw = (m21 - m12) / s;
+        qx = 0.25f * s;
+        qy = (m01 + m10) / s;
+        qz = (m02 + m20) / s;
+    } else if (m11 > m22) {
+        float s = sqrtf(1.0f + m11 - m00 - m22) * 2.0f;
+        qw = (m02 - m20) / s;
+        qx = (m01 + m10) / s;
+        qy = 0.25f * s;
+        qz = (m12 + m21) / s;
+    } else {
+        float s = sqrtf(1.0f + m22 - m00 - m11) * 2.0f;
+        qw = (m10 - m01) / s;
+        qx = (m02 + m20) / s;
+        qy = (m12 + m21) / s;
+        qz = 0.25f * s;
+    }
+    // Normalize
+    const float nl = sqrtf(qx*qx + qy*qy + qz*qz + qw*qw);
+    if (nl > 1e-6f) { qx/=nl; qy/=nl; qz/=nl; qw/=nl; }
+    out_q[0]=qx; out_q[1]=qy; out_q[2]=qz; out_q[3]=qw;
+}
+
+void App::EmitEditorSelection(uint64_t object_id_u64) {
+    if (!scene_) return;
+    EwControlPacket cp{};
+    cp.kind = EwControlPacketKind::EditorSetSelection;
+    cp.source_u16 = 1;
+    cp.tick_u64 = scene_->sm.canonical_tick;
+    cp.payload.editor_set_selection.selected_object_id_u64 = object_id_u64;
+    (void)ew_runtime_submit_control_packet(&scene_->sm, &cp);
+void App::EmitEditorToggleSelection(uint64_t object_id_u64) {
+    if (!scene_) return;
+    EwControlPacket cp{};
+    cp.kind = EwControlPacketKind::EditorToggleSelection;
+    cp.source_u16 = 1;
+    cp.tick_u64 = scene_->sm.canonical_tick;
+    cp.payload.editor_toggle_selection.object_id_u64 = object_id_u64;
+    (void)ew_runtime_submit_control_packet(&scene_->sm, &cp);
+}
+
+void App::EmitEditorAxisConstraint() {
+    if (!scene_) return;
+    EwControlPacket cp{};
+    cp.kind = EwControlPacketKind::EditorSetAxisConstraint;
+    cp.source_u16 = 1;
+    cp.tick_u64 = scene_->sm.canonical_tick;
+    cp.payload.editor_set_axis_constraint.axis_constraint_u8 = editor_axis_constraint_u8_;
+    (void)ew_runtime_submit_control_packet(&scene_->sm, &cp);
+}
+
+void App::EmitEditorCommitTransformTxn(uint64_t object_id_u64,
+                                       const int32_t before_pos_q16_16[3],
+                                       const int32_t before_rot_q16_16[4],
+                                       const int32_t after_pos_q16_16[3],
+                                       const int32_t after_rot_q16_16[4]) {
+    if (!scene_) return;
+    EwControlPacket cp{};
+    cp.kind = EwControlPacketKind::EditorCommitTransformTxn;
+    cp.source_u16 = 1;
+    cp.tick_u64 = scene_->sm.canonical_tick;
+    cp.payload.editor_commit_transform_txn.object_id_u64 = object_id_u64;
+    for (int k = 0; k < 3; ++k) {
+        cp.payload.editor_commit_transform_txn.before_pos_q16_16[k] = before_pos_q16_16[k];
+        cp.payload.editor_commit_transform_txn.after_pos_q16_16[k] = after_pos_q16_16[k];
+    }
+    for (int k = 0; k < 4; ++k) {
+        cp.payload.editor_commit_transform_txn.before_rot_q16_16[k] = before_rot_q16_16[k];
+        cp.payload.editor_commit_transform_txn.after_rot_q16_16[k] = after_rot_q16_16[k];
+    }
+    (void)ew_runtime_submit_control_packet(&scene_->sm, &cp);
+}
+
+void App::EmitEditorUndo() {
+    if (!scene_) return;
+    EwControlPacket cp{};
+    cp.kind = EwControlPacketKind::EditorUndo;
+    cp.source_u16 = 1;
+    cp.tick_u64 = scene_->sm.canonical_tick;
+    (void)ew_runtime_submit_control_packet(&scene_->sm, &cp);
+}
+
+void App::EmitEditorRedo() {
+    if (!scene_) return;
+    EwControlPacket cp{};
+    cp.kind = EwControlPacketKind::EditorRedo;
+    cp.source_u16 = 1;
+    cp.tick_u64 = scene_->sm.canonical_tick;
+    (void)ew_runtime_submit_control_packet(&scene_->sm, &cp);
+}
+
+}
+
+void App::EmitEditorGizmo() {
+    if (!scene_) return;
+    EwControlPacket cp{};
+    cp.kind = EwControlPacketKind::EditorSetGizmo;
+    cp.source_u16 = 1;
+    cp.tick_u64 = scene_->sm.canonical_tick;
+    cp.payload.editor_set_gizmo.gizmo_mode_u8 = editor_gizmo_mode_u8_;
+    cp.payload.editor_set_gizmo.gizmo_space_u8 = editor_gizmo_space_u8_;
+    cp.payload.editor_set_gizmo.pad_u8[0] = 0;
+    cp.payload.editor_set_gizmo.pad_u8[1] = 0;
+    (void)ew_runtime_submit_control_packet(&scene_->sm, &cp);
+}
+
+void App::EmitEditorSnap() {
+    if (!scene_) return;
+    EwControlPacket cp{};
+    cp.kind = EwControlPacketKind::EditorSetSnap;
+    cp.source_u16 = 1;
+    cp.tick_u64 = scene_->sm.canonical_tick;
+    cp.payload.editor_set_snap.snap_enabled_u8 = editor_snap_enabled_u8_;
+    cp.payload.editor_set_snap.pad_u8[0] = 0;
+    cp.payload.editor_set_snap.pad_u8[1] = 0;
+    cp.payload.editor_set_snap.pad_u8[2] = 0;
+    cp.payload.editor_set_snap.grid_step_m_q16_16 = editor_grid_step_m_q16_16_;
+    cp.payload.editor_set_snap.angle_step_deg_q16_16 = editor_angle_step_deg_q16_16_;
+    (void)ew_runtime_submit_control_packet(&scene_->sm, &cp);
+}
+
+void App::EmitCameraSetFromRig() {
+    if (!scene_) return;
+    // Orbit rig -> camera pose.
+    const float cy = cosf(cam_yaw_rad_);
+    const float sy = sinf(cam_yaw_rad_);
+    const float cp = cosf(cam_pitch_rad_);
+    const float sp = sinf(cam_pitch_rad_);
+
+    float offset[3] = { cy*cp*cam_dist_m_, sy*cp*cam_dist_m_, sp*cam_dist_m_ };
+    float pos[3] = { cam_target_[0] + offset[0], cam_target_[1] + offset[1], cam_target_[2] + offset[2] };
+    float q[4];
+    ew_quat_from_lookat(q, pos, cam_target_);
+
+    EwControlPacket cpkt{};
+    cpkt.kind = EwControlPacketKind::CameraSet;
+    cpkt.source_u16 = 1;
+    cpkt.tick_u64 = scene_->sm.canonical_tick;
+    cpkt.payload.camera_set.focus_mode_u8 = 0;
+    cpkt.payload.camera_set.pad_u8[0] = 0;
+    cpkt.payload.camera_set.pad_u8[1] = 0;
+    cpkt.payload.camera_set.pad_u8[2] = 0;
+    cpkt.payload.camera_set.manual_focus_distance_m_q32_32 = (int64_t)(5) * (1ll<<32);
+    cpkt.payload.camera_set.focal_length_mm_q16_16 = (int32_t)(50 * 65536);
+    cpkt.payload.camera_set.aperture_f_q16_16 = (int32_t)(28 * 65536 / 10);
+    cpkt.payload.camera_set.exposure_ev_q16_16 = 0;
+    cpkt.payload.camera_set.pos_xyz_q16_16[0] = (int32_t)llround((double)pos[0] * 65536.0);
+    cpkt.payload.camera_set.pos_xyz_q16_16[1] = (int32_t)llround((double)pos[1] * 65536.0);
+    cpkt.payload.camera_set.pos_xyz_q16_16[2] = (int32_t)llround((double)pos[2] * 65536.0);
+    cpkt.payload.camera_set.rot_quat_q16_16[0] = (int32_t)llround((double)q[0] * 65536.0);
+    cpkt.payload.camera_set.rot_quat_q16_16[1] = (int32_t)llround((double)q[1] * 65536.0);
+    cpkt.payload.camera_set.rot_quat_q16_16[2] = (int32_t)llround((double)q[2] * 65536.0);
+    cpkt.payload.camera_set.rot_quat_q16_16[3] = (int32_t)llround((double)q[3] * 65536.0);
+
+    (void)ew_runtime_submit_control_packet(&scene_->sm, &cpkt);
+}
 void App::AppendOutputUtf8(const std::string& line) {
     std::wstring wline = utf8_to_wide(line);
     wline.append(L"\r\n");
@@ -2527,9 +3697,87 @@ LRESULT App::WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             if (id == 2002 && code == BN_CLICKED) { OnSend(); }
             if (id == 2003 && code == BN_CLICKED) { OnImportObj(); }
             if (id == 2006 && code == BN_CLICKED) { OnBootstrapGame(); }
+            if (id == 2013 && code == BN_CLICKED) { OnApplyTransform(); }
+            if (id == 2020 && code == BN_CLICKED) {
+                editor_gizmo_mode_u8_ = 1;
+                EmitEditorGizmo();
+                AppendOutputUtf8("EDITOR: gizmo=Translate");
+            }
+            if (id == 2021 && code == BN_CLICKED) {
+                editor_gizmo_mode_u8_ = 2;
+                EmitEditorGizmo();
+                AppendOutputUtf8("EDITOR: gizmo=Rotate");
+            }
+            if (id == 2022 && code == BN_CLICKED) {
+                // Frame selection handled in Tick() using current cached object state.
+                // We set a one-shot key to reuse the existing framing logic (F key).
+                input_.key_down['F'] = true;
+
+if (id == 2026 && code == BN_CLICKED) {
+    editor_axis_constraint_u8_ = 0;
+    EmitEditorAxisConstraint();
+    AppendOutputUtf8("EDITOR: axis=None");
+}
+if (id == 2027 && code == BN_CLICKED) {
+    editor_axis_constraint_u8_ = 1;
+    EmitEditorAxisConstraint();
+    AppendOutputUtf8("EDITOR: axis=X");
+}
+if (id == 2028 && code == BN_CLICKED) {
+    editor_axis_constraint_u8_ = 2;
+    EmitEditorAxisConstraint();
+    AppendOutputUtf8("EDITOR: axis=Y");
+}
+if (id == 2029 && code == BN_CLICKED) {
+    editor_axis_constraint_u8_ = 3;
+    EmitEditorAxisConstraint();
+    AppendOutputUtf8("EDITOR: axis=Z");
+}
+if (id == 2030 && code == BN_CLICKED) { EmitEditorUndo(); AppendOutputUtf8("EDITOR: undo"); }
+if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); AppendOutputUtf8("EDITOR: redo"); }
+
+            }
+            if (id == 2023 && code == BN_CLICKED) {
+                const LRESULT v = SendMessageW(hwnd_snap_enable_, BM_GETCHECK, 0, 0);
+                editor_snap_enabled_u8_ = (v == BST_CHECKED) ? 1 : 0;
+                EmitEditorSnap();
+            }
+            if ((id == 2024 || id == 2025) && code == EN_KILLFOCUS) {
+                // Parse snap config edits and emit.
+                auto read_f32 = [&](HWND h)->float {
+                    wchar_t buf[128]; buf[0] = 0;
+                    GetWindowTextW(h, buf, 128);
+                    wchar_t* endp = nullptr;
+                    double v = wcstod(buf, &endp);
+                    if (!endp) v = 0.0;
+                    return (float)v;
+                };
+                float grid = read_f32(hwnd_grid_step_);
+                float ang = read_f32(hwnd_angle_step_);
+                if (grid < 0.0001f) grid = 0.0001f;
+                if (ang < 0.1f) ang = 0.1f;
+                editor_grid_step_m_q16_16_ = (int32_t)llround((double)grid * 65536.0);
+                editor_angle_step_deg_q16_16_ = (int32_t)llround((double)ang * 65536.0);
+                EmitEditorSnap();
+            }
             if (id == 2004 && code == LBN_SELCHANGE) {
                 int sel = (int)SendMessageW(hwnd_objlist_, LB_GETCURSEL, 0, 0);
                 if (scene_) scene_->selected = sel;
+                // Populate position fields from last-known projected state.
+                if (scene_ && sel >= 0 && sel < (int)scene_->objects.size()) {
+                    const auto& o = scene_->objects[(size_t)sel];
+                    editor_selected_object_id_u64_ = o.object_id_u64;
+                    EmitEditorSelection(editor_selected_object_id_u64_);
+                    auto fmt = [&](int32_t q)->std::wstring {
+                        wchar_t b[64];
+                        const double v = (double)q / 65536.0;
+                        swprintf(b, 64, L"%.6f", v);
+                        return std::wstring(b);
+                    };
+                    SetWindowTextW(hwnd_posx_, fmt(o.pos_q16_16[0]).c_str());
+                    SetWindowTextW(hwnd_posy_, fmt(o.pos_q16_16[1]).c_str());
+                    SetWindowTextW(hwnd_posz_, fmt(o.pos_q16_16[2]).c_str());
+                }
             }
         } break;
         case WM_KEYDOWN:

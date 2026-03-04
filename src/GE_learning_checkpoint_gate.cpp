@@ -66,7 +66,7 @@ int64_t LearningCheckpointGate::rel_err_q32_32_vec(const std::vector<int64_t>& s
     return worst;
 }
 
-void LearningCheckpointGate::tick(SubstrateMicroprocessor* sm) {
+void LearningCheckpointGate::tick(SubstrateManager* sm) {
     if (!sm) return;
     if (!registry_.has_pending()) return;
 
@@ -89,7 +89,7 @@ void LearningCheckpointGate::tick(SubstrateMicroprocessor* sm) {
     // Budgets are derived from headroom/governor unless explicitly configured.
     if (t->tries_per_step_u32 == 0) {
         const uint32_t cfg = sm->learning_tries_per_step_u32;
-        t->tries_per_step_u32 = (cfg == 0u) ? sm->derived_learning_tries_per_step_u32(sm->ctx) : cfg;
+        t->tries_per_step_u32 = (cfg == 0u) ? sm->derived_learning_tries_per_step_u32(sm->ctx_snapshot) : cfg;
         if (t->tries_per_step_u32 == 0) t->tries_per_step_u32 = 1u;
     }
     if (t->tries_remaining_u64 == 0) {
@@ -115,7 +115,7 @@ void LearningCheckpointGate::tick(SubstrateMicroprocessor* sm) {
     // remain: one "step" represents a batched/fan-out block of tries.
     {
         const uint32_t mspt_cfg = sm->learning_max_steps_per_tick_u32;
-        const uint32_t mspt = (mspt_cfg == 0u) ? sm->derived_learning_max_steps_per_tick_u32(sm->ctx) : mspt_cfg;
+        const uint32_t mspt = (mspt_cfg == 0u) ? sm->derived_learning_max_steps_per_tick_u32(sm->ctx_snapshot) : mspt_cfg;
         if (steps > (uint64_t)mspt) steps = (uint64_t)mspt;
     }
 
@@ -201,7 +201,7 @@ void LearningCheckpointGate::tick(SubstrateMicroprocessor* sm) {
                 probe->inject_audio_amplitude_q32_32(amp_z);
 
                 const uint32_t micro_cfg = sm->learning_probe_micro_ticks_per_engine_tick_u32;
-                const uint32_t micro = (micro_cfg == 0u) ? sm->derived_learning_probe_micro_ticks_u32(sm->ctx) : micro_cfg;
+                const uint32_t micro = (micro_cfg == 0u) ? sm->derived_learning_probe_micro_ticks_u32(sm->ctx_snapshot) : micro_cfg;
                 if (micro != 0u) probe->step_micro_ticks(micro, /*bind_as_probe=*/true);
             }
         }

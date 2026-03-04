@@ -33,7 +33,7 @@ static void write_text(const std::string& path, const std::string& s) {
     std::fclose(f);
 }
 
-static void coord_coord9_u64x9(const SubstrateMicroprocessor& sim, uint64_t out9[9]) {
+static void coord_coord9_u64x9(const SubstrateManager& sim, uint64_t out9[9]) {
     for (int i = 0; i < 9; ++i) out9[i] = 0ULL;
     for (size_t k = 0; k < sim.anchors.size(); ++k) {
         const Anchor& a = sim.anchors[k];
@@ -59,7 +59,7 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    SubstrateMicroprocessor sim(128);
+    SubstrateManager sim(128);
     sim.projection_seed = 77;
     sim.configure_cosmic_expansion(1, 1);
 

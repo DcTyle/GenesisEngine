@@ -135,7 +135,7 @@ struct MetricTask {
     bool accepted = false;
 
     // Tick when the task was completed (accepted or rejected). 0 indicates unset.
-    // Determinism rule: recorded from SubstrateMicroprocessor::canonical_tick.
+    // Determinism rule: recorded from SubstrateManager::canonical_tick.
     uint64_t completed_tick_u64 = 0;
 };
 

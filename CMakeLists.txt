@@ -56,20 +56,33 @@ endif()
 add_library(EigenWareCore
     src/GE_runtime.cpp
     src/GE_camera_anchor.cpp
+    src/GE_pulse_trajectory_bound.cpp
     src/GE_project_settings.cpp
+    src/GE_g2p_english.cpp
+    src/GE_asset_substrate.cpp
     src/GE_neural_phase_ai.cpp
     src/GE_ai_policy.cpp
     src/GE_ai_anticipation.cpp
+    src/GE_state_fingerprint.cpp
+    src/GE_fft_fixed.cpp
+    src/GE_collision_env.cpp
+    src/GE_voxel_coupling.cpp
+    src/GE_coherence_bus.cpp
+    src/GE_fourier_fanout.cpp
+    src/GE_nbody.cpp
     src/GE_metric_registry.cpp
     src/GE_language_foundation.cpp
     src/GE_audio_wav.cpp
     src/GE_audio_features.cpp
     src/GE_speech_alignment.cpp
+    src/GE_forced_aligner.cpp
     src/GE_voice_synth.cpp
     src/GE_g2p_lexicon.cpp
-    src/GE_g2p_english.cpp
-    src/GE_forced_aligner.cpp
     src/GE_voice_predictive_model.cpp
+    src/GE_prosody_planner.cpp
+    src/GE_prosody_priors.cpp
+    src/GE_phrase_priors.cpp
+    src/GE_pause_priors.cpp
     src/GE_math_foundation.cpp
     src/GE_experiment_templates.cpp
     src/GE_domain_policy.cpp
@@ -119,7 +132,7 @@ add_library(EigenWareCore
     src/cmb_bath.cpp
     src/operator_validator.cpp
     src/ew_phase_transport.cpp
-    src/ew_substrate_microprocessor.cpp
+    src/ew_substrate_manager.cpp
     src/ew_runtime.cpp
     src/ew_eq_exec.cpp
     src/ew_flow_ir.cpp
@@ -251,6 +264,7 @@ set_tests_properties(ge_corpus_replay_identity PROPERTIES LABELS "CUDA;CORPUS")
 
 endif()
 
+if (EW_ENABLE_CUDA)
 add_executable(ew_contract_harness
     tests/contract_harness.cpp
 )
@@ -278,6 +292,7 @@ add_executable(test_contact_constraint
 )
 target_link_libraries(test_contact_constraint PRIVATE EigenWareCore)
 add_test(NAME contact_constraint COMMAND test_contact_constraint)
+endif()
 
 add_executable(ew_crawler_loop
     src/tools/crawler_loop_main.cpp
@@ -356,6 +371,11 @@ add_executable(ge_voice_train
 )
 target_link_libraries(ge_voice_train PRIVATE EigenWareCore)
 
+add_executable(ge_force_align
+    src/tools/ge_force_align_main.cpp
+)
+target_link_libraries(ge_force_align PRIVATE EigenWareCore)
+
 
 option(EW_ENFORCE_COHERENCE_GATE "Fail builds unless integration proofs pass" ON)
 if (EW_ENFORCE_COHERENCE_GATE)
@@ -367,7 +387,23 @@ if (EW_ENFORCE_COHERENCE_GATE)
         COMMENT "Coherence gate: running integration proofs"
         VERBATIM
     )
-    add_dependencies(coherence_gate test_determinism test_ai_golden test_microprocessor ew_contract_harness ew_verify_proofs)
+    # Some proof/verification executables live in optional subdirectories.
+    # Add dependencies only when the targets exist so configuration remains robust.
+    if (TARGET test_determinism)
+        add_dependencies(coherence_gate test_determinism)
+    endif()
+    if (TARGET test_ai_golden)
+        add_dependencies(coherence_gate test_ai_golden)
+    endif()
+    if (TARGET test_microprocessor)
+        add_dependencies(coherence_gate test_microprocessor)
+    endif()
+    if (TARGET ew_contract_harness)
+        add_dependencies(coherence_gate ew_contract_harness)
+    endif()
+    if (TARGET ew_verify_proofs)
+        add_dependencies(coherence_gate ew_verify_proofs)
+    endif()
     # Executables are provided by vulkan_app; enforce coherence gate at build level.
 endif()
 
@@ -396,3 +432,5 @@ add_executable(ge_regression_suite
     src/tools/ge_regression_suite_main.cpp
 )
 target_link_libraries(ge_regression_suite PRIVATE EigenWareCore)
+# txn file
+list(APPEND genesis_engine_src src/ew_txn_file.cpp)

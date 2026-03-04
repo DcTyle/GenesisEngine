@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <string>
 
-class SubstrateMicroprocessor;
+class SubstrateManager;
 
 // -----------------------------------------------------------------------------
 //  Code Artifact Operators (Blueprint/Spec: liberty-space computation)
@@ -19,7 +19,7 @@ class SubstrateMicroprocessor;
 
 // Emit a minimal, self-contained C++ module (hpp+cpp) and a CMake stanza.
 // The module_name is sanitized deterministically.
-void code_emit_minimal_cpp_module(SubstrateMicroprocessor* sm, const std::string& module_name_utf8);
+void code_emit_minimal_cpp_module(SubstrateManager* sm, const std::string& module_name_utf8);
 
 // Determine artifact kind from a repository-relative path (no hashing/crypto).
 uint32_t code_artifact_kind_from_rel_path(const std::string& rel_path);
@@ -49,7 +49,7 @@ struct EwPatchSpec {
 // - On reject, routes the attempt into dark excitation (non-projecting)
 // Returns true on commit-ready artifact write.
 bool code_apply_patch_coherence_gated(
-    SubstrateMicroprocessor* sm,
+    SubstrateManager* sm,
     const std::string& rel_path,
     uint32_t kind_u32,
     const EwPatchSpec& spec,
@@ -57,7 +57,7 @@ bool code_apply_patch_coherence_gated(
 );
 
 // Emit a hydration hint artifact (does not write filesystem).
-void code_emit_hydration_hint(SubstrateMicroprocessor* sm, const std::string& root_dir_rel);
+void code_emit_hydration_hint(SubstrateManager* sm, const std::string& root_dir_rel);
 
 // Deterministic fold for path bookkeeping (non-security).
 uint32_t path_fold_u32_from_rel_path(const std::string& rel_path);

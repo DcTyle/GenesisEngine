@@ -32,7 +32,7 @@ static bool file_exists_on_disk_repo(const std::string& rel_path) {
     return true;
 }
 
-static bool include_resolution_ok(SubstrateMicroprocessor* sm, const std::string& rel_path, const std::string& payload) {
+static bool include_resolution_ok(SubstrateManager* sm, const std::string& rel_path, const std::string& payload) {
     if (!sm) return false;
     const std::string dir = dirname_from_rel_path(rel_path);
     size_t i = 0;
@@ -69,7 +69,7 @@ static bool include_resolution_ok(SubstrateMicroprocessor* sm, const std::string
     return true;
 }
 
-static bool cmake_sanity_ok(SubstrateMicroprocessor* sm, const std::string& rel_path, const std::string& payload) {
+static bool cmake_sanity_ok(SubstrateManager* sm, const std::string& rel_path, const std::string& payload) {
     (void)rel_path;
     if (!sm) return false;
     // Conservative: ensure referenced .cpp/.c/.hpp paths exist either in inspector or repo.
@@ -105,7 +105,7 @@ static bool cmake_sanity_ok(SubstrateMicroprocessor* sm, const std::string& rel_
     return true;
 }
 
-static int score_candidate(SubstrateMicroprocessor* sm,
+static int score_candidate(SubstrateManager* sm,
                            const std::string& rel_path,
                            uint32_t kind_u32,
                            const std::string& base_payload,
@@ -259,7 +259,7 @@ static uint64_t coord_fold9_from_text(const std::string& s) {
     return acc;
 }
 
-static void upsert_artifact(SubstrateMicroprocessor* sm,
+static void upsert_artifact(SubstrateManager* sm,
                             const std::string& rel_path,
                             uint32_t kind_u32,
                             const std::string& payload,
@@ -300,7 +300,7 @@ static void upsert_artifact(SubstrateMicroprocessor* sm,
 }
 
 bool code_apply_patch_coherence_gated(
-    SubstrateMicroprocessor* sm,
+    SubstrateManager* sm,
     const std::string& rel_path,
     uint32_t kind_u32,
     const EwPatchSpec& spec,
@@ -389,14 +389,14 @@ bool code_apply_patch_coherence_gated(
     return true;
 }
 
-void code_emit_hydration_hint(SubstrateMicroprocessor* sm, const std::string& root_dir_rel) {
+void code_emit_hydration_hint(SubstrateManager* sm, const std::string& root_dir_rel) {
     if (!sm) return;
     const std::string rel_path = "Draft Container/AI/hydration_hint.txt";
     const std::string payload = "HYDRATE_ROOT=" + root_dir_rel + "\n";
     upsert_artifact(sm, rel_path, (uint32_t)EW_ARTIFACT_TEXT, payload, 0xE180u);
 }
 
-void code_emit_minimal_cpp_module(SubstrateMicroprocessor* sm, const std::string& module_name_utf8) {
+void code_emit_minimal_cpp_module(SubstrateManager* sm, const std::string& module_name_utf8) {
     if (!sm) return;
     const std::string name = sanitize_module_name(module_name_utf8);
 
