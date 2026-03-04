@@ -1,5 +1,9 @@
 #include "GE_camera_anchor.hpp"
+#include "GE_color_palette.hpp"
+#include "GE_fourier_fanout.hpp"
 #include "GE_runtime.hpp"
+#include "GE_anchor_select.hpp"
+#include "anchor.hpp"
 #include "ew_eq_exec.h"
 #include "crawler_encode_cuda.hpp"
 
@@ -100,4 +104,84 @@ void ge_camera_anchor_tick(SubstrateManager& sm, Anchor& cam_anchor, uint64_t ti
     }
 
     (void)ew_eq_exec_packet(&sm, 0x00000009u, args);
+
+    // Derived environment sampling (read-only projection):
+    // - spectral field probes at the camera position
+    // - absorption/emission "color band" proxy from voxel influx bands
+    // HARD RULE: these fields never become authoritative state drivers.
+    int16_t field_q = 0;
+    int16_t grad_q = 0;
+    uint16_t coh_q15 = 0;
+    uint8_t color_band = 0;
+
+    const int32_t p[3] = {
+        cam_anchor.camera_state.pos_xyz_q16_16[0],
+        cam_anchor.camera_state.pos_xyz_q16_16[1],
+        cam_anchor.camera_state.pos_xyz_q16_16[2]
+    };
+
+    // Probe nearest spectral field anchor deterministically by distance to region center.
+    {
+        const Anchor* best = ew_find_nearest_anchor_const(
+            sm.anchors,
+            EW_ANCHOR_KIND_SPECTRAL_FIELD,
+            p,
+            [](const Anchor& a, int32_t out_center_q16_16[3]) -> bool {
+                out_center_q16_16[0] = a.spectral_field_state.region_center_q16_16[0];
+                out_center_q16_16[1] = a.spectral_field_state.region_center_q16_16[1];
+                out_center_q16_16[2] = a.spectral_field_state.region_center_q16_16[2];
+                return true;
+            }
+        );
+
+        if (best) {
+        // Respect HOLD: when the spectral microprocessor holds the tick, do not
+        // project transient probe values for audio/viewport modulation.
+        if (best->spectral_field_state.hold_tick_u8 == 0u) {
+            field_q = ew_spectral_probe_field_q1_15(best->spectral_field_state, p);
+            grad_q = ew_spectral_probe_grad_q1_15(best->spectral_field_state, p);
+            const uint16_t g = (grad_q < 0) ? (uint16_t)(-grad_q) : (uint16_t)grad_q;
+            coh_q15 = (g > 32767u) ? 32767u : g;
+        } else {
+            field_q = 0;
+            grad_q = 0;
+            coh_q15 = 0;
+        }
+        }
+    }
+
+    // Absorption/emission banding: choose the nearest voxel-coupling anchor's influx band
+    // as a proxy for "light enters medium and exits as a color".
+    // Deterministic: pick nearest by squared distance to the voxel block center;
+    // stable tie-break on anchor id.
+    {
+        const Anchor* best = ew_find_nearest_anchor_const(
+            sm.anchors,
+            EW_ANCHOR_KIND_VOXEL_COUPLING,
+            p,
+            [](const Anchor& a, int32_t out_center_q16_16[3]) -> bool {
+                const EwVoxelCouplingAnchorState& vs = a.voxel_coupling_state;
+                const int32_t half_extent = (int32_t)((EW_VOXEL_COUPLING_DIM * vs.voxel_size_m_q16_16) / 2);
+                out_center_q16_16[0] = vs.origin_q16_16[0] + half_extent;
+                out_center_q16_16[1] = vs.origin_q16_16[1] + half_extent;
+                out_center_q16_16[2] = vs.origin_q16_16[2] + half_extent;
+                return true;
+            }
+        );
+        if (best) {
+            color_band = best->voxel_coupling_state.influx_band_u8;
+        }
+    }
+
+    cam_anchor.camera_state.audio_env_field_q1_15 = field_q;
+    cam_anchor.camera_state.audio_env_grad_q1_15 = grad_q;
+    cam_anchor.camera_state.audio_env_coherence_q15 = coh_q15;
+    cam_anchor.camera_state.color_band_u8 = color_band;
+    const EwPaletteEntry pe = ew_palette_lookup(color_band);
+    cam_anchor.camera_state.color_r_u8 = pe.r_u8;
+    cam_anchor.camera_state.color_g_u8 = pe.g_u8;
+    cam_anchor.camera_state.color_b_u8 = pe.b_u8;
+    cam_anchor.camera_state.audio_eq_preset_u8 = pe.audio_eq_preset_u8;
+    cam_anchor.camera_state.audio_reverb_preset_u8 = pe.audio_reverb_preset_u8;
+    cam_anchor.camera_state.audio_occlusion_preset_u8 = pe.audio_occlusion_preset_u8;
 }

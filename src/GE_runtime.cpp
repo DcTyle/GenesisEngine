@@ -25,6 +25,10 @@
 
 #include "GE_shell_mesh.hpp"
 #include "GE_object_ancilla.hpp"
+#include "GE_planet_ancilla.hpp"
+#include "GE_pulse_trajectory_bound.hpp"
+
+#include "GE_fourier_fanout.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -36,6 +40,40 @@ static inline int64_t q32_32_mul(int64_t a_q32_32, int64_t b_q32_32) {
     return (int64_t)(p >> 32);
 }
 
+
+static void ge_rebuild_cached_anchor_ids(SubstrateManager& sm) {
+    sm.camera_anchor_id_u32 = 0u;
+    sm.coherence_bus_anchor_id_u32 = 0u;
+    sm.spectral_field_anchor_id_u32 = 0u;
+    sm.voxel_coupling_anchor_id_u32 = 0u;
+    sm.collision_env_anchor_id_u32 = 0u;
+
+    const uint32_t n = (uint32_t)sm.anchors.size();
+    for (uint32_t id = 1u; id < n; ++id) {
+        const Anchor& a = sm.anchors[id];
+        switch (a.kind_u32) {
+            case EW_ANCHOR_KIND_CAMERA:
+                if (sm.camera_anchor_id_u32 == 0u) sm.camera_anchor_id_u32 = id;
+                break;
+            case EW_ANCHOR_KIND_COHERENCE_BUS:
+                if (sm.coherence_bus_anchor_id_u32 == 0u) sm.coherence_bus_anchor_id_u32 = id;
+                break;
+            case EW_ANCHOR_KIND_SPECTRAL_FIELD:
+                if (sm.spectral_field_anchor_id_u32 == 0u) sm.spectral_field_anchor_id_u32 = id;
+                break;
+            case EW_ANCHOR_KIND_VOXEL_COUPLING:
+                if (sm.voxel_coupling_anchor_id_u32 == 0u) sm.voxel_coupling_anchor_id_u32 = id;
+                break;
+            case EW_ANCHOR_KIND_COLLISION_ENV:
+                if (sm.collision_env_anchor_id_u32 == 0u) sm.collision_env_anchor_id_u32 = id;
+                break;
+            default: break;
+        }
+    }
+
+    // Ensure next id never regresses below vector size (anchors are id-indexed).
+    if (sm.next_anchor_id_u32 < n) sm.next_anchor_id_u32 = n;
+}
 // Build a view matrix (row-major 4x4) in Q16.16 from a camera pose expressed as
 // (pos_q16_16, quat_q16_16). Quaternion is interpreted as camera->world rotation.
 // View matrix is world->camera: R^T and -R^T * pos.
@@ -703,6 +741,79 @@ for (size_t i = 0; i < count; ++i) anchors.emplace_back((uint32_t)i);
     }
 
     // ------------------------------------------------------------------
+    // Global coherence bus anchor (mass-leakage -> coherence-frequency bus)
+    // ------------------------------------------------------------------
+    {
+        const uint64_t kBusObjectId = 0x31535542484F434FULL; // 'COHOBUS1' little-endian-ish tag
+        const uint32_t id = alloc_anchor_id();
+        coherence_bus_anchor_id_u32 = id;
+        anchors[id].kind_u32 = EW_ANCHOR_KIND_COHERENCE_BUS;
+        anchors[id].object_id_u64 = kBusObjectId;
+        // Deterministic router seed.
+        anchors[id].coherence_bus_state.router_seed_u64 = (uint64_t)projection_seed ^ 0xC0B5BEEFULL;
+        // Default per-band caps (may be tuned later via operator packets).
+        for (uint32_t b = 0u; b < EW_COHERENCE_BANDS; ++b) {
+            anchors[id].coherence_bus_state.max_packets_per_band_per_tick_u16[b] = 4u;
+            anchors[id].coherence_bus_state.authority_cap_q15[b] = 16384u;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Bootstrap spectral field anchor (substrate Fourier microprocessor)
+    // ------------------------------------------------------------------
+    {
+        const uint64_t kSpecObjectId = 0x3154444C46504553ULL; // 'SPEFLDT1' tag
+        const uint32_t id = alloc_anchor_id();
+        spectral_field_anchor_id_u32 = id;
+        anchors[id].kind_u32 = EW_ANCHOR_KIND_SPECTRAL_FIELD;
+        anchors[id].object_id_u64 = kSpecObjectId;
+        // Deterministic initial noise floor and dt scale.
+        anchors[id].spectral_field_state.n_u32 = EW_SPECTRAL_N;
+        anchors[id].spectral_field_state.log2n_u32 = 6u;
+        anchors[id].spectral_field_state.twiddle_profile_u32 = 0u;
+        anchors[id].spectral_field_state.region_center_q16_16[0] = 0;
+        anchors[id].spectral_field_state.region_center_q16_16[1] = 0;
+        anchors[id].spectral_field_state.region_center_q16_16[2] = 0;
+        anchors[id].spectral_field_state.region_radius_m_q16_16 = (int32_t)(64 * 65536);
+        anchors[id].spectral_field_state.calibration_mode_u8 = 1u;
+        anchors[id].spectral_field_state.calibration_profile_u8 = 0u;
+        anchors[id].spectral_field_state.calibration_ticks_remaining_u32 = 240u;
+        anchors[id].spectral_field_state.noise_floor_q15 = 64;
+        anchors[id].spectral_field_state.min_delta_q15 = 8;
+        anchors[id].spectral_field_state.dt_scale_q32_32 = (1LL << 32);
+        anchors[id].spectral_field_state.fanout_budget_u32 = 32;
+    }
+
+    // ------------------------------------------------------------------
+    // ------------------------------------------------------------------
+    // Bootstrap voxel coupling anchor (dense persistence + boundary coupling)
+    // ------------------------------------------------------------------
+    {
+        const uint64_t kVoxObjectId = 0x31504C50434F5856ULL; // 'VXOCPPL1' tag
+        const uint32_t id = alloc_anchor_id();
+        voxel_coupling_anchor_id_u32 = id;
+        anchors[id].kind_u32 = EW_ANCHOR_KIND_VOXEL_COUPLING;
+        anchors[id].object_id_u64 = kVoxObjectId;
+        anchors[id].voxel_coupling_state.origin_q16_16[0] = -4 * 65536;
+        anchors[id].voxel_coupling_state.origin_q16_16[1] = -4 * 65536;
+        anchors[id].voxel_coupling_state.origin_q16_16[2] = -4 * 65536;
+        anchors[id].voxel_coupling_state.voxel_size_m_q16_16 = 1 * 65536;
+        anchors[id].voxel_coupling_state.max_particles_u32 = EW_VOXEL_COUPLING_PARTICLES_MAX;
+        anchors[id].voxel_coupling_state.spawn_seed_u64 = (uint64_t)projection_seed ^ 0xA11C0FFEEULL;
+    }
+
+    // ------------------------------------------------------------------
+    // Collision environment anchor (solver-facing constraints inbox)
+    // ------------------------------------------------------------------
+    {
+        const uint64_t kColEnvObjectId = 0x31564E455C4F4343ULL; // 'CCO\ENV1' tag-ish
+        const uint32_t id = alloc_anchor_id();
+        collision_env_anchor_id_u32 = id;
+        anchors[id].kind_u32 = EW_ANCHOR_KIND_COLLISION_ENV;
+        anchors[id].object_id_u64 = kColEnvObjectId;
+        anchors[id].collision_env_state.clear_for_tick(0);
+    }
+
     // AnchorPack boot: embed selected process artifacts as carrier-encoded
     // anchors for substrate-native microprocessing.
     // ------------------------------------------------------------------
@@ -2828,6 +2939,7 @@ bool SubstrateManager::sim_save_to_file(const std::string& name_ascii) {
     st.ancilla = ancilla;
     st.lanes = lanes;
     st.object_store = object_store;
+    st.nbody_state = nbody;
     st.materials_calib_done = materials_calib_done;
     sim_snapshot = st;
     sim_snapshot_valid = true;
@@ -2851,7 +2963,7 @@ bool SubstrateManager::sim_save_to_file(const std::string& name_ascii) {
         return false;
     }
     const uint32_t magic = 0x47455349U; // 'GESI'
-    const uint32_t ver = 2u;
+    const uint32_t ver = 13u;
     out.write(reinterpret_cast<const char*>(&magic), sizeof(magic));
     out.write(reinterpret_cast<const char*>(&ver), sizeof(ver));
     if (!out.good()) return false;
@@ -2861,6 +2973,17 @@ bool SubstrateManager::sim_save_to_file(const std::string& name_ascii) {
     if (!ew_write_i64(out, st.boundary_scale_q32_32)) return false;
     const uint32_t mc = st.materials_calib_done ? 1u : 0u;
     out.write(reinterpret_cast<const char*>(&mc), sizeof(mc));
+
+
+// N-body state (fixed-size, strict)
+out.write(reinterpret_cast<const char*>(&st.nbody_state.enabled_u32), sizeof(st.nbody_state.enabled_u32));
+out.write(reinterpret_cast<const char*>(&st.nbody_state.initialized_u32), sizeof(st.nbody_state.initialized_u32));
+out.write(reinterpret_cast<const char*>(&st.nbody_state.body_count_u32), sizeof(st.nbody_state.body_count_u32));
+out.write(reinterpret_cast<const char*>(&st.nbody_state.pad_u32), sizeof(st.nbody_state.pad_u32));
+if (!ew_write_i64(out, st.nbody_state.G_q32_32)) return false;
+if (!ew_write_i64(out, st.nbody_state.dt_seconds_q32_32)) return false;
+out.write(reinterpret_cast<const char*>(&st.nbody_state.bodies[0]), (std::streamsize)(sizeof(st.nbody_state.bodies)));
+if (!out.good()) return false;
 
     // Anchors
     uint32_t na = (uint32_t)st.anchors.size();
@@ -2897,6 +3020,32 @@ bool SubstrateManager::sim_save_to_file(const std::string& name_ascii) {
         for (uint32_t k = 0; k < nn; ++k) {
             const uint32_t nid = a.neighbors[k];
             out.write(reinterpret_cast<const char*>(&nid), sizeof(nid));
+        }
+        if (!out.good()) return false;
+
+        // Kind-specific payload (strict; required for deterministic rehydration).
+        // Format: payload_kind_u32, payload_size_u32, payload_bytes.
+        const uint32_t pk = a.kind_u32;
+        out.write(reinterpret_cast<const char*>(&pk), sizeof(pk));
+        uint32_t psz = 0u;
+        if (a.kind_u32 == EW_ANCHOR_KIND_CAMERA) psz = (uint32_t)sizeof(a.camera_state);
+        else if (a.kind_u32 == EW_ANCHOR_KIND_OBJECT) psz = (uint32_t)sizeof(a.object_state);
+        else if (a.kind_u32 == EW_ANCHOR_KIND_PLANET) psz = (uint32_t)sizeof(a.planet_state);
+        else if (a.kind_u32 == EW_ANCHOR_KIND_EDITOR) psz = (uint32_t)sizeof(a.editor_state);
+        else if (a.kind_u32 == EW_ANCHOR_KIND_SPECTRAL_FIELD) psz = (uint32_t)sizeof(a.spectral_field_state);
+        else if (a.kind_u32 == EW_ANCHOR_KIND_COHERENCE_BUS) psz = (uint32_t)sizeof(a.coherence_bus_state);
+        else if (a.kind_u32 == EW_ANCHOR_KIND_VOXEL_COUPLING) psz = (uint32_t)sizeof(a.voxel_coupling_state);
+        else if (a.kind_u32 == EW_ANCHOR_KIND_COLLISION_ENV) psz = (uint32_t)sizeof(a.collision_env_state);
+        out.write(reinterpret_cast<const char*>(&psz), sizeof(psz));
+        if (psz) {
+            if (a.kind_u32 == EW_ANCHOR_KIND_CAMERA) out.write(reinterpret_cast<const char*>(&a.camera_state), (std::streamsize)psz);
+            else if (a.kind_u32 == EW_ANCHOR_KIND_OBJECT) out.write(reinterpret_cast<const char*>(&a.object_state), (std::streamsize)psz);
+            else if (a.kind_u32 == EW_ANCHOR_KIND_PLANET) out.write(reinterpret_cast<const char*>(&a.planet_state), (std::streamsize)psz);
+            else if (a.kind_u32 == EW_ANCHOR_KIND_EDITOR) out.write(reinterpret_cast<const char*>(&a.editor_state), (std::streamsize)psz);
+            else if (a.kind_u32 == EW_ANCHOR_KIND_SPECTRAL_FIELD) out.write(reinterpret_cast<const char*>(&a.spectral_field_state), (std::streamsize)psz);
+            else if (a.kind_u32 == EW_ANCHOR_KIND_COHERENCE_BUS) out.write(reinterpret_cast<const char*>(&a.coherence_bus_state), (std::streamsize)psz);
+            else if (a.kind_u32 == EW_ANCHOR_KIND_VOXEL_COUPLING) out.write(reinterpret_cast<const char*>(&a.voxel_coupling_state), (std::streamsize)psz);
+            else if (a.kind_u32 == EW_ANCHOR_KIND_COLLISION_ENV) out.write(reinterpret_cast<const char*>(&a.collision_env_state), (std::streamsize)psz);
         }
         if (!out.good()) return false;
     }
@@ -2941,7 +3090,7 @@ bool SubstrateManager::sim_load_from_file(const std::string& name_ascii, bool pl
     uint32_t magic = 0, ver = 0;
     in.read(reinterpret_cast<char*>(&magic), sizeof(magic));
     in.read(reinterpret_cast<char*>(&ver), sizeof(ver));
-    if (!in.good() || magic != 0x47455349U || (ver != 1u && ver != 2u)) {
+    if (!in.good() || magic != 0x47455349U || ver != 13u) {
         emit_ui_line("SIM_LOAD_BAD_HEADER");
         return false;
     }
@@ -2952,6 +3101,17 @@ bool SubstrateManager::sim_load_from_file(const std::string& name_ascii, bool pl
     uint32_t mc = 0;
     in.read(reinterpret_cast<char*>(&mc), sizeof(mc));
     st.materials_calib_done = (mc != 0u);
+
+
+// N-body state (fixed-size, strict)
+in.read(reinterpret_cast<char*>(&st.nbody_state.enabled_u32), sizeof(st.nbody_state.enabled_u32));
+in.read(reinterpret_cast<char*>(&st.nbody_state.initialized_u32), sizeof(st.nbody_state.initialized_u32));
+in.read(reinterpret_cast<char*>(&st.nbody_state.body_count_u32), sizeof(st.nbody_state.body_count_u32));
+in.read(reinterpret_cast<char*>(&st.nbody_state.pad_u32), sizeof(st.nbody_state.pad_u32));
+if (!ew_read_i64(in, st.nbody_state.G_q32_32)) return false;
+if (!ew_read_i64(in, st.nbody_state.dt_seconds_q32_32)) return false;
+in.read(reinterpret_cast<char*>(&st.nbody_state.bodies[0]), (std::streamsize)(sizeof(st.nbody_state.bodies)));
+if (!in.good()) return false;
 
     uint32_t na = 0;
     in.read(reinterpret_cast<char*>(&na), sizeof(na));
@@ -2972,11 +3132,7 @@ bool SubstrateManager::sim_load_from_file(const std::string& name_ascii, bool pl
         in.read(reinterpret_cast<char*>(&a.tau_q), sizeof(a.tau_q));
         in.read(reinterpret_cast<char*>(&a.curvature_q), sizeof(a.curvature_q));
         in.read(reinterpret_cast<char*>(&a.doppler_q), sizeof(a.doppler_q));
-        if (ver >= 2u) {
-            in.read(reinterpret_cast<char*>(&a.world_flux_grad_mean_q15), sizeof(a.world_flux_grad_mean_q15));
-        } else {
-            a.world_flux_grad_mean_q15 = 0;
-        }
+        in.read(reinterpret_cast<char*>(&a.world_flux_grad_mean_q15), sizeof(a.world_flux_grad_mean_q15));
         in.read(reinterpret_cast<char*>(&a.harmonics_mean_q15), sizeof(a.harmonics_mean_q15));
         in.read(reinterpret_cast<char*>(&a.harmonics_epoch_u32), sizeof(a.harmonics_epoch_u32));
         in.read(reinterpret_cast<char*>(&a.last_lnA_q32_32), sizeof(a.last_lnA_q32_32));
@@ -2994,6 +3150,46 @@ bool SubstrateManager::sim_load_from_file(const std::string& name_ascii, bool pl
             a.neighbors[k] = nid;
         }
         if (!in.good()) return false;
+
+        // Kind-specific payload (strict).
+        uint32_t pk = 0u, psz = 0u;
+        in.read(reinterpret_cast<char*>(&pk), sizeof(pk));
+        in.read(reinterpret_cast<char*>(&psz), sizeof(psz));
+        if (!in.good()) return false;
+        if (pk != a.kind_u32) return false;
+        if (psz > (1024u * 1024u)) return false;
+        if (psz) {
+            if (a.kind_u32 == EW_ANCHOR_KIND_CAMERA) {
+                if (psz != (uint32_t)sizeof(a.camera_state)) return false;
+                in.read(reinterpret_cast<char*>(&a.camera_state), (std::streamsize)psz);
+            } else if (a.kind_u32 == EW_ANCHOR_KIND_OBJECT) {
+                if (psz != (uint32_t)sizeof(a.object_state)) return false;
+                in.read(reinterpret_cast<char*>(&a.object_state), (std::streamsize)psz);
+            } else if (a.kind_u32 == EW_ANCHOR_KIND_PLANET) {
+                if (psz != (uint32_t)sizeof(a.planet_state)) return false;
+                in.read(reinterpret_cast<char*>(&a.planet_state), (std::streamsize)psz);
+            } else if (a.kind_u32 == EW_ANCHOR_KIND_EDITOR) {
+                if (psz != (uint32_t)sizeof(a.editor_state)) return false;
+                in.read(reinterpret_cast<char*>(&a.editor_state), (std::streamsize)psz);
+            } else if (a.kind_u32 == EW_ANCHOR_KIND_SPECTRAL_FIELD) {
+                if (psz != (uint32_t)sizeof(a.spectral_field_state)) return false;
+                in.read(reinterpret_cast<char*>(&a.spectral_field_state), (std::streamsize)psz);
+            } else if (a.kind_u32 == EW_ANCHOR_KIND_COHERENCE_BUS) {
+                if (psz != (uint32_t)sizeof(a.coherence_bus_state)) return false;
+                in.read(reinterpret_cast<char*>(&a.coherence_bus_state), (std::streamsize)psz);
+            } else if (a.kind_u32 == EW_ANCHOR_KIND_VOXEL_COUPLING) {
+                if (psz != (uint32_t)sizeof(a.voxel_coupling_state)) return false;
+                in.read(reinterpret_cast<char*>(&a.voxel_coupling_state), (std::streamsize)psz);
+            } else if (a.kind_u32 == EW_ANCHOR_KIND_COLLISION_ENV) {
+                if (psz != (uint32_t)sizeof(a.collision_env_state)) return false;
+                in.read(reinterpret_cast<char*>(&a.collision_env_state), (std::streamsize)psz);
+            } else {
+                // Unknown kind with nonzero payload is rejected (fail closed).
+                return false;
+            }
+            if (!in.good()) return false;
+        }
+
         a.sync_basis9_from_core();
         st.anchors[i] = a;
     }
@@ -3029,12 +3225,14 @@ bool SubstrateManager::sim_load_from_file(const std::string& name_ascii, bool pl
     lanes = st.lanes;
     object_store = st.object_store;
     materials_calib_done = st.materials_calib_done;
+    nbody = st.nbody_state;
     // Ensure topology vectors are sized.
     const uint32_t need = (uint32_t)anchors.size();
     if (redirect_to.size() < need) redirect_to.resize(need, 0u);
     if (split_child_a.size() < need) split_child_a.resize(need, 0u);
     if (split_child_b.size() < need) split_child_b.resize(need, 0u);
     next_anchor_id_u32 = (uint32_t)anchors.size();
+    ge_rebuild_cached_anchor_ids(*this);
 
     // Snapshot for loop playback.
     sim_snapshot = st;
@@ -4747,7 +4945,24 @@ static inline void ew_execute_operator_packets_v1(SubstrateManager* sm) {
             const uint32_t mode_u32 = (uint32_t)a.camera_state.focus_mode_u8;
             const int64_t cur = a.camera_state.focus_distance_m_q32_32;
             const int64_t manual = a.camera_state.manual_focus_distance_m_q32_32;
-            const int64_t median = sm->camera_sensor.median_depth_m_q32_32;
+            // Median depth is provided as normalized depth in Q16.16; convert to
+            // linear meters inside the substrate using camera near/far settings.
+            const int32_t dnorm_q16 = sm->camera_sensor.median_depth_norm_q16_16;
+            const int32_t near_m_q16 = sm->project_settings.camera.near_m_q16_16;
+            const int32_t far_m_q16 = sm->project_settings.camera.far_m_q16_16;
+            int64_t median = manual;
+            {
+                const int32_t far_minus_near = far_m_q16 - near_m_q16;
+                const int32_t scaled = qmul_q16(far_minus_near, dnorm_q16);
+                const int32_t denom_q16 = far_m_q16 - scaled;
+                // numerator Q32.32
+                const int64_t num_q32 = (int64_t)near_m_q16 * (int64_t)far_m_q16;
+                if (denom_q16 > (int32_t)(0.0001f * 65536.0f)) {
+                    // (Q32.32 / Q16.16) => Q16.16
+                    const int64_t lin_q16 = (num_q32 / (int64_t)denom_q16);
+                    median = (lin_q16 << 16); // Q32.32
+                }
+            }
             const int32_t tau_q16_16 = a.camera_state.tau_seconds_q16_16;
             const int32_t max_vel_q16_16 = a.camera_state.max_refocus_vel_mps_q16_16;
             const int32_t deadband_m_q16_16 = a.camera_state.deadband_m_q16_16;
@@ -5075,6 +5290,7 @@ void SubstrateManager::tick() {
         boundary_scale_q32_32 = sim_snapshot.boundary_scale_q32_32;
         anchors = sim_snapshot.anchors;
         ancilla = sim_snapshot.ancilla;
+        nbody = sim_snapshot.nbody_state;
         lanes = sim_snapshot.lanes;
         object_store = sim_snapshot.object_store;
         materials_calib_done = sim_snapshot.materials_calib_done;
@@ -5084,6 +5300,7 @@ void SubstrateManager::tick() {
         if (split_child_a.size() < need) split_child_a.resize(need, 0u);
         if (split_child_b.size() < need) split_child_b.resize(need, 0u);
         next_anchor_id_u32 = (uint32_t)anchors.size();
+        ge_rebuild_cached_anchor_ids(*this);
     }
 
     // ------------------------------------------------------------------
@@ -5154,9 +5371,150 @@ void SubstrateManager::tick() {
             } else if (p.kind == EwControlPacketKind::AllowlistReload) {
                 const bool ok = corpus_allowlist_load_user_file_if_present();
                 emit_ui_line(ok ? "ALLOWLIST_RELOADED" : "ALLOWLIST_RELOAD_NOFILE");
+            } else if (p.kind == EwControlPacketKind::ObjectRegister) {
+                // Authoritative object transforms live in object anchors.
+                const uint64_t obj_id = p.payload.object_register.object_id_u64;
+                uint32_t found = 0u;
+                for (uint32_t ai = 1u; ai < (uint32_t)anchors.size(); ++ai) {
+                    if (anchors[ai].kind_u32 == EW_ANCHOR_KIND_OBJECT && anchors[ai].object_id_u64 == obj_id) {
+                        found = ai;
+                        break;
+                    }
+                }
+                if (found == 0u) {
+                    Anchor a(next_anchor_id_u32);
+                    a.kind_u32 = EW_ANCHOR_KIND_OBJECT;
+                    a.object_id_u64 = obj_id;
+                    anchors.push_back(a);
+                    found = next_anchor_id_u32;
+                    next_anchor_id_u32 = (uint32_t)anchors.size();
+                    if (redirect_to.size() < anchors.size()) redirect_to.resize(anchors.size(), 0u);
+                    if (split_child_a.size() < anchors.size()) split_child_a.resize(anchors.size(), 0u);
+                    if (split_child_b.size() < anchors.size()) split_child_b.resize(anchors.size(), 0u);
+                }
+                if (found < anchors.size()) {
+                    Anchor& a = anchors[found];
+                    for (int i = 0; i < 3; ++i) a.object_state.pos_q16_16[i] = p.payload.object_register.pos_q16_16[i];
+                    for (int i = 0; i < 4; ++i) a.object_state.rot_q16_16[i] = p.payload.object_register.rot_quat_q16_16[i];
+                }
+            } else if (p.kind == EwControlPacketKind::ObjectSetTransform) {
+                const uint64_t obj_id = p.payload.object_xform.object_id_u64;
+                for (uint32_t ai = 1u; ai < (uint32_t)anchors.size(); ++ai) {
+                    if (anchors[ai].kind_u32 == EW_ANCHOR_KIND_OBJECT && anchors[ai].object_id_u64 == obj_id) {
+                        Anchor& a = anchors[ai];
+                        for (int i = 0; i < 3; ++i) a.object_state.pos_q16_16[i] = p.payload.object_xform.pos_q16_16[i];
+                        for (int i = 0; i < 4; ++i) a.object_state.rot_q16_16[i] = p.payload.object_xform.rot_quat_q16_16[i];
+                        break;
+                    }
+                }
+            } else if (p.kind == EwControlPacketKind::EditorSetSelection ||
+                       p.kind == EwControlPacketKind::EditorToggleSelection ||
+                       p.kind == EwControlPacketKind::EditorSetGizmo ||
+                       p.kind == EwControlPacketKind::EditorSetSnap ||
+                       p.kind == EwControlPacketKind::EditorSetAxisConstraint ||
+                       p.kind == EwControlPacketKind::EditorCommitTransformTxn ||
+                       p.kind == EwControlPacketKind::EditorUndo ||
+                       p.kind == EwControlPacketKind::EditorRedo) {
+                // Editor interaction contract lives in substrate as an editor anchor.
+                // This is authoritative for selection/gizmo/snap settings.
+                const uint64_t kEditorObjectId = 0x315F524F54494445ULL; // 'EDITOR_1' little-endian
+
+                uint32_t editor_anchor_id = 0u;
+                bool editor_anchor_found = false;
+                for (uint32_t i = 0u; i < (uint32_t)anchors.size(); ++i) {
+                    if (anchors[i].kind_u32 == EW_ANCHOR_KIND_EDITOR && anchors[i].object_id_u64 == kEditorObjectId) {
+                        editor_anchor_id = i;
+                        editor_anchor_found = true;
+                        break;
+                    }
+                }
+                if (!editor_anchor_found) {
+                    Anchor a(next_anchor_id_u32);
+                    a.kind_u32 = EW_ANCHOR_KIND_EDITOR;
+                    a.object_id_u64 = kEditorObjectId;
+                    // Payload already zeroed in constructor.
+                    anchors.push_back(a);
+                    next_anchor_id_u32 = (uint32_t)anchors.size();
+                    const uint32_t need = (uint32_t)anchors.size();
+                    if (redirect_to.size() < need) redirect_to.resize(need, 0u);
+                    if (split_child_a.size() < need) split_child_a.resize(need, 0u);
+                    if (split_child_b.size() < need) split_child_b.resize(need, 0u);
+                    editor_anchor_id = (uint32_t)anchors.size() - 1u;
+                }
+
+                if (editor_anchor_id < anchors.size()) {
+                    Anchor& ed = anchors[editor_anchor_id];
+                    if (ed.kind_u32 == EW_ANCHOR_KIND_EDITOR) {
+                        
+if (p.kind == EwControlPacketKind::EditorSetSelection) {
+    const uint64_t oid = p.payload.editor_set_selection.selected_object_id_u64;
+    ed.editor_state.selected_object_id_u64 = oid;
+    // Replace selection list with [oid] (or clear if oid==0).
+    ed.editor_state.selection_count_u32 = 0u;
+    for (uint32_t k = 0u; k < EW_EDITOR_MAX_SELECTION; ++k) ed.editor_state.selection_object_id_u64[k] = 0u;
+    if (oid != 0u) {
+        ed.editor_state.selection_object_id_u64[0] = oid;
+        ed.editor_state.selection_count_u32 = 1u;
+    }
+
+} else if (p.kind == EwControlPacketKind::PlanetRegister) {
+                const uint64_t obj_id = p.payload.planet_register.object_id_u64;
+                const uint64_t parent_obj_id = p.payload.planet_register.parent_object_id_u64;
+                uint32_t found = 0u;
+                for (uint32_t ai = 1u; ai < (uint32_t)anchors.size(); ++ai) {
+                    if (anchors[ai].kind_u32 == EW_ANCHOR_KIND_PLANET && anchors[ai].object_id_u64 == obj_id) {
+                        found = ai;
+                        break;
+                    }
+                }
+                if (found == 0u) {
+                    Anchor a(next_anchor_id_u32);
+                    a.kind_u32 = EW_ANCHOR_KIND_PLANET;
+                    a.object_id_u64 = obj_id;
+                    anchors.push_back(a);
+                    found = next_anchor_id_u32;
+                    next_anchor_id_u32 = (uint32_t)anchors.size();
+                    if (redirect_to.size() < anchors.size()) redirect_to.resize(anchors.size(), 0u);
+                    if (split_child_a.size() < anchors.size()) split_child_a.resize(anchors.size(), 0u);
+                    if (split_child_b.size() < anchors.size()) split_child_b.resize(anchors.size(), 0u);
+                }
+
+                // Resolve parent anchor id from parent object id.
+                uint32_t parent_anchor_id = 0u;
+                if (parent_obj_id != 0u) {
+                    for (uint32_t ai = 1u; ai < (uint32_t)anchors.size(); ++ai) {
+                        if (anchors[ai].kind_u32 == EW_ANCHOR_KIND_PLANET && anchors[ai].object_id_u64 == parent_obj_id) {
+                            parent_anchor_id = ai;
+                            break;
+                        }
+                    }
+                }
+
+                if (found < anchors.size()) {
+                    Anchor& a = anchors[found];
+                    EwPlanetAnchorState& ps = a.planet_state;
+                    for (int i = 0; i < 3; ++i) ps.pos_q16_16[i] = p.payload.planet_register.pos_q16_16[i];
+                    for (int i = 0; i < 3; ++i) ps.vel_q16_16[i] = p.payload.planet_register.vel_q16_16[i];
+                    ps.radius_m_q16_16 = p.payload.planet_register.radius_m_q16_16;
+                    ps.mass_kg_q16_16 = p.payload.planet_register.mass_kg_q16_16;
+                    ps.parent_anchor_id_u32 = parent_anchor_id;
+                    ps.orbit_radius_m_q32_32 = p.payload.planet_register.orbit_radius_m_q32_32;
+                    ps.orbit_omega_turns_per_sec_q32_32 = p.payload.planet_register.orbit_omega_turns_per_sec_q32_32;
+                    ps.orbit_phase_turns_q32_32 = p.payload.planet_register.orbit_phase_turns_q32_32;
+                    ps.albedo_rgba8 = p.payload.planet_register.albedo_rgba8;
+                    ps.atmosphere_rgba8 = p.payload.planet_register.atmosphere_rgba8;
+                    ps.atmosphere_thickness_m_q16_16 = p.payload.planet_register.atmosphere_thickness_m_q16_16;
+                    ps.emissive_q16_16 = p.payload.planet_register.emissive_q16_16;
+                }
             }
         }
     }
+
+    // Planet ancilla update (cosmological bodies). Must run inside substrate.
+    // Canonical N-body update (celestial dynamics) projected into planet anchors.
+    genesis::ew_nbody_tick(this);
+
+    genesis::ew_tick_planet_ancilla(this);
     // Optional live crawler: emits observations into crawler queue (http-only).
     if (crawler_enable_live_u32 != 0u && crawler_live_consent_required_u32 == 0u) {
         live_crawler.enabled = true;
@@ -5209,6 +5567,14 @@ void SubstrateManager::tick() {
         // probe metric path when CUDA is enabled.
         uint16_t phys_q15 = lattice_probe_gpu_[0] ? (uint16_t)16384 : 0;
 
+        // Fold coherence bus phys signal (derived from mass-leakage packets) into the physics coherence channel.
+        if (coherence_bus_anchor_id_u32 != 0u && coherence_bus_anchor_id_u32 < anchors.size()) {
+            const Anchor& b = anchors[coherence_bus_anchor_id_u32];
+            if (b.kind_u32 == EW_ANCHOR_KIND_COHERENCE_BUS) {
+                if (b.coherence_bus_state.phys_coherence_q15 > phys_q15) phys_q15 = b.coherence_bus_state.phys_coherence_q15;
+            }
+        }
+
         // Crawl coherence: whether we have any admitted records in manifest.
         uint16_t crawl_q15 = 0;
         if (manifest_records.size() >= 4) crawl_q15 = 16384;
@@ -5232,6 +5598,33 @@ void SubstrateManager::tick() {
         global_coherence.update(canonical_tick_u64(), lang_q15, phys_q15, crawl_q15, exp_q15);
         // Leak slowly each tick to prevent runaway. 1/4096 per tick.
         global_coherence.leak(canonical_tick_u64(), (uint16_t)8);
+
+        // Read-only diagnostics: emit a compact spectral/coherence status line occasionally.
+        if ((canonical_tick_u64() % 360u) == 0u) {
+            uint16_t se_m = 0, se_p = 0, sl = 0, bp = 0;
+            uint8_t cb = 0;
+            if (spectral_field_anchor_id_u32 != 0u && spectral_field_anchor_id_u32 < anchors.size()) {
+                const Anchor& sa = anchors[spectral_field_anchor_id_u32];
+                if (sa.kind_u32 == EW_ANCHOR_KIND_SPECTRAL_FIELD) {
+                    se_m = sa.spectral_field_state.energy_mean_q15;
+                    se_p = sa.spectral_field_state.energy_peak_q15;
+                    sl = sa.spectral_field_state.leakage_abs_q15;
+                    cb = sa.spectral_field_state.leakage_band_u8;
+                }
+            }
+            if (coherence_bus_anchor_id_u32 != 0u && coherence_bus_anchor_id_u32 < anchors.size()) {
+                const Anchor& ba = anchors[coherence_bus_anchor_id_u32];
+                if (ba.kind_u32 == EW_ANCHOR_KIND_COHERENCE_BUS) {
+                    bp = ba.coherence_bus_state.phys_coherence_q15;
+                }
+            }
+            emit_ui_line(std::string("SPECTRAL_STATUS ") +
+                         "Emean_q15=" + std::to_string((uint32_t)se_m) +
+                         " Epeak_q15=" + std::to_string((uint32_t)se_p) +
+                         " LeakAbs_q15=" + std::to_string((uint32_t)sl) +
+                         " Band=" + std::to_string((uint32_t)cb) +
+                         " BusPhys_q15=" + std::to_string((uint32_t)bp));
+        }
     }
 
     // Canonical object ancilla update (bounded fan-out) BEFORE physics evolution.
@@ -6625,6 +7018,22 @@ if (starts_with("GAMEBOOT:")) {
 // ------------------------------------------------------------------
 
     // ------------------------------------------------------------------
+    // Bounded admission gate: enforce a fixed per-anchor pulse budget.
+    // This prevents unbounded per-tick work when upstream emits too many pulses.
+    // Determinism: stable-sort + fixed per-anchor slot count.
+    // ------------------------------------------------------------------
+    {
+        std::vector<Pulse> bounded;
+        ge_bound_pulses_per_anchor(
+            inbound,
+            SubstrateManager::TRAJ_SLOTS_PER_ANCHOR_U32,
+            bounded,
+            &pulses_seen_last_tick_u32,
+            &pulses_dropped_last_tick_u32);
+        inbound.swap(bounded);
+    }
+
+    // ------------------------------------------------------------------
     // Pulse fan-out propagation (single-hop per tick)
     // ------------------------------------------------------------------
     // Expand inbound pulses across local neighbor topology deterministically.
@@ -7038,7 +7447,7 @@ ctx.envelope_headroom_q32_32 = clamp01_q32_32(ctx.envelope_headroom_q32_32);
     // Execute any ΩA operator packets inside the substrate microprocessor.
     // This uses viewport-derived inputs and runs before candidate evolution.
     opk_runtime_evolution_requested = false;
-    this->ctx = ctx;
+    this->ctx_snapshot = ctx;
     ctx_snapshot = ctx;
     ew_execute_operator_packets_v1(this);
 
@@ -7314,6 +7723,217 @@ if (ap && ap->object_id_u64 != 0u) {
     }
 
     // ------------------------------------------------------------------
+    // Derived editor spectral visualization samples (read-only projection)
+    // This is a pure projection for the viewport/editor overlay; it must
+    // never become authoritative simulation input.
+    // ------------------------------------------------------------------
+    {
+        const uint64_t kEditorObjectId = 0x315F524F54494445ULL; // 'EDITOR_1' little-endian
+        Anchor* edp = nullptr;
+        for (size_t i = 0; i < anchors.size(); ++i) {
+            if (anchors[i].kind_u32 == EW_ANCHOR_KIND_EDITOR && anchors[i].object_id_u64 == kEditorObjectId) {
+                edp = &anchors[i];
+                break;
+            }
+        }
+
+        // Note: spectral field anchor selection is performed after selection
+        // resolution (nearest-by-region-center, deterministic tie-break on id).
+        const Anchor* sp = nullptr;
+
+        if (edp) {
+            EwEditorAnchorState& ed = edp->editor_state;
+            ed.spectral_viz_count_u32 = 0u;
+            for (uint32_t k = 0u; k < EW_EDITOR_SPECTRAL_VIZ_SAMPLES; ++k) {
+                // Ensure deterministic zeroing each tick.
+                for (int d = 0; d < 3; ++d) ed.spectral_viz[k].pos_q16_16[d] = 0;
+                ed.spectral_viz[k].field_q1_15 = 0;
+                ed.spectral_viz[k].grad_q1_15 = 0;
+                ed.spectral_viz[k].band_u8 = 0;
+                ed.spectral_viz[k].pad_u8[0] = 0;
+                ed.spectral_viz[k].pad_u8[1] = 0;
+                ed.spectral_viz[k].pad_u8[2] = 0;
+            }
+
+            if (ed.selected_object_id_u64 != 0u) {
+                const Anchor* obj = nullptr;
+                for (size_t i = 1; i < anchors.size(); ++i) {
+                    if (anchors[i].kind_u32 == EW_ANCHOR_KIND_OBJECT && anchors[i].object_id_u64 == ed.selected_object_id_u64) {
+                        obj = &anchors[i];
+                        break;
+                    }
+                }
+
+                if (obj) {
+                    // Deterministic selection: nearest spectral field anchor by region center.
+                    {
+                        const int32_t ox = obj->object_state.pos_q16_16[0];
+                        const int32_t oy = obj->object_state.pos_q16_16[1];
+                        const int32_t oz = obj->object_state.pos_q16_16[2];
+                        __int128 best_d2 = 0;
+                        uint32_t best_id = 0u;
+                        bool best_set = false;
+                        for (uint32_t i = 0u; i < (uint32_t)anchors.size(); ++i) {
+                            const Anchor& a = anchors[i];
+                            if (a.kind_u32 != EW_ANCHOR_KIND_SPECTRAL_FIELD) continue;
+                            const int32_t* rc = a.spectral_state.region_center_q16_16;
+                            const __int128 dx = (__int128)ox - (__int128)rc[0];
+                            const __int128 dy = (__int128)oy - (__int128)rc[1];
+                            const __int128 dz = (__int128)oz - (__int128)rc[2];
+                            const __int128 d2 = dx*dx + dy*dy + dz*dz;
+                            if (!best_set || d2 < best_d2 || (d2 == best_d2 && i < best_id)) {
+                                best_set = true;
+                                best_d2 = d2;
+                                best_id = i;
+                                sp = &a;
+                            }
+                        }
+                    }
+
+                    const int32_t cx = obj->object_state.pos_q16_16[0];
+                    const int32_t cy = obj->object_state.pos_q16_16[1];
+                    const int32_t cz = obj->object_state.pos_q16_16[2];
+
+                    // 4x4 grid in the XZ plane around the selected object.
+                    const int32_t offsets_m_q16_16[4] = {
+                        (int32_t)(-2 * 65536),
+                        (int32_t)(-1 * 65536),
+                        (int32_t)( 1 * 65536),
+                        (int32_t)( 2 * 65536),
+                    };
+
+                    if (sp) {
+                        const EwSpectralFieldAnchorState& ss = sp->spectral_state;
+
+                        // Budget clamp: derived probes must respect the spectral fanout budget
+                        // and HOLD behavior (no probe spam during HOLD ticks).
+                        uint32_t max_samples = EW_EDITOR_SPECTRAL_VIZ_SAMPLES;
+                        if (ss.hold_tick_u8 != 0u) {
+                            max_samples = 0u;
+                        } else {
+                            const uint32_t b = (ss.fanout_budget_u32 > 0u) ? ss.fanout_budget_u32 : 1u;
+                            const uint32_t cap = (b >= 8u) ? (b / 2u) : 4u;
+                            if (cap < max_samples) max_samples = cap;
+                        }
+
+                        uint32_t outi = 0u;
+                        for (uint32_t ix = 0u; ix < 4u && outi < max_samples; ++ix) {
+                            for (uint32_t iz = 0u; iz < 4u && outi < max_samples; ++iz) {
+                            int32_t p[3] = { cx + offsets_m_q16_16[ix], cy, cz + offsets_m_q16_16[iz] };
+                            ed.spectral_viz[outi].pos_q16_16[0] = p[0];
+                            ed.spectral_viz[outi].pos_q16_16[1] = p[1];
+                            ed.spectral_viz[outi].pos_q16_16[2] = p[2];
+                            ed.spectral_viz[outi].field_q1_15 = ew_spectral_probe_field_q1_15(ss, p);
+                            ed.spectral_viz[outi].grad_q1_15  = ew_spectral_probe_grad_q1_15(ss, p);
+                            ed.spectral_viz[outi].band_u8 = ss.leakage_band_u8;
+                            ++outi;
+                            }
+                        }
+                        ed.spectral_viz_count_u32 = outi;
+                    }
+
+                    // Derived boundary visualization samples (voxel boundary strength/permeability)
+                    ed.boundary_viz_count_u32 = 0u;
+                    for (uint32_t k = 0; k < EW_EDITOR_BOUNDARY_VIZ_SAMPLES; ++k) {
+                        for (int d = 0; d < 3; ++d) ed.boundary_viz[k].pos_q16_16[d] = 0;
+                        ed.boundary_viz[k].boundary_strength_q15 = 0;
+                        ed.boundary_viz[k].permeability_q15 = 0;
+                        ed.boundary_viz[k].boundary_normal_u8 = 0;
+                        ed.boundary_viz[k].no_slip_u8 = 0;
+                        ed.boundary_viz[k].color_band_u8 = 0;
+                        ed.boundary_viz[k].pad_u8 = 0;
+                    }
+
+                    // Deterministic multi-block selection: choose nearest voxel coupling anchor
+                    // by block center relative to the selected object.
+                    const Anchor* vox = nullptr;
+                    {
+                        const int32_t ox = obj->object_state.pos_q16_16[0];
+                        const int32_t oy = obj->object_state.pos_q16_16[1];
+                        const int32_t oz = obj->object_state.pos_q16_16[2];
+                        __int128 best_d2 = 0;
+                        uint32_t best_id = 0u;
+                        bool best_set = false;
+                        for (uint32_t i = 0u; i < (uint32_t)anchors.size(); ++i) {
+                            const Anchor& a = anchors[i];
+                            if (a.kind_u32 != EW_ANCHOR_KIND_VOXEL_COUPLING) continue;
+                            const EwVoxelCouplingAnchorState& vs = a.voxel_coupling_state;
+                            const int32_t half_extent = (int32_t)(((__int128)EW_VOXEL_COUPLING_DIM * (__int128)vs.voxel_size_m_q16_16) / 2);
+                            const int32_t cxv = vs.origin_q16_16[0] + half_extent;
+                            const int32_t cyv = vs.origin_q16_16[1] + half_extent;
+                            const int32_t czv = vs.origin_q16_16[2] + half_extent;
+                            const __int128 dx = (__int128)ox - (__int128)cxv;
+                            const __int128 dy = (__int128)oy - (__int128)cyv;
+                            const __int128 dz = (__int128)oz - (__int128)czv;
+                            const __int128 d2 = dx*dx + dy*dy + dz*dz;
+                            if (!best_set || d2 < best_d2 || (d2 == best_d2 && i < best_id)) {
+                                best_set = true;
+                                best_d2 = d2;
+                                best_id = i;
+                                vox = &a;
+                            }
+                        }
+                    }
+
+                    if (vox) {
+                        // Respect HOLD: if nearest spectral anchor is holding, suppress
+                        // derived boundary probes to avoid misleading overlays.
+                        const bool hold = (sp && sp->spectral_state.hold_tick_u8 != 0u);
+                        if (hold) {
+                            ed.boundary_viz_count_u32 = 0u;
+                        } else {
+                        // Sample a 4x4 grid around selection in XZ plane.
+                        const int32_t step = (int32_t)(1 * 65536); // 1m
+                        // Budget clamp: boundary probes share the same fanout budget envelope.
+                        uint32_t max_b = EW_EDITOR_BOUNDARY_VIZ_SAMPLES;
+                        if (sp) {
+                            const uint32_t b = (sp->spectral_state.fanout_budget_u32 > 0u) ? sp->spectral_state.fanout_budget_u32 : 1u;
+                            const uint32_t cap = (b >= 8u) ? (b / 2u) : 4u;
+                            if (cap < max_b) max_b = cap;
+                        }
+
+                        uint32_t outb = 0u;
+                        for (int iz = -2; iz < 2 && outb < EW_EDITOR_BOUNDARY_VIZ_SAMPLES; ++iz) {
+                            for (int ix = -2; ix < 2 && outb < EW_EDITOR_BOUNDARY_VIZ_SAMPLES; ++ix) {
+                                if (outb >= max_b) break;
+                                int32_t p[3] = { sel_pos_q16_16[0] + ix*step, sel_pos_q16_16[1], sel_pos_q16_16[2] + iz*step };
+
+                                // Map point to voxel index.
+                                const EwVoxelCouplingAnchorState& vs = vox->voxel_coupling_state;
+                                const int32_t vxsz = vs.voxel_size_m_q16_16;
+                                int32_t relx = p[0] - vs.origin_q16_16[0];
+                                int32_t rely = p[1] - vs.origin_q16_16[1];
+                                int32_t relz = p[2] - vs.origin_q16_16[2];
+                                int xi = (vxsz > 0) ? (int)(relx / vxsz) : 0;
+                                int yi = (vxsz > 0) ? (int)(rely / vxsz) : 0;
+                                int zi = (vxsz > 0) ? (int)(relz / vxsz) : 0;
+                                if (xi < 0) xi = 0; if (yi < 0) yi = 0; if (zi < 0) zi = 0;
+                                if (xi >= (int)EW_VOXEL_COUPLING_DIM) xi = (int)EW_VOXEL_COUPLING_DIM-1;
+                                if (yi >= (int)EW_VOXEL_COUPLING_DIM) yi = (int)EW_VOXEL_COUPLING_DIM-1;
+                                if (zi >= (int)EW_VOXEL_COUPLING_DIM) zi = (int)EW_VOXEL_COUPLING_DIM-1;
+                                const uint32_t idx = (uint32_t)(xi + EW_VOXEL_COUPLING_DIM * (yi + EW_VOXEL_COUPLING_DIM * zi));
+
+                                ed.boundary_viz[outb].pos_q16_16[0] = p[0];
+                                ed.boundary_viz[outb].pos_q16_16[1] = p[1];
+                                ed.boundary_viz[outb].pos_q16_16[2] = p[2];
+                                ed.boundary_viz[outb].boundary_strength_q15 = vs.boundary_strength_vox_q15[idx];
+                                ed.boundary_viz[outb].permeability_q15 = vs.permeability_vox_q15[idx];
+                                ed.boundary_viz[outb].boundary_normal_u8 = vs.boundary_normal_u8[idx];
+                                ed.boundary_viz[outb].no_slip_u8 = vs.no_slip_u8[idx];
+                                ed.boundary_viz[outb].color_band_u8 = vs.influx_band_u8;
+                                outb++;
+                            }
+                        }
+                        ed.boundary_viz_count_u32 = outb;
+                        }
+                    }
+
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
     // Render packet projection (anchors -> renderer)
     // Renderer must not derive camera basis from local controller state.
     // The substrate projects a render-camera packet each tick.
@@ -7326,6 +7946,16 @@ if (ap && ap->object_id_u64 != 0u) {
             render_camera_packet.exposure_ev_q16_16 = cam.camera_state.exposure_ev_q16_16;
             render_camera_packet.focus_distance_m_q32_32 = cam.camera_state.focus_distance_m_q32_32;
             render_camera_packet.focus_mode_u8 = cam.camera_state.focus_mode_u8;
+            render_camera_packet.audio_env_field_q1_15 = cam.camera_state.audio_env_field_q1_15;
+            render_camera_packet.audio_env_grad_q1_15 = cam.camera_state.audio_env_grad_q1_15;
+            render_camera_packet.audio_env_coherence_q15 = cam.camera_state.audio_env_coherence_q15;
+            render_camera_packet.color_band_u8 = cam.camera_state.color_band_u8;
+            render_camera_packet.color_r_u8 = cam.camera_state.color_r_u8;
+            render_camera_packet.color_g_u8 = cam.camera_state.color_g_u8;
+            render_camera_packet.color_b_u8 = cam.camera_state.color_b_u8;
+            render_camera_packet.audio_eq_preset_u8 = cam.camera_state.audio_eq_preset_u8;
+            render_camera_packet.audio_reverb_preset_u8 = cam.camera_state.audio_reverb_preset_u8;
+            render_camera_packet.audio_occlusion_preset_u8 = cam.camera_state.audio_occlusion_preset_u8;
             render_camera_packet.pos_xyz_q16_16[0] = cam.camera_state.pos_xyz_q16_16[0];
             render_camera_packet.pos_xyz_q16_16[1] = cam.camera_state.pos_xyz_q16_16[1];
             render_camera_packet.pos_xyz_q16_16[2] = cam.camera_state.pos_xyz_q16_16[2];
@@ -7333,6 +7963,137 @@ if (ap && ap->object_id_u64 != 0u) {
 
             ew_build_view_mat_q16_16(cam.camera_state.pos_xyz_q16_16, cam.camera_state.rot_quat_q16_16, render_camera_packet.view_mat_q16_16);
             render_camera_packet_tick_u64 = canonical_tick;
+
+            // Render assist packet: pre-derived focus/LOD coefficients.
+            render_assist_packet.focus_distance_m_q32_32 = cam.camera_state.focus_distance_m_q32_32;
+            render_assist_packet.audio_env_field_q1_15 = cam.camera_state.audio_env_field_q1_15;
+            render_assist_packet.audio_env_grad_q1_15 = cam.camera_state.audio_env_grad_q1_15;
+            render_assist_packet.audio_env_coherence_q15 = cam.camera_state.audio_env_coherence_q15;
+            render_assist_packet.color_band_u8 = cam.camera_state.color_band_u8;
+            render_assist_packet.color_r_u8 = cam.camera_state.color_r_u8;
+            render_assist_packet.color_g_u8 = cam.camera_state.color_g_u8;
+            render_assist_packet.color_b_u8 = cam.camera_state.color_b_u8;
+            render_assist_packet.audio_eq_preset_u8 = cam.camera_state.audio_eq_preset_u8;
+            render_assist_packet.audio_reverb_preset_u8 = cam.camera_state.audio_reverb_preset_u8;
+            render_assist_packet.audio_occlusion_preset_u8 = cam.camera_state.audio_occlusion_preset_u8;
+            // Focus band derived from settings (Q16.16 -> Q32.32)
+            render_assist_packet.focus_band_m_q32_32 = ((int64_t)project_settings.camera.focus_band_m_q16_16) << 16;
+
+            // Compute squared bounds in meters^2 (Q32.32).
+            auto sq_q32_32 = [&](int64_t v_q32)->uint64_t {
+                // (Q32.32 * Q32.32) >> 32 => Q32.32
+                __int128 prod = ( (__int128)v_q32 * (__int128)v_q32 );
+                uint64_t out = (uint64_t)(prod >> 32);
+                return out;
+            };
+            const int64_t d = render_assist_packet.focus_distance_m_q32_32;
+            const int64_t w = render_assist_packet.focus_band_m_q32_32;
+            int64_t near_d = d - w;
+            int64_t far_d  = d + w;
+            if (near_d < 0) near_d = 0;
+            if (far_d < near_d + (1ll<<16)) far_d = near_d + (1ll<<16);
+            render_assist_packet.focus_near_m2_q32_32 = sq_q32_32(near_d);
+            render_assist_packet.focus_far_m2_q32_32  = sq_q32_32(far_d);
+
+            const uint64_t range_m2 = (render_assist_packet.focus_far_m2_q32_32 > render_assist_packet.focus_near_m2_q32_32)
+                ? (render_assist_packet.focus_far_m2_q32_32 - render_assist_packet.focus_near_m2_q32_32)
+                : 1ull;
+            // inv_range (Q16.16) ~= (1<<48)/range_q32_32
+            render_assist_packet.inv_focus_range_m2_q16_16 = (int32_t)(((__int128)1 << 48) / ( (__int128)range_m2 ));
+
+            // Near boost window: [0.25ft, 1ft] default, but driven by settings.
+            const int64_t nmin = ((int64_t)project_settings.camera.near_boost_min_m_q16_16) << 16;
+            const int64_t nmax = ((int64_t)project_settings.camera.near_boost_max_m_q16_16) << 16;
+            render_assist_packet.near_min_m2_q32_32 = sq_q32_32(nmin);
+            render_assist_packet.near_max_m2_q32_32 = sq_q32_32(nmax);
+            const uint64_t nrange = (render_assist_packet.near_max_m2_q32_32 > render_assist_packet.near_min_m2_q32_32)
+                ? (render_assist_packet.near_max_m2_q32_32 - render_assist_packet.near_min_m2_q32_32)
+                : 1ull;
+            render_assist_packet.inv_near_range_m2_q16_16 = (int32_t)(((__int128)1 << 48) / ( (__int128)nrange ));
+
+            render_assist_packet.screen_proxy_scale_q16_16 = project_settings.rendering.screen_proxy_scale_q16_16;
+            render_assist_packet.lod_boost_max_q16_16 = project_settings.rendering.lod_boost_max_q16_16;
+            render_assist_packet_tick_u64 = canonical_tick;
+
+            // ------------------------------------------------------------------
+            // XR per-eye view packet projection (observation pose -> fixed view)
+            // The viewport submits raw eye poses; the substrate projects view matrices.
+            // ------------------------------------------------------------------
+            auto f32_to_q16 = [&](float v)->int32_t {
+                // Deterministic rounding to nearest.
+                double dv = (double)v;
+                double q = dv * 65536.0;
+                long long r = (long long)llround(q);
+                if (r > 2147483647LL) r = 2147483647LL;
+                if (r < -2147483648LL) r = -2147483648LL;
+                return (int32_t)r;
+            };
+
+            auto build_view_from_pose = [&](const float pos_f32[3], const float quat_f32[4], int32_t out_view_q16[16]) {
+                // Convert pose to fixed-point.
+                const int32_t px = f32_to_q16(pos_f32[0]);
+                const int32_t py = f32_to_q16(pos_f32[1]);
+                const int32_t pz = f32_to_q16(pos_f32[2]);
+                const int32_t qx = f32_to_q16(quat_f32[0]);
+                const int32_t qy = f32_to_q16(quat_f32[1]);
+                const int32_t qz = f32_to_q16(quat_f32[2]);
+                const int32_t qw = f32_to_q16(quat_f32[3]);
+
+                const int64_t one = 65536LL;
+                const int64_t two = 131072LL;
+
+                auto mul_q16 = [&](int32_t a, int32_t b)->int64_t { return ((int64_t)a * (int64_t)b) >> 16; };
+
+                const int64_t xx = mul_q16(qx,qx);
+                const int64_t yy = mul_q16(qy,qy);
+                const int64_t zz = mul_q16(qz,qz);
+                const int64_t xy = mul_q16(qx,qy);
+                const int64_t xz = mul_q16(qx,qz);
+                const int64_t yz = mul_q16(qy,qz);
+                const int64_t wx = mul_q16(qw,qx);
+                const int64_t wy = mul_q16(qw,qy);
+                const int64_t wz = mul_q16(qw,qz);
+
+                // Rotation matrix (world from local), Q16.16
+                const int64_t r00 = one - ((two * (yy + zz)) >> 16);
+                const int64_t r01 = ((two * (xy - wz)) >> 16);
+                const int64_t r02 = ((two * (xz + wy)) >> 16);
+
+                const int64_t r10 = ((two * (xy + wz)) >> 16);
+                const int64_t r11 = one - ((two * (xx + zz)) >> 16);
+                const int64_t r12 = ((two * (yz - wx)) >> 16);
+
+                const int64_t r20 = ((two * (xz - wy)) >> 16);
+                const int64_t r21 = ((two * (yz + wx)) >> 16);
+                const int64_t r22 = one - ((two * (xx + yy)) >> 16);
+
+                // View matrix = inverse pose = R^T and -R^T p
+                const int64_t vt0 = -(((r00 * px + r10 * py + r20 * pz) >> 16));
+                const int64_t vt1 = -(((r01 * px + r11 * py + r21 * pz) >> 16));
+                const int64_t vt2 = -(((r02 * px + r12 * py + r22 * pz) >> 16));
+
+                // Row-major: [ R^T | t ]
+                out_view_q16[0] = (int32_t)r00; out_view_q16[1] = (int32_t)r10; out_view_q16[2] = (int32_t)r20; out_view_q16[3] = (int32_t)vt0;
+                out_view_q16[4] = (int32_t)r01; out_view_q16[5] = (int32_t)r11; out_view_q16[6] = (int32_t)r21; out_view_q16[7] = (int32_t)vt1;
+                out_view_q16[8] = (int32_t)r02; out_view_q16[9] = (int32_t)r12; out_view_q16[10]= (int32_t)r22; out_view_q16[11]= (int32_t)vt2;
+                out_view_q16[12]= 0; out_view_q16[13]= 0; out_view_q16[14]= 0; out_view_q16[15]= (int32_t)one;
+            };
+
+            for (uint32_t ei = 0; ei < 2u; ++ei) {
+                EwRenderXrEyePacket& outp = render_xr_eye_packet[ei];
+                if (xr_eye_pose_f32[ei].valid_u32 != 0u) {
+                    build_view_from_pose(xr_eye_pose_f32[ei].pos_xyz_f32, xr_eye_pose_f32[ei].rot_xyzw_f32, outp.view_mat_q16_16);
+                    outp.tick_u64 = canonical_tick;
+                    render_xr_eye_packet_tick_u64[ei] = canonical_tick;
+                } else {
+                    // Fail closed deterministically: identity view
+                    for (int k=0;k<16;++k) outp.view_mat_q16_16[k] = 0;
+                    outp.view_mat_q16_16[0] = 65536; outp.view_mat_q16_16[5] = 65536; outp.view_mat_q16_16[10] = 65536; outp.view_mat_q16_16[15] = 65536;
+                    outp.tick_u64 = canonical_tick;
+                    render_xr_eye_packet_tick_u64[ei] = canonical_tick;
+                }
+            }
+
         }
     }
 
@@ -7438,6 +8199,68 @@ if (ap && ap->object_id_u64 != 0u) {
     }
 
     // Inputs are consumed only on successful tick boundary.
+    // ------------------------------------------------------------------
+    // Render object packets (anchors -> renderer)
+    // Renderer must not own authoritative object transforms.
+    // ------------------------------------------------------------------
+    {
+        render_object_packets.clear();
+        render_object_packets.reserve(64);
+        for (uint32_t ai = 1u; ai < (uint32_t)anchors.size(); ++ai) {
+            const Anchor& a = anchors[ai];
+            if (a.kind_u32 == EW_ANCHOR_KIND_OBJECT) {
+                EwRenderObjectPacket p{};
+                p.object_id_u64 = a.object_id_u64;
+                p.anchor_id_u32 = a.id;
+                p.pos_q16_16[0] = a.object_state.pos_q16_16[0];
+                p.pos_q16_16[1] = a.object_state.pos_q16_16[1];
+                p.pos_q16_16[2] = a.object_state.pos_q16_16[2];
+                p.radius_q16_16 = 0;
+                p.albedo_rgba8 = 0xFFFFFFFFu;
+                p.atmosphere_rgba8 = 0u;
+                p.atmosphere_thickness_q16_16 = 0;
+                p.emissive_q16_16 = 0;
+                render_object_packets.push_back(p);
+            } else if (a.kind_u32 == EW_ANCHOR_KIND_PLANET) {
+                EwRenderObjectPacket p{};
+                p.object_id_u64 = a.object_id_u64;
+                p.anchor_id_u32 = a.id;
+                p.pos_q16_16[0] = a.planet_state.pos_q16_16[0];
+                p.pos_q16_16[1] = a.planet_state.pos_q16_16[1];
+                p.pos_q16_16[2] = a.planet_state.pos_q16_16[2];
+                p.radius_q16_16 = a.planet_state.radius_m_q16_16;
+                p.albedo_rgba8 = a.planet_state.albedo_rgba8;
+                p.atmosphere_rgba8 = a.planet_state.atmosphere_rgba8;
+                p.atmosphere_thickness_q16_16 = a.planet_state.atmosphere_thickness_m_q16_16;
+                p.emissive_q16_16 = a.planet_state.emissive_q16_16;
+                render_object_packets.push_back(p);
+            }
+        }
+        render_object_packets_tick_u64 = canonical_tick;
+    }
+
+    // ------------------------------------------------------------------
+    // Determinism guardrail: 9D state fingerprint.
+    // If a reference trace exists, fail closed on first mismatch.
+    // ------------------------------------------------------------------
+    if (!determinism_ref_loaded) {
+        (void)ge_load_fingerprint_reference("Draft Container/Determinism/fingerprint_ref.txt", determinism_ref_fingerprints);
+        determinism_ref_loaded = true;
+    }
+    state_fingerprint_u64 = ge_compute_state_fingerprint_9d(this);
+    state_fingerprint_tick_u64 = canonical_tick;
+    if (!determinism_ref_fingerprints.empty()) {
+        const uint64_t idx = canonical_tick;
+        if (idx < determinism_ref_fingerprints.size()) {
+            const uint64_t expect = determinism_ref_fingerprints[(size_t)idx];
+            if (expect != 0u && expect != state_fingerprint_u64) {
+                emit_ui_line("DETERMINISM_FINGERPRINT_MISMATCH");
+                // Fail closed deterministically.
+                std::abort();
+            }
+        }
+    }
+
     inbound.clear();
     pending_text_x_q = 0;
     pending_image_y_q = 0;
@@ -8108,3 +8931,33 @@ void SubstrateManager::corpus_answer_emit(const std::string& query_utf8, uint32_
 }
 
 
+
+
+// ------------------------------------------------------------------
+// XR eye pose ingress and projected view packets
+// ------------------------------------------------------------------
+
+void SubstrateManager::submit_xr_eye_pose_f32(uint32_t eye_index_u32, const float pos_xyz_f32[3], const float rot_xyzw_f32[4], uint64_t tick_u64) {
+    if (eye_index_u32 >= 2u) return;
+    EwXrEyePoseF32& ep = xr_eye_pose_f32[eye_index_u32];
+    if (pos_xyz_f32) {
+        ep.pos_xyz_f32[0] = pos_xyz_f32[0];
+        ep.pos_xyz_f32[1] = pos_xyz_f32[1];
+        ep.pos_xyz_f32[2] = pos_xyz_f32[2];
+    }
+    if (rot_xyzw_f32) {
+        ep.rot_xyzw_f32[0] = rot_xyzw_f32[0];
+        ep.rot_xyzw_f32[1] = rot_xyzw_f32[1];
+        ep.rot_xyzw_f32[2] = rot_xyzw_f32[2];
+        ep.rot_xyzw_f32[3] = rot_xyzw_f32[3];
+    }
+    ep.tick_u64 = tick_u64;
+    ep.valid_u32 = 1u;
+}
+
+bool SubstrateManager::get_render_xr_eye_packet(uint32_t eye_index_u32, EwRenderXrEyePacket* out) const {
+    if (!out || eye_index_u32 >= 2u) return false;
+    if (render_xr_eye_packet_tick_u64[eye_index_u32] == 0u) return false;
+    *out = render_xr_eye_packet[eye_index_u32];
+    return true;
+}

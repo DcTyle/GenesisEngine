@@ -1,4 +1,10 @@
 #include "GE_operator_registry.hpp"
+
+#include "GE_fourier_fanout.hpp"
+#include "GE_collision_env.hpp"
+#include "GE_coherence_bus.hpp"
+#include "GE_voxel_coupling.hpp"
+#include "GE_anchor_select.hpp"
 #include "ancilla_ops.hpp"
 
 #include "canonical_ops.hpp"
@@ -285,6 +291,54 @@ EwState evolve_state(const EwState& current_state, const EwInputs& inputs, const
         apply_pending_displacements(cand, inputs);
     }
     apply_inbound_pulses(cand, inputs);
+
+    // -----------------------------------------------------------------
+    // Spectral microprocessor + coherence bus (Fourier fan-out + global hooks)
+    // -----------------------------------------------------------------
+    // Ordering is deterministic:
+    //   1) spectral anchors evolve and publish leakage
+    //   2) coherence bus consumes leakage and emits hooks
+    // Hooks are delivered into spectral anchor inbox for the *next* tick.
+    // Voxel coupling microprocessor anchors (dense persistence + Navier-Stokes boundary coupling proxy)
+    // Runs before spectral/bus so it can publish influx (reverse leakage) deterministically.
+    std::vector<EwInfluxPublishPacket> _tmp_influx;
+    ew_voxel_coupling_step(cand.canonical_tick, cand.anchors, _tmp_influx);
+
+    // Feed voxel boundary coupling summaries into spectral anchors (Navier–Stokes boundary coupling term).
+    // Deterministic selection rule (multi-region correct): for each spectral field anchor,
+    // choose the nearest voxel coupling anchor by block center; tie-break on anchor.id_u32.
+    for (Anchor& a : cand.anchors) {
+        if (a.kind_u32 != EW_ANCHOR_KIND_SPECTRAL_FIELD) continue;
+        const int32_t* rc = a.spectral_field_state.region_center_q16_16;
+        const Anchor* vx = ew_find_nearest_anchor_const(
+            cand.anchors,
+            EW_ANCHOR_KIND_VOXEL_COUPLING,
+            rc,
+            [](const Anchor& an, int32_t out_center_q16_16[3]) -> bool {
+                const EwVoxelCouplingAnchorState& vs = an.voxel_coupling_state;
+                const int32_t half_extent = (int32_t)(((__int128)EW_VOXEL_COUPLING_DIM * (__int128)vs.voxel_size_m_q16_16) / 2);
+                out_center_q16_16[0] = vs.origin_q16_16[0] + half_extent;
+                out_center_q16_16[1] = vs.origin_q16_16[1] + half_extent;
+                out_center_q16_16[2] = vs.origin_q16_16[2] + half_extent;
+                return true;
+            }
+        );
+        if (!vx) {
+            a.spectral_field_state.boundary_strength_mean_q15 = 0;
+            a.spectral_field_state.permeability_mean_q15 = 0;
+            a.spectral_field_state.boundary_axis_dom_u8 = 0;
+            a.spectral_field_state.boundary_anisotropy_q15 = 0;
+        } else {
+            const EwVoxelCouplingAnchorState& vs = vx->voxel_coupling_state;
+            a.spectral_field_state.boundary_strength_mean_q15 = vs.boundary_strength_mean_q15;
+            a.spectral_field_state.permeability_mean_q15 = vs.permeability_mean_q15;
+            a.spectral_field_state.boundary_axis_dom_u8 = vs.boundary_axis_dom_u8;
+            a.spectral_field_state.boundary_anisotropy_q15 = vs.boundary_anisotropy_q15;
+        }
+    }
+
+    ew_fourier_fanout_step(cand, inputs, ctx);
+    ew_coherence_bus_step(cand, ctx);
 
     // -----------------------------------------------------------------
     // Pulse-delta sampling at t_k_plus = t_k + tau_delta

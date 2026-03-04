@@ -75,3 +75,45 @@ bool ew_runtime_get_render_camera_packet(const SubstrateManager* sm, EwRenderCam
     return true;
 }
 
+bool ew_runtime_get_render_assist_packet(const SubstrateManager* sm, EwRenderAssistPacket* out) {
+    if (!sm || !out) return false;
+    if (sm->render_assist_packet_tick_u64 == 0u) return false;
+    *out = sm->render_assist_packet;
+    return true;
+}
+
+void ew_runtime_submit_camera_sensor_median_norm(SubstrateManager* sm, int32_t median_depth_norm_q16_16, uint64_t tick_u64) {
+    if (!sm) return;
+    // Observation ingress only: deterministic write. Convert-to-meters and
+    // autofocus are performed inside the substrate compute op.
+    sm->camera_sensor.median_depth_norm_q16_16 = median_depth_norm_q16_16;
+    sm->camera_sensor.tick_u64 = tick_u64;
+}
+
+
+void ew_runtime_submit_xr_eye_pose_f32(SubstrateManager* sm, uint32_t eye_index_u32, const float pos_xyz_f32[3], const float rot_xyzw_f32[4], uint64_t tick_u64) {
+    if (!sm) return;
+    sm->submit_xr_eye_pose_f32(eye_index_u32, pos_xyz_f32, rot_xyzw_f32, tick_u64);
+}
+
+bool ew_runtime_get_render_xr_eye_packet(const SubstrateManager* sm, uint32_t eye_index_u32, EwRenderXrEyePacket* out) {
+    if (!sm || !out) return false;
+    return sm->get_render_xr_eye_packet(eye_index_u32, out);
+}
+
+bool ew_runtime_get_render_object_packets(const SubstrateManager* sm, const EwRenderObjectPacket** out_packets, size_t* out_count) {
+    if (!sm || !out_packets || !out_count) return false;
+    if (sm->render_object_packets_tick_u64 == 0u) return false;
+    *out_packets = sm->render_object_packets.empty() ? nullptr : sm->render_object_packets.data();
+    *out_count = sm->render_object_packets.size();
+    return true;
+}
+
+uint64_t ew_runtime_get_state_fingerprint_9d(const SubstrateManager* sm, uint64_t* out_tick_u64) {
+    if (!sm) {
+        if (out_tick_u64) *out_tick_u64 = 0u;
+        return 0u;
+    }
+    if (out_tick_u64) *out_tick_u64 = sm->state_fingerprint_tick_u64;
+    return sm->state_fingerprint_u64;
+}

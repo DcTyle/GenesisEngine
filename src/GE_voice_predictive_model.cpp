@@ -272,8 +272,29 @@ TtsResult ge_synthesize_phones_to_wav_controlled(
         PhonemeSpan ph = phones[i];
         if (!controls.empty()) {
             ph.dur_ms_u32 = controls[i].dur_ms_u32;
-            if (controls[i].f0_hz_q16_u32 != 0) c.f0_hz_q16_u32 = controls[i].f0_hz_q16_u32;
-            if (controls[i].amp_q15_i16 != 0) c.amp_q15_i16 = controls[i].amp_q15_i16;
+            if (controls[i].f0_hz_q16_u32 != 0) {
+                // If bit31 is set, interpret as ratio Q16.16 instead of absolute Hz.
+                if ((controls[i].f0_hz_q16_u32 & 0x80000000u) != 0) {
+                    const uint32_t ratio_q16 = (controls[i].f0_hz_q16_u32 & 0x7FFFFFFFu);
+                    const uint64_t hz_q16 = ((uint64_t)c.f0_hz_q16_u32 * (uint64_t)ratio_q16) >> 16;
+                    c.f0_hz_q16_u32 = (uint32_t)((hz_q16 > 0xFFFFFFFFull) ? 0xFFFFFFFFu : (uint32_t)hz_q16);
+                } else {
+                    c.f0_hz_q16_u32 = controls[i].f0_hz_q16_u32;
+                }
+            }
+            if (controls[i].amp_q15_i16 != 0) {
+                // Negative means ratio (Q1.15) packed.
+                if (controls[i].amp_q15_i16 < 0) {
+                    const uint32_t ratio_q15 = (uint32_t)(-controls[i].amp_q15_i16);
+                    int32_t a = (int32_t)c.amp_q15_i16;
+                    int32_t scaled = (int32_t)(((int64_t)a * (int64_t)ratio_q15) >> 15);
+                    if (scaled < 0) scaled = 0;
+                    if (scaled > 32767) scaled = 32767;
+                    c.amp_q15_i16 = (int16_t)scaled;
+                } else {
+                    c.amp_q15_i16 = controls[i].amp_q15_i16;
+                }
+            }
         }
         std::vector<PhonemeSpan> one;
         one.push_back(ph);
