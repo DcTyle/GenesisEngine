@@ -1,0 +1,22 @@
+# EigenWare document policy (strict, fail-closed)
+text_max_chars_u32=200000
+text_projection_window_lines_u32=2000
+allow_text_write_u8=1
+text_edit_ops_max_u32=2000
+
+binary_max_bytes_u32=16777216
+binary_projection_window_bytes_u32=1048576
+
+pdf_max_bytes_u32=33554432
+pdf_extract_max_chars_u32=200000
+pdf_projection_window_lines_u32=2000
+
+image_max_bytes_u32=16777216
+image_max_dim_px_u32=4096
+image_tile_px_u32=256
+image_cache_tiles_max_u32=128
+
+audio_max_bytes_u32=16777216
+audio_max_samples_u32=2000000
+audio_window_samples_u32=200000
+audio_waveform_points_u32=1024

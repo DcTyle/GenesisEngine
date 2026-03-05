@@ -1,0 +1,127 @@
+Surgical merge report (GE_Base canonical)
+Date: 2026-03-05
+
+Inputs merged (additive only; no core overwrites):
+ - GenesisEngine_base_solarsystem_FULLMERGE_polished.zip
+ - GenesisEngine_consolidated_polished_ui_ai_v4.zip
+
+Policy:
+ - GE_Base kept as canonical truth.
+ - Only wiring/plumbing changes allowed (CMake add source lines).
+ - Non-wiring file differences are NOT overwritten.
+
+Wiring changes applied:
+ - CMakeLists.txt: added 1 source lines
+ - CMakeLists.txt: added 20 source lines
+
+New files added: 0
+Identical files skipped: 656
+Conflicts (kept canonical): 106
+
+Conflict list:
+ - include/GE_project_settings.hpp [content_conflict]: kept canonical
+ - include/GE_state_fingerprint.hpp [content_conflict]: kept canonical
+ - include/ew_runtime.h [content_conflict]: kept canonical
+ - include/anchor.hpp [content_conflict]: kept canonical
+ - include/GE_control_packets.hpp [content_conflict]: kept canonical
+ - include/GE_runtime.hpp [content_conflict]: kept canonical
+ - scripts/validate_package_win64.bat [content_conflict]: kept canonical
+ - src/GE_asset_substrate.cpp [content_conflict]: kept canonical
+ - src/GE_neural_phase_ai.cpp [content_conflict]: kept canonical
+ - src/GE_object_ancilla.cpp [content_conflict]: kept canonical
+ - src/GE_operator_registry.cpp [content_conflict]: kept canonical
+ - src/GE_project_settings.cpp [content_conflict]: kept canonical
+ - src/GE_state_fingerprint.cpp [content_conflict]: kept canonical
+ - src/ew_runtime.cpp [content_conflict]: kept canonical
+ - src/GE_runtime.cpp [content_conflict]: kept canonical
+ - vulkan_app/CMakeLists.txt [wiring_conflict]: no safe merge
+ - vulkan_app/include/GE_app.hpp [content_conflict]: kept canonical
+ - vulkan_app/src/GE_app.cpp [content_conflict]: kept canonical
+ - vulkan_app/src/main.cpp [content_conflict]: kept canonical
+ - Draft Container/ProjectSettings/project_settings.ewcfg [content_conflict]: kept canonical
+ - docs/spec_uploads/GenesisEngineBlueprint.md [content_conflict]: kept canonical
+ - docs/spec_uploads/GenesisengineSpec.md [content_conflict]: kept canonical
+ - include/GE_ai_anticipation.hpp [content_conflict]: kept canonical
+ - include/GE_asset_substrate.hpp [content_conflict]: kept canonical
+ - include/GE_camera_anchor.hpp [content_conflict]: kept canonical
+ - include/GE_coherence_graph_store.hpp [content_conflict]: kept canonical
+ - include/GE_control_packets.hpp [content_conflict]: kept canonical
+ - include/GE_corpus_allowlist.hpp [content_conflict]: kept canonical
+ - include/GE_curriculum_manager.hpp [content_conflict]: kept canonical
+ - include/GE_forced_aligner.hpp [content_conflict]: kept canonical
+ - include/GE_g2p_lexicon.hpp [content_conflict]: kept canonical
+ - include/GE_language_foundation.hpp [content_conflict]: kept canonical
+ - include/GE_learning_automation.hpp [content_conflict]: kept canonical
+ - include/GE_learning_checkpoint_gate.hpp [content_conflict]: kept canonical
+ - include/GE_live_crawler.hpp [content_conflict]: kept canonical
+ - include/GE_math_foundation.hpp [content_conflict]: kept canonical
+ - include/GE_metric_registry.hpp [content_conflict]: kept canonical
+ - include/GE_neural_phase_ai.hpp [content_conflict]: kept canonical
+ - include/GE_object_ancilla.hpp [content_conflict]: kept canonical
+ - include/GE_project_settings.hpp [content_conflict]: kept canonical
+ - include/anchor.hpp [content_conflict]: kept canonical
+ - include/assimp_fbx_io.hpp [content_conflict]: kept canonical
+ - include/code_artifact_ops.hpp [content_conflict]: kept canonical
+ - include/crawler_subsystem.hpp [content_conflict]: kept canonical
+ - include/ew_eq_exec.h [content_conflict]: kept canonical
+ - include/ew_phase_transport.h [content_conflict]: kept canonical
+ - include/ew_runtime.h [content_conflict]: kept canonical
+ - include/ew_substrate_microprocessor.h [content_conflict]: kept canonical
+ - include/operator_validator.hpp [content_conflict]: kept canonical
+ - include/symbol_tokenize_cuda.hpp [content_conflict]: kept canonical
+ - include/GE_runtime.hpp [content_conflict]: kept canonical
+ - runtime_cli/main.cpp [content_conflict]: kept canonical
+ - scripts/make_release_manifest.py [content_conflict]: kept canonical
+ - src/GE_ai_anticipation.cpp [content_conflict]: kept canonical
+ - src/GE_asset_substrate.cpp [content_conflict]: kept canonical
+ - src/GE_camera_anchor.cpp [content_conflict]: kept canonical
+ - src/GE_coherence_graph_store.cpp [content_conflict]: kept canonical
+ - src/GE_corpus_allowlist.cpp [content_conflict]: kept canonical
+ - src/GE_corpus_anchor_store.cpp [content_conflict]: kept canonical
+ - src/GE_corpus_pulse_log.cpp [content_conflict]: kept canonical
+ - src/GE_curriculum_manager.cpp [content_conflict]: kept canonical
+ - src/GE_forced_aligner.cpp [content_conflict]: kept canonical
+ - src/GE_g2p_lexicon.cpp [content_conflict]: kept canonical
+ - src/GE_lane_threshold_schedule.cpp [content_conflict]: kept canonical
+ - src/GE_language_foundation.cpp [content_conflict]: kept canonical
+ - src/GE_learning_automation.cpp [content_conflict]: kept canonical
+ - src/GE_learning_checkpoint_gate.cpp [content_conflict]: kept canonical
+ - src/GE_live_crawler.cpp [content_conflict]: kept canonical
+ - src/GE_math_foundation.cpp [content_conflict]: kept canonical
+ - src/GE_metric_registry.cpp [content_conflict]: kept canonical
+ - src/GE_neural_phase_ai.cpp [content_conflict]: kept canonical
+ - src/GE_object_ancilla.cpp [content_conflict]: kept canonical
+ - src/GE_operator_registry.cpp [content_conflict]: kept canonical
+ - src/GE_overlap_router.cpp [content_conflict]: kept canonical
+ - src/GE_project_settings.cpp [content_conflict]: kept canonical
+ - src/GE_voice_predictive_model.cpp [content_conflict]: kept canonical
+ - src/GE_voice_synth.cpp [content_conflict]: kept canonical
+ - src/assimp_fbx_io.cpp [content_conflict]: kept canonical
+ - src/code_artifact_ops.cpp [content_conflict]: kept canonical
+ - src/crawler_subsystem.cpp [content_conflict]: kept canonical
+ - src/ew_eq_exec.cpp [content_conflict]: kept canonical
+ - src/ew_phase_transport.cpp [content_conflict]: kept canonical
+ - src/ew_runtime.cpp [content_conflict]: kept canonical
+ - src/ew_substrate_microprocessor.cpp [content_conflict]: kept canonical
+ - src/main.cpp [content_conflict]: kept canonical
+ - src/operator_validator.cpp [content_conflict]: kept canonical
+ - src/qubit_lanes.cpp [content_conflict]: kept canonical
+ - src/GE_runtime.cpp [content_conflict]: kept canonical
+ - src/GE_ai_vault.cpp [content_conflict]: kept canonical
+ - src/tools/ai_headless_run_main.cpp [content_conflict]: kept canonical
+ - src/tools/assimp_fbx_test_main.cpp [content_conflict]: kept canonical
+ - src/tools/crawler_loop_main.cpp [content_conflict]: kept canonical
+ - src/tools/encode_state_main.cpp [content_conflict]: kept canonical
+ - src/tools/ge_tts_speak_main.cpp [content_conflict]: kept canonical
+ - src/tools/ge_voice_train_main.cpp [content_conflict]: kept canonical
+ - src/tools/hydrate_workspace_main.cpp [content_conflict]: kept canonical
+ - src/tools/synthesize_code_main.cpp [content_conflict]: kept canonical
+ - tests/contract_harness.cpp [content_conflict]: kept canonical
+ - tests/test_ai_golden.cpp [content_conflict]: kept canonical
+ - tests/test_determinism.cpp [content_conflict]: kept canonical
+ - vulkan_app/CMakeLists.txt [wiring_conflict]: no safe merge
+ - vulkan_app/README.md [content_conflict]: kept canonical
+ - vulkan_app/include/GE_scene_types.hpp [content_conflict]: kept canonical
+ - vulkan_app/include/GE_app.hpp [content_conflict]: kept canonical
+ - vulkan_app/src/main.cpp [content_conflict]: kept canonical
+ - vulkan_app/src/GE_app.cpp [content_conflict]: kept canonical

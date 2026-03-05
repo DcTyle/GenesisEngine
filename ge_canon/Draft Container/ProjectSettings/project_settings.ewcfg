@@ -1,0 +1,17 @@
+# GenesisEngine Project Settings (deterministic)
+rendering.dnoise_gain_q16_16=65536
+rendering.dnoise_bias_q16_16=0
+physics.contact_pressure_gain_q16_16=65536
+camera.default_focal_length_mm_q16_16=3276800
+camera.default_aperture_f_q16_16=183500
+camera.default_exposure_ev_q16_16=0
+camera.move_speed_mps_q16_16=131072
+camera.move_step_m_q16_16=16384
+camera.look_sens_rad_per_unit_q16_16=131
+camera.zoom_step_m_q16_16=6553
+input.bindings_path_utf8=Draft Container/ProjectSettings/input_bindings.ewcfg
+ai.global_coherence_gate_q15=12000
+simulation.fixed_dt_ms_s32=16
+assets.project_asset_substrate_root_utf8=Draft Container/AssetSubstrate
+assets.global_asset_cache_root_utf8=Draft Container/AssetLibraryCache
+assets.content_index_filename_utf8=content_index.gecontent
