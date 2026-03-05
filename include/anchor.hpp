@@ -19,6 +19,7 @@ static const uint32_t EW_ANCHOR_KIND_SPECTRAL_FIELD = 10;
 static const uint32_t EW_ANCHOR_KIND_COHERENCE_BUS = 11;
 static const uint32_t EW_ANCHOR_KIND_VOXEL_COUPLING = 12;
 static const uint32_t EW_ANCHOR_KIND_COLLISION_ENV = 13;
+static const uint32_t EW_ANCHOR_KIND_AI_CONFIG = 14;
 
 #include "GE_camera_anchor.hpp"
 #include "GE_object_anchor.hpp"
@@ -28,9 +29,16 @@ static const uint32_t EW_ANCHOR_KIND_COLLISION_ENV = 13;
 #include "GE_coherence_bus_anchor.hpp"
 #include "GE_voxel_coupling_anchor.hpp"
 #include "GE_collision_env_anchor.hpp"
+#include "GE_ai_config_anchor.hpp"
 
 // Spider carrier bounds (deterministic, non-versioned).
 // These are carrier observables used for gating and tensor-gradient coupling.
+
+// Carrier semantics (single source of truth):
+//  - Amplitude a_code: how many objects are represented (count, not intensity)
+//  - Amperage i_code: compute density / work pressure (how hard the tick is)
+//  - Voltage  v_code: vector budget / representation fidelity (how much detail)
+//  - Frequency f_code: temporal carrier / update cadence
 static const uint32_t V_MAX = 65535;
 static const uint32_t I_MAX = 65535;
 
@@ -57,6 +65,11 @@ struct SpiderCode4 {
     uint16_t a_code;
     uint16_t v_code;
     uint16_t i_code;
+
+    bool operator==(const SpiderCode4& o) const noexcept {
+        return f_code == o.f_code && a_code == o.a_code && v_code == o.v_code && i_code == o.i_code;
+    }
+    bool operator!=(const SpiderCode4& o) const noexcept { return !(*this == o); }
 };
 
 struct Basis9 {
@@ -140,6 +153,9 @@ public:
     // Collision environment anchor payload. Valid only when kind_u32 == EW_ANCHOR_KIND_COLLISION_ENV.
     EwCollisionEnvAnchorState collision_env_state;
 
+    // AI config anchor payload. Valid only when kind_u32 == EW_ANCHOR_KIND_AI_CONFIG.
+    EwAiConfigAnchorState ai_config_state;
+
     // Previous-step phase for deterministic doppler estimation.
     int64_t last_theta_q;
 
@@ -206,6 +222,7 @@ public:
         std::memset(&coherence_bus_state, 0, sizeof(coherence_bus_state));
         std::memset(&voxel_coupling_state, 0, sizeof(voxel_coupling_state));
         std::memset(&collision_env_state, 0, sizeof(collision_env_state));
+        std::memset(&ai_config_state, 0, sizeof(ai_config_state));
         last_lnA_q32_32 = 0;
         last_lnF_q32_32 = 0;
         dt_star_seconds_q32_32 = 0;
@@ -279,13 +296,46 @@ public:
 
     inline SpiderCode4 spider_encode_9d_4(const Basis9& projected,
                                   const int32_t weights_q10[9],
-                                  const int64_t denom_q[9]) const {
+                                  const int64_t denom_q[9],
+                                  uint16_t a_code,
+                                  uint16_t v_code,
+                                  uint16_t i_code) const {
         const int32_t f_code = spider_encode_9d(projected, weights_q10, denom_q);
-        const uint16_t a_code = amplitude_encode();
-        const uint16_t v_code = voltage_encode(f_code, a_code);
-        const uint16_t i_code = amperage_encode(f_code, a_code);
         SpiderCode4 out{f_code, a_code, v_code, i_code};
         return out;
+    }
+
+    // Deterministic encoders for corrected carrier semantics.
+    static inline uint16_t encode_object_count(uint32_t n_objects, uint32_t n_cap) {
+        if (n_cap == 0u) n_cap = 1u;
+        if (n_objects == 0u) return 0u;
+        if (n_objects > n_cap) n_objects = n_cap;
+        // Map to [1..A_MAX] (avoid 0 when non-empty).
+        uint32_t v = (uint32_t)(((uint64_t)n_objects * (uint64_t)A_MAX) / (uint64_t)n_cap);
+        if (v == 0u) v = 1u;
+        if (v > A_MAX) v = A_MAX;
+        return (uint16_t)v;
+    }
+
+    static inline uint16_t encode_compute_density(uint64_t work_units, uint64_t work_cap) {
+        if (work_cap == 0u) work_cap = 1u;
+        if (work_units == 0u) return 0u;
+        if (work_units > work_cap) work_units = work_cap;
+        uint64_t v = (work_units * (uint64_t)I_MAX) / work_cap;
+        if (v > (uint64_t)I_MAX) v = (uint64_t)I_MAX;
+        return (uint16_t)v;
+    }
+
+    static inline uint16_t encode_vector_budget(uint16_t coherence_q15, uint16_t i_code_u16) {
+        // coherence_q15 is a deterministic proxy for region stability / quality.
+        // Reserve budget as compute density rises: v ~ coherence * (1 - i_norm).
+        const uint32_t coh = (uint32_t)coherence_q15; // 0..32767
+        const uint32_t i = (uint32_t)i_code_u16;      // 0..65535
+        const uint32_t i_inv = (uint32_t)I_MAX - i;
+        uint32_t v = (coh * i_inv);
+        v = (uint32_t)(((uint64_t)v * (uint64_t)V_MAX) / (uint64_t)(32767u * (uint64_t)I_MAX));
+        if (v > V_MAX) v = V_MAX;
+        return (uint16_t)v;
     }
 
     inline void apply_frequency_weighted(int32_t f_code,

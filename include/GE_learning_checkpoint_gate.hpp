@@ -5,7 +5,7 @@
 
 #include "GE_metric_registry.hpp"
 
-class SubstrateManager;
+class SubstrateMicroprocessor;
 
 // -----------------------------------------------------------------------------
 // Learning Checkpoint Gate
@@ -35,7 +35,7 @@ public:
     }
 
     // Called once per engine tick.
-    void tick(::SubstrateManager* sm);
+    void tick(::SubstrateMicroprocessor* sm);
 
     // Access to the metric registry.
     MetricRegistry& registry() { return registry_; }

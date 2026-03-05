@@ -3,7 +3,7 @@
 #include "fixed_point.hpp"
 #include "substrate_alu.hpp"
 
-uint64_t ew_phase_transport_dtheta_u64(const SubstrateManager* sm) {
+uint64_t ew_phase_transport_dtheta_u64(const SubstrateMicroprocessor* sm) {
     if (!sm) return 0ULL;
 
     // Match the deterministic surrogate used by the packed operator template:

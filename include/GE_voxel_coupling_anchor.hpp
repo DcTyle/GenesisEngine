@@ -3,6 +3,7 @@
 #include <cstdint>
 #include "GE_coherence_packets.hpp"
 #include "GE_collision_constraint_packets.hpp"
+#include "GE_temporal_summaries.hpp"
 
 // Voxel coupling anchor: deterministic substrate-instantiated microprocessor anchor
 // that represents dense-object persistence + boundary coupling terms for fluid-like
@@ -14,6 +15,7 @@
 
 static const uint32_t EW_VOXEL_COUPLING_DIM = 8;          // 8x8x8 voxel block
 static const uint32_t EW_VOXEL_COUPLING_PARTICLES_MAX = 64;
+static const uint32_t EW_VOXEL_COUPLING_HOOK_INBOX_MAX = 16;
 
 struct EwVoxelCouplingParticle {
     // Position in meters (Q16.16)
@@ -102,6 +104,36 @@ struct EwVoxelCouplingAnchorState {
     // Learning coupling proxy (Q0.15) derived from influx (used by operators).
     uint16_t learning_coupling_q15 = 0;
     uint16_t pad2_u16 = 0;
+
+    // Temporal coupling operator parameters (small, fixed-size) for voxel coupling.
+    // This allows collapse-like operator replacement to tune how voxel coupling
+    // participates in the substrate coupling loop.
+    uint16_t op_gain_q15 = 32767; // Q0.15
+    uint16_t pad_op_u16 = 0;
+
+    // Explicit measurement lanes for temporal coupling (voxel coupling).
+    EwIntentSummary intent_summary;
+    EwMeasuredSummary measured_summary;
+    EwResidualSummary temporal_residual;
+    EwPulseMeasuredSummary pulse_measured;
+    // Optional GPU-written sidecar for pulse-measured lane (future).
+    EwPulseMeasuredSummary pulse_measured_gpu_sidecar;
+    uint8_t pulse_measured_gpu_valid_u8 = 0;
+    uint8_t pad_pulse_measured0_u8 = 0;
+    uint16_t pad_pulse_measured1_u16 = 0;
+    // Pulse intent sidecar (control-plane) + bounded history window.
+    EwPulseIntentSummary pulse_intent;
+    EwPulseIntentSummary pulse_intent_ring[EW_PULSE_INTENT_RING_W];
+    uint32_t pulse_intent_ring_head_u32 = 0;
+    uint32_t pulse_intent_ring_count_u32 = 0;
+    // Bounded history window for pulse-measured summaries.
+    EwPulseMeasuredSummary pulse_measured_ring[EW_PULSE_MEASURED_RING_W];
+    uint32_t pulse_measured_ring_head_u32 = 0;
+    uint32_t pulse_measured_ring_count_u32 = 0;
+
+    // Hook inbox (filled by coherence bus op).
+    EwHookPacket hook_inbox[EW_VOXEL_COUPLING_HOOK_INBOX_MAX];
+    uint32_t hook_inbox_count_u32 = 0;
 
     // Budget/caps.
     uint32_t max_particles_u32 = EW_VOXEL_COUPLING_PARTICLES_MAX;

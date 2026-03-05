@@ -170,3 +170,46 @@ bool GE_CoherenceGraphStore::load_from_file(const std::string& path_utf8) {
     });
     return true;
 }
+
+void GE_CoherenceGraphStore::sort_and_compact(uint32_t degree_cap_u32) {
+    // Stable-sort nodes.
+    std::stable_sort(nodes.begin(), nodes.end(), [](const GE_CoherenceNode& a, const GE_CoherenceNode& b) {
+        return a.node_id9 < b.node_id9;
+    });
+
+    // For each node: sort edges, dedupe, cap degree.
+    for (auto& n : nodes) {
+        // Sort by neighbor id, then by |weight| descending to keep strongest first per neighbor.
+        std::stable_sort(n.edges.begin(), n.edges.end(), [](const GE_CoherenceEdge& a, const GE_CoherenceEdge& b) {
+            if (a.neighbor_id9 != b.neighbor_id9) return a.neighbor_id9 < b.neighbor_id9;
+            const int64_t aa = (a.weight_q16_16 < 0) ? -(int64_t)a.weight_q16_16 : (int64_t)a.weight_q16_16;
+            const int64_t bb = (b.weight_q16_16 < 0) ? -(int64_t)b.weight_q16_16 : (int64_t)b.weight_q16_16;
+            return aa > bb;
+        });
+
+        // Dedupe neighbors (keep first due to sort).
+        std::vector<GE_CoherenceEdge> uniq;
+        uniq.reserve(n.edges.size());
+        for (size_t i = 0; i < n.edges.size(); ++i) {
+            if (!uniq.empty() && uniq.back().neighbor_id9 == n.edges[i].neighbor_id9) continue;
+            uniq.push_back(n.edges[i]);
+        }
+        n.edges.swap(uniq);
+
+        // Degree cap: keep strongest by |weight|.
+        if (degree_cap_u32 != 0u && n.edges.size() > (size_t)degree_cap_u32) {
+            std::stable_sort(n.edges.begin(), n.edges.end(), [](const GE_CoherenceEdge& a, const GE_CoherenceEdge& b) {
+                const int64_t aa = (a.weight_q16_16 < 0) ? -(int64_t)a.weight_q16_16 : (int64_t)a.weight_q16_16;
+                const int64_t bb = (b.weight_q16_16 < 0) ? -(int64_t)b.weight_q16_16 : (int64_t)b.weight_q16_16;
+                if (aa != bb) return aa > bb;
+                return a.neighbor_id9 < b.neighbor_id9;
+            });
+            n.edges.resize((size_t)degree_cap_u32);
+        }
+
+        // Restore neighbor-id order for deterministic iteration.
+        std::stable_sort(n.edges.begin(), n.edges.end(), [](const GE_CoherenceEdge& a, const GE_CoherenceEdge& b) {
+            return a.neighbor_id9 < b.neighbor_id9;
+        });
+    }
+}

@@ -7,8 +7,8 @@
 #include "ew_id9.hpp"
 #include "GE_metric_registry.hpp"
 
-// SubstrateManager lives in the global namespace (engine runtime).
-class SubstrateManager;
+// SubstrateMicroprocessor lives in the global namespace (engine runtime).
+class SubstrateMicroprocessor;
 
 namespace genesis {
 
@@ -53,7 +53,7 @@ public:
 
     // Emit sandbox experiments that visualize + validate math (graphs, pemdas)
     // using the probe lattice.
-    void tick(::SubstrateManager* sm);
+    void tick(::SubstrateMicroprocessor* sm);
 
     // Produce metric vector for a given math checkpoint kind.
     genesis::MetricVector metrics_for_kind(genesis::MetricKind k) const;

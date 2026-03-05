@@ -1,0 +1,18 @@
+# Genesis Engine lane threshold schedule v1 (deterministic)
+# rel_err_max is a float parsed deterministically into Q32.32.
+# Start permissive, tighten over epochs.
+lane=0
+epoch=0 rel_err_max=0.25
+epoch=1 rel_err_max=0.15
+epoch=3 rel_err_max=0.08
+epoch=6 rel_err_max=0.05
+
+lane=1
+epoch=0 rel_err_max=0.20
+epoch=2 rel_err_max=0.10
+epoch=5 rel_err_max=0.06
+
+lane=2
+epoch=0 rel_err_max=0.22
+epoch=2 rel_err_max=0.12
+epoch=5 rel_err_max=0.07

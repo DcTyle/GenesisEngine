@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 
+#include <utility>
+
 #include "camera_controller.hpp"
 #include "openxr_runtime.hpp"
 
@@ -30,6 +32,29 @@ private:
     HWND hwnd_main_ = nullptr;
     HWND hwnd_viewport_ = nullptr;
     HWND hwnd_panel_ = nullptr;
+
+    // Right dock (Unreal-style): tab strip + panel registry
+    HWND hwnd_rdock_tab_ = nullptr;
+    HWND hwnd_rdock_outliner_ = nullptr;
+    HWND hwnd_rdock_details_ = nullptr;
+    HWND hwnd_rdock_asset_ = nullptr;
+    HWND hwnd_rdock_voxel_ = nullptr;
+    uint32_t rdock_tab_index_u32_ = 0u;
+
+    // Editor panels (Unreal-style layout baseline)
+    HWND hwnd_content_ = nullptr;          // bottom content browser container
+    HWND hwnd_content_list_ = nullptr;     // list view
+    HWND hwnd_content_refresh_ = nullptr;  // refresh button
+    HWND hwnd_content_search_ = nullptr;   // search box
+    bool content_visible_ = true;
+
+    // Deterministic content browser model (populated from /content_list output)
+    struct ContentItem {
+        std::string rel_utf8;
+        std::string label_utf8;
+    };
+    std::vector<ContentItem> content_items_;
+    std::string content_search_utf8_;
 
     // UI controls
     HWND hwnd_input_ = nullptr;
@@ -58,6 +83,34 @@ private:
     HWND hwnd_snap_enable_ = nullptr;
     HWND hwnd_grid_step_ = nullptr;
     HWND hwnd_angle_step_ = nullptr;
+
+    int details_controls_h_ = 220; // UI-only: bottom of fixed Details controls area
+
+    // AI + sim toggles (owner-drawn switch controls)
+    HWND hwnd_toggle_play_ = nullptr;
+    HWND hwnd_toggle_ai_ = nullptr;
+    HWND hwnd_toggle_learning_ = nullptr;
+    HWND hwnd_toggle_crawling_ = nullptr;
+    HWND hwnd_ai_status_ = nullptr;
+    HWND hwnd_vault_ = nullptr;
+    // AI panel window (domain crawl + experiments)
+    HWND hwnd_ai_panel_ = nullptr;
+    HWND hwnd_ai_tab_ = nullptr;
+    HWND hwnd_ai_bell_ = nullptr;
+    HWND hwnd_ai_toggle_learning_ = nullptr;
+    HWND hwnd_ai_toggle_crawling_ = nullptr;
+    HWND hwnd_ai_progress_overall_ = nullptr;
+    HWND hwnd_ai_domain_list_ = nullptr;
+    HWND hwnd_ai_experiment_list_ = nullptr;
+    uint64_t ai_experiments_seen_u64_ = 0ull;
+    uint32_t ai_unseen_experiments_u32_ = 0u;
+    uint32_t ai_tab_index_u32_ = 0u;
+
+
+    bool sim_play_enabled_ = false;
+    bool ai_enabled_ = true;
+    bool ai_learning_enabled_ = false;
+    bool ai_crawling_enabled_ = false;
 
     bool running_ = true;
     bool resized_ = false;
@@ -124,6 +177,13 @@ private:
     void OnSend();
     void OnImportObj();
     void OnBootstrapGame();
+    void ToggleAiPanel();
+    void CreateAiPanelWindow();
+    void UpdateAiPanel();
+    void RefreshAiExperimentList();
+    void RefreshAiDomainProgressList();
+    void MarkAiExperimentsSeen();
+
     void OnApplyTransform();
 
     void EmitEditorSelection(uint64_t object_id_u64);

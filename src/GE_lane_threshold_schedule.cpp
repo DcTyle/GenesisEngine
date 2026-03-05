@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <algorithm>
 
 #include "ew_kv_params.hpp"
 
@@ -78,13 +79,15 @@ bool GE_load_lane_thresholds_from_file(const std::string& path_utf8, GE_AllLaneT
 
         // detect lane line
         for (const auto& t : toks) {
-            std::string k,v;
-            if (!ew_split_kv_token_ascii(t,&k,&v)) continue;
+            std::string_view ksv, vsv;
+            if (!ew::ew_split_kv_token_ascii(std::string_view(t), ksv, vsv)) continue;
+            const std::string k(ksv);
+            const std::string v(vsv);
             if (k=="lane") {
                 if (has_cur) { out->lanes.push_back(cur); cur = GE_LaneThresholdSchedule(); }
                 has_cur=true;
                 uint32_t u=0;
-                if (!ew_parse_u32_ascii(v,&u)) { std::fclose(f); return false; }
+                if (!ew::ew_parse_u32_ascii(std::string_view(v), u)) { std::fclose(f); return false; }
                 cur.lane_u8 = (uint8_t)u;
             }
         }
@@ -96,9 +99,11 @@ bool GE_load_lane_thresholds_from_file(const std::string& path_utf8, GE_AllLaneT
         int64_t rel=0;
         bool has_rel=false;
         for (const auto& t: toks) {
-            std::string k,v;
-            if (!ew_split_kv_token_ascii(t,&k,&v)) continue;
-            if (k=="epoch") { uint32_t u=0; if(!ew_parse_u32_ascii(v,&u)) { std::fclose(f); return false; } epoch=u; has_epoch=true; }
+            std::string_view ksv, vsv;
+            if (!ew::ew_split_kv_token_ascii(std::string_view(t), ksv, vsv)) continue;
+            const std::string k(ksv);
+            const std::string v(vsv);
+            if (k=="epoch") { uint32_t u=0; if(!ew::ew_parse_u32_ascii(std::string_view(v), u)) { std::fclose(f); return false; } epoch=u; has_epoch=true; }
             if (k=="rel_err_max") { rel = ge_parse_q32_32_from_ascii_float(v); has_rel=true; }
         }
         if (has_epoch && has_rel) {

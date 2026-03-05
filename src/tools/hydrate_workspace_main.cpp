@@ -37,7 +37,7 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    SubstrateManager sm(256);
+    SubstrateMicroprocessor sm(256);
     sm.set_projection_seed(seed);
 
     // Optional stdin injection: each line is treated as a substrate observation.

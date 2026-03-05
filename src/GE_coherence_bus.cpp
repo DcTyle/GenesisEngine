@@ -1,5 +1,6 @@
 #include "GE_coherence_bus.hpp"
 
+#include "GE_temporal_summaries.hpp"
 #include "GE_runtime.hpp"
 #include "GE_anchor_select.hpp"
 
@@ -108,6 +109,26 @@ void ew_coherence_bus_step(EwState& cand, const EwCtx& ctx) {
         Anchor& a = cand.anchors[i];
         if (a.kind_u32 != EW_ANCHOR_KIND_VOXEL_COUPLING) continue;
         EwVoxelCouplingAnchorState& vs = a.voxel_coupling_state;
+
+        // Temporal residual packets from voxel coupling anchors participate in the
+        // same collapse-like operator replacement channel.
+        if (vs.temporal_residual.residual_pending_u8 != 0u) {
+            EwTemporalResidualPublishPacket tp;
+            tp.src_anchor_id_u32 = i;
+            tp.coherence_band_u8 = vs.temporal_residual.residual_band_u8;
+            tp.suggested_action_u8 = (uint8_t)EwCoherenceSuggestedAction::OperatorReplace;
+            tp.residual_norm_q15 = vs.temporal_residual.residual_norm_q15;
+            tp.intent_hash_u64 = vs.temporal_residual.intent_hash_u64;
+            tp.measured_hash_u64 = vs.temporal_residual.measured_hash_u64;
+            tp.residual_q32_32 = vs.temporal_residual.residual_q32_32;
+            tp.v_code_u16 = a.last_v_code;
+            tp.i_code_u16 = a.last_i_code;
+
+            const uint64_t key = ((uint64_t)tp.coherence_band_u8 << 56) ^ ew_mix_u64_local(tp.intent_hash_u64) ^ (ew_mix_u64_local(tp.measured_hash_u64) << 1) ^ ((uint64_t)tp.src_anchor_id_u32 << 1);
+            tmp_tr.push_back({tp, key});
+            vs.temporal_residual.residual_pending_u8 = 0u;
+        }
+
         if (vs.influx_pending_u8 == 0u) continue;
 
         EwInfluxPublishPacket ip;
@@ -296,6 +317,9 @@ void ew_coherence_bus_step(EwState& cand, const EwCtx& ctx) {
     uint32_t tr_band_counts[EW_COHERENCE_BANDS];
     for (uint32_t b = 0u; b < EW_COHERENCE_BANDS; ++b) tr_band_counts[b] = 0u;
     uint64_t temporal_acc_u64 = 0;
+    uint64_t mismatch_acc_u64 = 0;
+    uint64_t stability_acc_u64 = 0;
+    uint32_t mismatch_count_u32 = 0;
 
     for (size_t i = 0; i < tmp_tr.size(); ++i) {
         EwTemporalResidualPublishPacket tp = tmp_tr[i].p;
@@ -328,6 +352,59 @@ void ew_coherence_bus_step(EwState& cand, const EwCtx& ctx) {
             // Deterministic gain: proportional to residual norm and coherence.
             // gain_q15 in [0..16384].
             uint32_t g = (uint32_t)tp.residual_norm_q15;
+            // Incorporate bounded pulse intent + measured history for gain.
+            // This makes operator replacement respond to persistent mismatch, not one-tick noise.
+            uint16_t mean_meas_q15 = 0u;
+            uint16_t mad_meas_q15 = 0u;
+            uint16_t mean_int_q15 = 0u;
+            uint16_t mad_int_q15 = 0u;
+            if (tp.src_anchor_id_u32 < cand.anchors.size()) {
+                const Anchor& srca = cand.anchors[tp.src_anchor_id_u32];
+                if (srca.kind_u32 == EW_ANCHOR_KIND_SPECTRAL_FIELD) {
+                    const EwSpectralFieldAnchorState& ss2 = srca.spectral_field_state;
+                    const uint32_t cntm = ss2.pulse_measured_ring_count_u32;
+                    const uint32_t oldm = (cntm == 0u) ? 0u : ((ss2.pulse_measured_ring_head_u32 + EW_PULSE_MEASURED_RING_W - (cntm % EW_PULSE_MEASURED_RING_W)) % EW_PULSE_MEASURED_RING_W);
+                    mean_meas_q15 = ew_pulse_measured_ring_mean_q15(ss2.pulse_measured_ring, oldm, cntm);
+                    mad_meas_q15  = ew_pulse_measured_ring_mad_q15(ss2.pulse_measured_ring, oldm, cntm);
+
+                    const uint32_t cnti = ss2.pulse_intent_ring_count_u32;
+                    const uint32_t oldi = (cnti == 0u) ? 0u : ((ss2.pulse_intent_ring_head_u32 + EW_PULSE_INTENT_RING_W - (cnti % EW_PULSE_INTENT_RING_W)) % EW_PULSE_INTENT_RING_W);
+                    mean_int_q15 = ew_pulse_intent_ring_mean_q15(ss2.pulse_intent_ring, oldi, cnti);
+                    mad_int_q15  = ew_pulse_intent_ring_mad_q15(ss2.pulse_intent_ring, oldi, cnti);
+                } else if (srca.kind_u32 == EW_ANCHOR_KIND_VOXEL_COUPLING) {
+                    const EwVoxelCouplingAnchorState& vs2 = srca.voxel_coupling_state;
+                    const uint32_t cntm = vs2.pulse_measured_ring_count_u32;
+                    const uint32_t oldm = (cntm == 0u) ? 0u : ((vs2.pulse_measured_ring_head_u32 + EW_PULSE_MEASURED_RING_W - (cntm % EW_PULSE_MEASURED_RING_W)) % EW_PULSE_MEASURED_RING_W);
+                    mean_meas_q15 = ew_pulse_measured_ring_mean_q15(vs2.pulse_measured_ring, oldm, cntm);
+                    mad_meas_q15  = ew_pulse_measured_ring_mad_q15(vs2.pulse_measured_ring, oldm, cntm);
+
+                    const uint32_t cnti = vs2.pulse_intent_ring_count_u32;
+                    const uint32_t oldi = (cnti == 0u) ? 0u : ((vs2.pulse_intent_ring_head_u32 + EW_PULSE_INTENT_RING_W - (cnti % EW_PULSE_INTENT_RING_W)) % EW_PULSE_INTENT_RING_W);
+                    mean_int_q15 = ew_pulse_intent_ring_mean_q15(vs2.pulse_intent_ring, oldi, cnti);
+                    mad_int_q15  = ew_pulse_intent_ring_mad_q15(vs2.pulse_intent_ring, oldi, cnti);
+                }
+            }
+
+            // Persistent mismatch score: |mean(measured) - mean(intent)| (Q0.15)
+            const uint32_t mismatch_q15 = (mean_meas_q15 > mean_int_q15)
+                ? (uint32_t)(mean_meas_q15 - mean_int_q15)
+                : (uint32_t)(mean_int_q15 - mean_meas_q15);
+
+            // Stability proxy from MAD: stability = 1 - (mad_avg / denom).
+            const uint32_t mad_avg_q15 = ((uint32_t)mad_meas_q15 + (uint32_t)mad_int_q15) >> 1;
+            uint32_t denom_q15 = ((uint32_t)mean_meas_q15 + (uint32_t)mean_int_q15) >> 1;
+            if (denom_q15 < 256u) denom_q15 = 256u;
+            uint32_t ratio_q15 = (mad_avg_q15 << 15) / denom_q15;
+            if (ratio_q15 > 32767u) ratio_q15 = 32767u;
+            uint32_t stability_q15 = 32767u - ratio_q15;
+
+            // Blend instantaneous residual with mismatch history, then damp by stability.
+            if (mismatch_q15 > 0u) g = (g + mismatch_q15) >> 1;
+            g = (g * stability_q15) >> 15;
+
+            mismatch_acc_u64 += (uint64_t)mismatch_q15;
+            stability_acc_u64 += (uint64_t)stability_q15;
+            mismatch_count_u32++;
             // Bias gain down if both phys+learning coherence are low.
             const uint32_t coh = (uint32_t)bs.phys_coherence_q15 + (uint32_t)bs.learning_coherence_q15;
             if (coh < 4096u) g >>= 2;
@@ -349,6 +426,19 @@ void ew_coherence_bus_step(EwState& cand, const EwCtx& ctx) {
         bs.temporal_coherence_q15 = (uint16_t)v;
     } else {
         bs.temporal_coherence_q15 = (uint16_t)((bs.temporal_coherence_q15 > 64u) ? (bs.temporal_coherence_q15 - 64u) : 0u);
+    }
+
+    // Update derived temporal mismatch/stability proxies (bounded) with slow decay.
+    if (mismatch_count_u32 > 0u) {
+        uint64_t mm = mismatch_acc_u64 / (uint64_t)mismatch_count_u32;
+        uint64_t ss = stability_acc_u64 / (uint64_t)mismatch_count_u32;
+        if (mm > 32767ULL) mm = 32767ULL;
+        if (ss > 32767ULL) ss = 32767ULL;
+        bs.temporal_mismatch_q15 = (uint16_t)mm;
+        bs.temporal_stability_q15 = (uint16_t)ss;
+    } else {
+        bs.temporal_mismatch_q15 = (uint16_t)((bs.temporal_mismatch_q15 > 64u) ? (bs.temporal_mismatch_q15 - 64u) : 0u);
+        bs.temporal_stability_q15 = (uint16_t)((bs.temporal_stability_q15 > 64u) ? (bs.temporal_stability_q15 - 64u) : 0u);
     }
 
     // Update derived physics coherence proxy (bounded).
@@ -378,9 +468,14 @@ void ew_coherence_bus_step(EwState& cand, const EwCtx& ctx) {
         }
         if (hp.dst_anchor_id_u32 >= cand.anchors.size()) continue;
         Anchor& dst = cand.anchors[hp.dst_anchor_id_u32];
-        if (dst.kind_u32 != EW_ANCHOR_KIND_SPECTRAL_FIELD) continue;
-        EwSpectralFieldAnchorState& ss = dst.spectral_field_state;
-        if (ss.hook_inbox_count_u32 >= EW_SPECTRAL_HOOK_INBOX_MAX) continue;
-        ss.hook_inbox[ss.hook_inbox_count_u32++] = hp;
+        if (dst.kind_u32 == EW_ANCHOR_KIND_SPECTRAL_FIELD) {
+            EwSpectralFieldAnchorState& ss = dst.spectral_field_state;
+            if (ss.hook_inbox_count_u32 >= EW_SPECTRAL_HOOK_INBOX_MAX) continue;
+            ss.hook_inbox[ss.hook_inbox_count_u32++] = hp;
+        } else if (dst.kind_u32 == EW_ANCHOR_KIND_VOXEL_COUPLING) {
+            EwVoxelCouplingAnchorState& vs = dst.voxel_coupling_state;
+            if (vs.hook_inbox_count_u32 >= EW_VOXEL_COUPLING_HOOK_INBOX_MAX) continue;
+            vs.hook_inbox[vs.hook_inbox_count_u32++] = hp;
+        }
     }
 }

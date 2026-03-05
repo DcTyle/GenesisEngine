@@ -16,7 +16,9 @@
 
 // Host pinned buffer (DMA-friendly). This is orchestration-only; all compute
 // remains GPU-side.
+#if defined(EW_ENABLE_CUDA) && (EW_ENABLE_CUDA==1)
 #include <cuda_runtime_api.h>
+#endif
 
 CrawlerSubsystem::CrawlerSubsystem() {
     stats_ = {};
@@ -30,7 +32,11 @@ CrawlerSubsystem::CrawlerSubsystem() {
 CrawlerSubsystem::~CrawlerSubsystem() {
     if (pinned_bytes_) {
         if (pinned_is_cuda_) {
+            #if defined(EW_ENABLE_CUDA) && (EW_ENABLE_CUDA==1)
             cudaFreeHost(pinned_bytes_);
+            #else
+            std::free(pinned_bytes_);
+            #endif
         } else {
             std::free(pinned_bytes_);
         }
@@ -38,6 +44,12 @@ CrawlerSubsystem::~CrawlerSubsystem() {
         pinned_cap_bytes_ = 0;
         pinned_is_cuda_ = false;
     }
+}
+
+void CrawlerSubsystem::reset() {
+    q_.clear();
+    stats_ = {};
+    stats_.last_coord_id9 = EigenWare::EwId9{};
 }
 
 bool CrawlerSubsystem::ensure_pinned_capacity_bytes_(size_t need_cap_bytes) {
@@ -53,13 +65,21 @@ bool CrawlerSubsystem::ensure_pinned_capacity_bytes_(size_t need_cap_bytes) {
 
     // Release old.
     if (pinned_bytes_) {
-        if (pinned_is_cuda_) cudaFreeHost(pinned_bytes_);
-        else std::free(pinned_bytes_);
+        if (pinned_is_cuda_) {
+            #if defined(EW_ENABLE_CUDA) && (EW_ENABLE_CUDA==1)
+            cudaFreeHost(pinned_bytes_);
+            #else
+            std::free(pinned_bytes_);
+            #endif
+        } else {
+            std::free(pinned_bytes_);
+        }
         pinned_bytes_ = nullptr;
         pinned_cap_bytes_ = 0;
         pinned_is_cuda_ = false;
     }
 
+    #if defined(EW_ENABLE_CUDA) && (EW_ENABLE_CUDA==1)
     void* p = nullptr;
     const cudaError_t ce = cudaHostAlloc(&p, new_cap, cudaHostAllocPortable);
     if (ce == cudaSuccess && p) {
@@ -68,7 +88,14 @@ bool CrawlerSubsystem::ensure_pinned_capacity_bytes_(size_t need_cap_bytes) {
         pinned_is_cuda_ = true;
         return true;
     }
-    return false;
+    #endif
+
+    // CPU-only fallback: deterministic heap allocation.
+    pinned_bytes_ = (uint8_t*)std::malloc(new_cap);
+    if (!pinned_bytes_) return false;
+    pinned_cap_bytes_ = new_cap;
+    pinned_is_cuda_ = false;
+    return true;
 }
 
 void CrawlerSubsystem::enqueue_observation_utf8(
@@ -114,7 +141,7 @@ EigenWare::EwId9 CrawlerSubsystem::id9_from_spidercode4_(uint16_t f, uint16_t a,
 // encoding. The only CPU responsibility here is deterministic batching and
 // scheduling (queue order + size caps), then dispatching the GPU encoder.
 
-void CrawlerSubsystem::tick(SubstrateManager* sm) {
+void CrawlerSubsystem::tick(SubstrateMicroprocessor* sm) {
     if (!sm) return;
 
     // Deterministic queue ordering: stable sort by (domain_id9, url_id9, artifact_id, causal_tag).

@@ -11,6 +11,15 @@ static inline uint16_t clamp_q15_u16(uint32_t v) {
     return (v > 32767u) ? 32767u : (uint16_t)v;
 }
 
+static inline uint8_t band_from_q15_u16(uint16_t x_q15) {
+    // Cheap log2-ish banding. 0 -> 0, else based on top bit position.
+    if (x_q15 == 0u) return 0u;
+    uint8_t b = 0u;
+    uint16_t v = x_q15;
+    while (v > 512u && b < 7u) { v >>= 1; ++b; }
+    return b;
+}
+
 static inline uint8_t band_from_abs_q32_32(int64_t x_q32_32) {
     uint64_t ax = (x_q32_32 < 0) ? (uint64_t)(-x_q32_32) : (uint64_t)x_q32_32;
     // Map magnitude to 0..7 using top bits (very cheap log2 proxy).
@@ -294,6 +303,41 @@ void ew_voxel_coupling_step(uint64_t canonical_tick_u64,
         if (a.kind_u32 != EW_ANCHOR_KIND_VOXEL_COUPLING) continue;
         EwVoxelCouplingAnchorState& vs = a.voxel_coupling_state;
 
+        // Consume temporal-coupling hooks deterministically.
+        // This is the collapse-like operator replacement path for voxel coupling.
+        if (vs.hook_inbox_count_u32 > 0u) {
+            // Stable-sort hooks by (op, causal_tag, authority, p0, p1) to avoid order dependence.
+            std::vector<EwHookPacket> hooks;
+            hooks.reserve(vs.hook_inbox_count_u32);
+            for (uint32_t hi = 0u; hi < vs.hook_inbox_count_u32 && hi < EW_VOXEL_COUPLING_HOOK_INBOX_MAX; ++hi) {
+                hooks.push_back(vs.hook_inbox[hi]);
+            }
+            std::stable_sort(hooks.begin(), hooks.end(), [](const EwHookPacket& a, const EwHookPacket& b) {
+                if (a.hook_op_u8 != b.hook_op_u8) return a.hook_op_u8 < b.hook_op_u8;
+                if (a.causal_tag_u8 != b.causal_tag_u8) return a.causal_tag_u8 < b.causal_tag_u8;
+                if (a.authority_q15 != b.authority_q15) return a.authority_q15 < b.authority_q15;
+                if (a.p0_q32_32 != b.p0_q32_32) return a.p0_q32_32 < b.p0_q32_32;
+                return a.p1_q32_32 < b.p1_q32_32;
+            });
+
+            for (size_t hi = 0; hi < hooks.size(); ++hi) {
+                const EwHookPacket& hp = hooks[hi];
+                if (hp.hook_op_u8 == (uint8_t)EwCoherenceHookOp::HookOperatorReplace) {
+                    // p0 holds gain_q15 in the upper 16 bits of Q32.32.
+                    const uint32_t g_q15 = (uint32_t)((uint64_t)hp.p0_q32_32 >> 32);
+                    const int64_t dir = hp.p1_q32_32;
+                    // Deterministic bounded update: move op_gain toward/away based on residual sign.
+                    int32_t og = (int32_t)vs.op_gain_q15;
+                    const int32_t step = (int32_t)(g_q15 >> 7); // small
+                    if (dir >= 0) og = og + step; else og = og - step;
+                    if (og < 8192) og = 8192;
+                    if (og > 32767) og = 32767;
+                    vs.op_gain_q15 = (uint16_t)og;
+                }
+            }
+        }
+        vs.hook_inbox_count_u32 = 0u;
+
         // Initialize on first use.
         if (vs.spawn_seed_u64 == 0u) {
             // Derive a deterministic seed from anchor id.
@@ -527,7 +571,83 @@ void ew_voxel_coupling_step(uint64_t canonical_tick_u64,
         // Map Q32.32 magnitude down into Q15 with a conservative scale.
         const uint64_t abs_u = (abs_influx < 0) ? 0u : (uint64_t)abs_influx;
         const uint32_t lc = (uint32_t)(abs_u >> 17); // Q32.32 -> approx Q15
-        vs.learning_coupling_q15 = clamp_q15_u16(lc);
+        // Apply voxel temporal operator gain.
+        const uint32_t og = (uint32_t)vs.op_gain_q15;
+        const uint32_t lc_scaled = (lc * og) >> 15;
+        vs.learning_coupling_q15 = clamp_q15_u16(lc_scaled);
+
+        // Temporal coupling measurement lanes for voxel coupling.
+        // Intent: boundary coupling summaries + spawn count.
+        std::memset(&vs.intent_summary, 0, sizeof(vs.intent_summary));
+        std::memset(&vs.measured_summary, 0, sizeof(vs.measured_summary));
+        std::memset(&vs.temporal_residual, 0, sizeof(vs.temporal_residual));
+        std::memset(&vs.pulse_measured, 0, sizeof(vs.pulse_measured));
+
+        vs.intent_summary.band_mag_q15[0] = vs.boundary_strength_mean_q15;
+        vs.intent_summary.band_mag_q15[1] = vs.permeability_mean_q15;
+        vs.intent_summary.band_mag_q15[2] = (uint16_t)ew_u32_min((uint32_t)vs.interface_strength_mean_q15, 32767u);
+        vs.intent_summary.band_mag_q15[3] = (uint16_t)ew_u32_min(vs.particle_count_u32 * 512u, 32767u);
+        uint32_t intent_acc = 0u;
+        for (uint32_t kk = 0u; kk < 4u; ++kk) intent_acc += vs.intent_summary.band_mag_q15[kk];
+        vs.intent_summary.intent_norm_q15 = (uint16_t)ew_u32_min(intent_acc / 4u, 32767u);
+        vs.intent_summary.last_v_code_u16 = a.last_v_code;
+        vs.intent_summary.last_i_code_u16 = a.last_i_code;
+
+        // Measured: interface strength and influx magnitude as energy/leakage proxies.
+        vs.measured_summary.energy_mean_q15 = vs.interface_strength_mean_q15;
+        vs.measured_summary.energy_peak_q15 = vs.boundary_strength_mean_q15;
+        const uint16_t influx_abs_q15 = clamp_q15_u16((uint32_t)(abs_u >> 17));
+        vs.measured_summary.leakage_abs_q15 = influx_abs_q15;
+
+        // Hashes: deterministic FNV-like mixing.
+        uint64_t ih = 1469598103934665603ull;
+        ih ^= (uint64_t)a.id; ih *= 1099511628211ull;
+        ih ^= (uint64_t)vs.intent_summary.intent_norm_q15; ih *= 1099511628211ull;
+        ih ^= (uint64_t)vs.intent_summary.band_mag_q15[0]; ih *= 1099511628211ull;
+        ih ^= (uint64_t)vs.intent_summary.band_mag_q15[1]; ih *= 1099511628211ull;
+
+        uint64_t mh = 1469598103934665603ull;
+        mh ^= (uint64_t)a.id; mh *= 1099511628211ull;
+        mh ^= (uint64_t)vs.measured_summary.energy_mean_q15; mh *= 1099511628211ull;
+        mh ^= (uint64_t)vs.measured_summary.leakage_abs_q15; mh *= 1099511628211ull;
+        mh ^= (uint64_t)vs.influx_band_u8; mh *= 1099511628211ull;
+
+        vs.temporal_residual.intent_hash_u64 = ih;
+        vs.temporal_residual.measured_hash_u64 = mh;
+
+        // Residual: discrepancy between intended boundary coupling and observed influx magnitude.
+        const int32_t rq15 = (int32_t)vs.measured_summary.leakage_abs_q15 - (int32_t)vs.intent_summary.intent_norm_q15;
+        const uint16_t rabs = (uint16_t)((rq15 < 0) ? -rq15 : rq15);
+        vs.temporal_residual.residual_q32_32 = ((int64_t)rq15) << 17;
+        vs.temporal_residual.residual_norm_q15 = rabs;
+        vs.temporal_residual.residual_band_u8 = band_from_q15_u16(rabs);
+        // Gate publish: only when residual is significant.
+        vs.temporal_residual.residual_pending_u8 = (rabs > 64u) ? 1u : 0u;
+
+        // Pulse measurement sidecar: intent/measured hashes and residual mirror.
+        vs.pulse_measured.pulse_intent_hash_u64 = ih ^ 0xC011D3ULL;
+
+        // Pulse intent sidecar (control-plane).
+        vs.pulse_intent.pulse_intent_hash_u64 = ih ^ 0xC011D3ULL;
+        vs.pulse_intent.pulse_intent_norm_q15 = vs.intent_summary.intent_norm_q15;
+        vs.pulse_intent.last_v_code_u16 = vs.intent_summary.last_v_code_u16;
+        vs.pulse_intent.last_i_code_u16 = vs.intent_summary.last_i_code_u16;
+        vs.pulse_measured.pulse_measured_hash_u64 = mh ^ 0x5EEDu;
+        vs.pulse_measured.pulse_residual_q32_32 = vs.temporal_residual.residual_q32_32;
+        vs.pulse_measured.pulse_residual_norm_q15 = rabs;
+        vs.pulse_measured.pulse_band_u8 = vs.temporal_residual.residual_band_u8;
+        vs.pulse_measured.pulse_pending_u8 = vs.temporal_residual.residual_pending_u8;
+
+        // Push pulse-measured summary into bounded history ring (overwrite-in-place).
+        const EwPulseMeasuredSummary* pm_sel = ew_select_pulse_measured_lane(&vs.pulse_measured, &vs.pulse_measured_gpu_sidecar, vs.pulse_measured_gpu_valid_u8);
+        vs.pulse_measured_ring[vs.pulse_measured_ring_head_u32] = pm_sel ? *pm_sel : vs.pulse_measured;
+        vs.pulse_measured_ring_head_u32 = (vs.pulse_measured_ring_head_u32 + 1u) % EW_PULSE_MEASURED_RING_W;
+        if (vs.pulse_measured_ring_count_u32 < EW_PULSE_MEASURED_RING_W) vs.pulse_measured_ring_count_u32++;
+
+        // Push pulse-intent summary into bounded history ring (overwrite-in-place).
+        vs.pulse_intent_ring[vs.pulse_intent_ring_head_u32] = vs.pulse_intent;
+        vs.pulse_intent_ring_head_u32 = (vs.pulse_intent_ring_head_u32 + 1u) % EW_PULSE_INTENT_RING_W;
+        if (vs.pulse_intent_ring_count_u32 < EW_PULSE_INTENT_RING_W) vs.pulse_intent_ring_count_u32++;
 
         // Deterministic hash of motivating slice.
         uint64_t h = 1469598103934665603ull;

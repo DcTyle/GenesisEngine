@@ -257,7 +257,7 @@ genesis::MetricTask MathFoundation::make_task_for_kind(genesis::MetricKind k, ui
     return task;
 }
 
-void MathFoundation::tick(::SubstrateManager* sm) {
+void MathFoundation::tick(::SubstrateMicroprocessor* sm) {
     if (!sm) return;
 
     // Update PEMDAS pass count deterministically by re-evaluating the bank.

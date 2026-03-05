@@ -12,7 +12,7 @@ static inline uint32_t ge_rotl32(uint32_t x, uint32_t r) {
 }
 
 static inline uint32_t ge_fold_u32(uint32_t a, uint32_t b) {
-    // Deterministic fold (non-cryptographic). Used only to spread bits for 9D IDs.
+    // Deterministic fold (non-crypto). Used only to spread bits for 9D IDs.
     uint32_t x = a ^ ge_rotl32(b, 13) ^ 0x9E3779B9u;
     x ^= ge_rotl32(x, 7);
     x += 0x7F4A7C15u;
@@ -33,8 +33,8 @@ EwId9 GE_anchor_id9_from_provenance_and_carrier(uint8_t lane_u8,
     const uint32_t phi_lo = uint32_t(uint64_t(carrier.phi_carrier_turns_q32_32) & 0xFFFFFFFFull);
     const uint32_t cc = carrier.component_count_u32;
 
-    out.lane[6] = ge_fold_u32(source_id9.lane[0], ge_fold_u32(f_lo, cc));
-    out.lane[7] = ge_fold_u32(source_id9.lane[1], ge_fold_u32(phi_lo, A_lo));
+    out.u32[6] = ge_fold_u32(source_id9.u32[0], ge_fold_u32(f_lo, cc));
+    out.u32[7] = ge_fold_u32(source_id9.u32[1], ge_fold_u32(phi_lo, A_lo));
 
     // Pack lane + seq + chunk_offset_q into lane[8], then fold in residual carrier bits.
     const uint32_t lane_pack = (uint32_t(lane_u8) & 0xFFu) << 24;
@@ -42,7 +42,7 @@ EwId9 GE_anchor_id9_from_provenance_and_carrier(uint8_t lane_u8,
     const uint32_t chunk_off_q = ((offset_u32 >> 8) & 0x00FFFu);
     uint32_t p = lane_pack | seq_pack | chunk_off_q;
     p = ge_fold_u32(p, ge_fold_u32(A_lo ^ f_lo, phi_lo ^ cc));
-    out.lane[8] = p;
+    out.u32[8] = p;
 
     return out;
 }
@@ -64,7 +64,7 @@ void GE_CorpusAnchorStore::sort_and_dedupe() {
 static inline void ge_write_id9(std::ostream& os, const EwId9& id) {
     for (int i = 0; i < 9; ++i) {
         uint8_t buf[4];
-        ew_write_u32_le(buf, id.lane[i]);
+        ew::ew_write_u32_le(buf, id.u32[i]);
         os.write(reinterpret_cast<const char*>(buf), 4);
     }
 }
@@ -73,7 +73,7 @@ static inline bool ge_read_id9(std::istream& is, EwId9& id) {
     for (int i = 0; i < 9; ++i) {
         uint8_t buf[4];
         if (!is.read(reinterpret_cast<char*>(buf), 4)) return false;
-        id.lane[i] = uint32_t(buf[0]) | (uint32_t(buf[1]) << 8) | (uint32_t(buf[2]) << 16) | (uint32_t(buf[3]) << 24);
+        id.u32[i] = uint32_t(buf[0]) | (uint32_t(buf[1]) << 8) | (uint32_t(buf[2]) << 16) | (uint32_t(buf[3]) << 24);
     }
     return true;
 }
@@ -84,7 +84,7 @@ bool GE_CorpusAnchorStore::save_to_file(const std::string& path_utf8) const {
     const char hdr[8] = {'G','E','C','A','S','1','\0','\0'};
     os.write(hdr, 8);
     uint8_t buf4[4];
-    ew_write_u32_le(buf4, uint32_t(records.size()));
+    ew::ew_write_u32_le(buf4, uint32_t(records.size()));
     os.write(reinterpret_cast<const char*>(buf4), 4);
     for (const auto& r : records) {
         ge_write_id9(os, r.anchor_id9);
@@ -92,21 +92,21 @@ bool GE_CorpusAnchorStore::save_to_file(const std::string& path_utf8) const {
         ge_write_id9(os, r.source_id9);
         os.put(char(r.lane_u8));
         os.put('\0'); os.put('\0'); os.put('\0');
-        ew_write_u32_le(buf4, r.seq_u32); os.write(reinterpret_cast<const char*>(buf4), 4);
-        ew_write_u32_le(buf4, r.offset_u32); os.write(reinterpret_cast<const char*>(buf4), 4);
-        ew_write_u32_le(buf4, r.size_u32); os.write(reinterpret_cast<const char*>(buf4), 4);
-        ew_write_u32_le(buf4, uint32_t(r.sc4.f_code)); os.write(reinterpret_cast<const char*>(buf4), 4);
-        ew_write_u32_le(buf4, uint32_t(r.sc4.a_code)); os.write(reinterpret_cast<const char*>(buf4), 4);
-        ew_write_u32_le(buf4, uint32_t(r.sc4.v_code)); os.write(reinterpret_cast<const char*>(buf4), 4);
-        ew_write_u32_le(buf4, uint32_t(r.sc4.i_code)); os.write(reinterpret_cast<const char*>(buf4), 4);
+        ew::ew_write_u32_le(buf4, r.seq_u32); os.write(reinterpret_cast<const char*>(buf4), 4);
+        ew::ew_write_u32_le(buf4, r.offset_u32); os.write(reinterpret_cast<const char*>(buf4), 4);
+        ew::ew_write_u32_le(buf4, r.size_u32); os.write(reinterpret_cast<const char*>(buf4), 4);
+        ew::ew_write_u32_le(buf4, uint32_t(r.sc4.f_code)); os.write(reinterpret_cast<const char*>(buf4), 4);
+        ew::ew_write_u32_le(buf4, uint32_t(r.sc4.a_code)); os.write(reinterpret_cast<const char*>(buf4), 4);
+        ew::ew_write_u32_le(buf4, uint32_t(r.sc4.v_code)); os.write(reinterpret_cast<const char*>(buf4), 4);
+        ew::ew_write_u32_le(buf4, uint32_t(r.sc4.i_code)); os.write(reinterpret_cast<const char*>(buf4), 4);
         uint8_t buf8[8];
-        ew_write_i64_le(buf8, r.carrier.f_carrier_turns_q32_32); os.write(reinterpret_cast<const char*>(buf8), 8);
-        ew_write_i64_le(buf8, r.carrier.A_carrier_q32_32); os.write(reinterpret_cast<const char*>(buf8), 8);
-        ew_write_i64_le(buf8, r.carrier.phi_carrier_turns_q32_32); os.write(reinterpret_cast<const char*>(buf8), 8);
-        ew_write_u32_le(buf4, r.carrier.component_count_u32); os.write(reinterpret_cast<const char*>(buf4), 4);
-        ew_write_u32_le(buf4, uint32_t(r.payload_relpath_utf8.size())); os.write(reinterpret_cast<const char*>(buf4), 4);
+        ew::ew_write_i64_le(buf8, r.carrier.f_carrier_turns_q32_32); os.write(reinterpret_cast<const char*>(buf8), 8);
+        ew::ew_write_i64_le(buf8, r.carrier.A_carrier_q32_32); os.write(reinterpret_cast<const char*>(buf8), 8);
+        ew::ew_write_i64_le(buf8, r.carrier.phi_carrier_turns_q32_32); os.write(reinterpret_cast<const char*>(buf8), 8);
+        ew::ew_write_u32_le(buf4, r.carrier.component_count_u32); os.write(reinterpret_cast<const char*>(buf4), 4);
+        ew::ew_write_u32_le(buf4, uint32_t(r.payload_relpath_utf8.size())); os.write(reinterpret_cast<const char*>(buf4), 4);
         os.write(r.payload_relpath_utf8.data(), std::streamsize(r.payload_relpath_utf8.size()));
-        ew_write_u64_le(buf8, r.payload_byte_off_u64); os.write(reinterpret_cast<const char*>(buf8), 8);
+        ew::ew_write_u64_le(buf8, r.payload_byte_off_u64); os.write(reinterpret_cast<const char*>(buf8), 8);
     }
     return bool(os);
 }
@@ -136,12 +136,22 @@ bool GE_CorpusAnchorStore::load_from_file(const std::string& path_utf8) {
         r.offset_u32 = uint32_t(buf4[0]) | (uint32_t(buf4[1])<<8) | (uint32_t(buf4[2])<<16) | (uint32_t(buf4[3])<<24);
         if (!is.read(reinterpret_cast<char*>(buf4), 4)) return false;
         r.size_u32 = uint32_t(buf4[0]) | (uint32_t(buf4[1])<<8) | (uint32_t(buf4[2])<<16) | (uint32_t(buf4[3])<<24);
-        auto rd_i32 = [&](int32_t& out)->bool{
+        auto rd_u32 = [&](uint32_t& out)->bool{
             if (!is.read(reinterpret_cast<char*>(buf4), 4)) return false;
-            out = int32_t(uint32_t(buf4[0]) | (uint32_t(buf4[1])<<8) | (uint32_t(buf4[2])<<16) | (uint32_t(buf4[3])<<24));
+            out = uint32_t(buf4[0]) | (uint32_t(buf4[1])<<8) | (uint32_t(buf4[2])<<16) | (uint32_t(buf4[3])<<24);
             return true;
         };
-        if (!rd_i32(r.sc4.f_code) || !rd_i32(r.sc4.a_code) || !rd_i32(r.sc4.v_code) || !rd_i32(r.sc4.i_code)) return false;
+        {
+            uint32_t tmp = 0;
+            if (!rd_u32(tmp)) return false;
+            r.sc4.f_code = (int32_t)tmp;
+            if (!rd_u32(tmp)) return false;
+            r.sc4.a_code = (uint16_t)tmp;
+            if (!rd_u32(tmp)) return false;
+            r.sc4.v_code = (uint16_t)tmp;
+            if (!rd_u32(tmp)) return false;
+            r.sc4.i_code = (uint16_t)tmp;
+        }
         uint8_t buf8[8];
         auto rd_i64 = [&](int64_t& out)->bool{
             if (!is.read(reinterpret_cast<char*>(buf8), 8)) return false;

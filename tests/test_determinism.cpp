@@ -12,7 +12,7 @@ static void append_bytes(std::vector<uint8_t>& out, const void* ptr, size_t n) {
 }
 
 static std::vector<uint8_t> run_trace(uint64_t seed, int ticks, int anchor_count) {
-    SubstrateManager s((size_t)anchor_count);
+    SubstrateMicroprocessor s((size_t)anchor_count);
     s.projection_seed = seed;
 
     std::vector<uint8_t> bytes;

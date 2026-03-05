@@ -1,20 +1,12 @@
-#include
-
-    // Snap controls (editor-side convenience; still emits packets only).
-        hwnd_xform_snap_ = CreateWindowW(L"BUTTON", L"Snap",
-                                         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                                         10, 312, 60, 20,
-                                         hwnd_panel_, (HMENU)2020, GetModuleHandleW(nullptr), nullptr);
-        hwnd_xform_step_label_ = CreateWindowW(L"STATIC", L"Step (m):",
-                                               WS_CHILD | WS_VISIBLE,
-                                               80, 314, 60, 18,
-                                               hwnd_panel_, (HMENU)2021, GetModuleHandleW(nullptr), nullptr);
-    
- "GE_app.hpp"
+#include "GE_app.hpp"
 
 #include <vulkan/vulkan.h>
 #include <shellscalingapi.h>
+#include <shellapi.h>
 #include <commdlg.h>
+#include <commctrl.h>
+#pragma comment(lib, "Comctl32.lib")
+
 
 #include <algorithm>
 #include <cassert>
@@ -44,6 +36,66 @@
 #pragma comment(lib, "Shcore.lib")
 
 namespace ewv {
+
+// -----------------------------------------------------------------------------
+// UI Theme (Win32)
+// - Black + Gold styling for editor panels.
+// - Important: purely presentation. Does not touch simulation truth.
+// -----------------------------------------------------------------------------
+struct EwUiTheme {
+    COLORREF bg        = RGB(16,16,16);   // main window background
+    COLORREF panel     = RGB(24,24,24);   // panel background
+    COLORREF edit_bg   = RGB(30,30,30);   // edit/list background
+    COLORREF text      = RGB(232,232,232);
+    COLORREF muted     = RGB(180,180,180);
+    COLORREF border    = RGB(70,70,70);
+    COLORREF gold      = RGB(212,175,55);
+    COLORREF gold_dark = RGB(140,110,30);
+};
+
+static EwUiTheme g_theme;
+static HBRUSH g_brush_bg    = nullptr;
+static HBRUSH g_brush_panel = nullptr;
+static HBRUSH g_brush_edit  = nullptr;
+
+static HFONT g_font_ui = nullptr;
+static HFONT g_font_ui_bold = nullptr;
+static HFONT g_font_ui_small = nullptr;
+
+static void ew_theme_init_once() {
+    static bool inited = false;
+    if (inited) return;
+    inited = true;
+    g_brush_bg    = CreateSolidBrush(g_theme.bg);
+    g_brush_panel = CreateSolidBrush(g_theme.panel);
+    g_brush_edit  = CreateSolidBrush(g_theme.edit_bg);
+    // Fonts (Segoe UI, editor-friendly)
+    g_font_ui = CreateFontW(-MulDiv(10, GetDeviceCaps(GetDC(nullptr), LOGPIXELSY), 72), 0, 0, 0, FW_NORMAL,
+                           FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                           CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    g_font_ui_bold = CreateFontW(-MulDiv(10, GetDeviceCaps(GetDC(nullptr), LOGPIXELSY), 72), 0, 0, 0, FW_SEMIBOLD,
+                           FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                           CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    g_font_ui_small = CreateFontW(-MulDiv(9, GetDeviceCaps(GetDC(nullptr), LOGPIXELSY), 72), 0, 0, 0, FW_NORMAL,
+                           FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                           CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+
+
+static void ew_apply_font_recursive(HWND root, HFONT font) {
+    if (!root || !font) return;
+    EnumChildWindows(root, [](HWND h, LPARAM lp)->BOOL {
+        HFONT f = (HFONT)lp;
+        SendMessageW(h, WM_SETFONT, (WPARAM)f, TRUE);
+        return TRUE;
+    }, (LPARAM)font);
+}
+
+static void ew_apply_editor_fonts(HWND root) {
+    ew_theme_init_once();
+    ew_apply_font_recursive(root, g_font_ui);
+}
+}
+
 
 // -----------------------------------------------------------------------------
 // Win32 Input Bindings Editor (minimal)
@@ -162,6 +214,7 @@ static void ew_open_bindings_editor(EigenWare::SubstrateManager* sm, const std::
         wc.hInstance = GetModuleHandleW(nullptr);
         wc.lpszClassName = L"GE_BindingsEditor";
         wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    wc.hbrBackground = g_brush_bg;
         RegisterClassW(&wc);
         cls = true;
     }
@@ -291,78 +344,13 @@ void refresh_fixed_cache() {
         lattice.init(0xE16E5151ULL);
 
 // ------------------------------------------------------------
-// Default level: Sun + Earth (minimum viable game world)
+// Default level: blank/static world
 // ------------------------------------------------------------
-// Distances are represented in meters (float) for the editor viewport.
-// Simulation remains particle-based internally; these are initial object
-// anchor conditions feeding the substrate update.
-//
-// Sun at origin; Earth at 1 AU on +X with tangential velocity +Y for a
-// near-circular orbit. This demo uses an analytic Kepler orbit in the
-// viewport projection layer; substrate-side interaction operators can
-// replace this projection rule when enabled.
+// On boot the world is intentionally empty and visually static.
+// The substrate microprocessor still ticks immediately (AI + pulse lattice).
 {
     objects.clear();
     selected = -1;
-
-    Object sun{};
-    sun.name_utf8 = "Sun";
-    sun.object_id_u64 = next_object_id_u64++;
-    sun.anchor_id_u32 = 0;
-    sun.xf.pos[0] = 0.0f; sun.xf.pos[1] = 0.0f; sun.xf.pos[2] = 0.0f;
-    sun.xf.rot_euler_deg[0] = 0.0f; sun.xf.rot_euler_deg[1] = 0.0f; sun.xf.rot_euler_deg[2] = 0.0f;
-    sun.radius_m_f32 = 696340000.0f; // meters
-    sun.albedo_rgba8 = 0xFF66CCFFu;
-    sun.atmosphere_rgba8 = 0x00000000u;
-    sun.atmosphere_thickness_m_f32 = 0.0f;
-    sun.emissive_f32 = 40.0f;
-        sun.refresh_fixed_cache();
-    objects.push_back(sun);
-
-    Object earth{};
-    earth.name_utf8 = "Earth";
-    earth.object_id_u64 = next_object_id_u64++;
-    earth.anchor_id_u32 = 0;
-    const float AU = 149597870700.0f; // meters
-    earth.xf.pos[0] = AU; earth.xf.pos[1] = 0.0f; earth.xf.pos[2] = 0.0f;
-    earth.xf.rot_euler_deg[0] = 0.0f; earth.xf.rot_euler_deg[1] = 0.0f; earth.xf.rot_euler_deg[2] = 0.0f;
-    earth.radius_m_f32 = 6371000.0f; // meters
-    earth.albedo_rgba8 = 0xFF2F6B2Fu; // green-ish
-    earth.atmosphere_rgba8 = 0x80FFAA55u; // bluish with alpha
-    earth.atmosphere_thickness_m_f32 = 100000.0f; // ~100km
-    earth.emissive_f32 = 0.0f;
-        earth.refresh_fixed_cache();
-    objects.push_back(earth);
-
-    selected = 1; // Earth selected by default
-
-    // Register default celestial bodies as planet anchors (authoritative transforms).
-    {
-        auto emit_planet = [&](const Object& o) {
-            EwControlPacket cp{};
-            cp.kind = EwControlPacketKind::ObjectRegister;
-            cp.source_u16 = 1;
-            cp.tick_u64 = sm.canonical_tick;
-            cp.payload.object_register.object_id_u64 = o.object_id_u64;
-            cp.payload.object_register.kind_u32 = EW_ANCHOR_KIND_PLANET;
-            cp.payload.object_register.pad0_u32 = 0u;
-            cp.payload.object_register.pos_q16_16[0] = (int32_t)llround((double)o.xf.pos[0] * 65536.0);
-            cp.payload.object_register.pos_q16_16[1] = (int32_t)llround((double)o.xf.pos[1] * 65536.0);
-            cp.payload.object_register.pos_q16_16[2] = (int32_t)llround((double)o.xf.pos[2] * 65536.0);
-            cp.payload.object_register.rot_quat_q16_16[0] = 0;
-            cp.payload.object_register.rot_quat_q16_16[1] = 0;
-            cp.payload.object_register.rot_quat_q16_16[2] = 0;
-            cp.payload.object_register.rot_quat_q16_16[3] = 65536;
-            cp.payload.object_register.radius_m_q16_16 = (int32_t)llround((double)o.radius_m_f32 * 65536.0);
-            cp.payload.object_register.albedo_rgba8 = o.albedo_rgba8;
-            cp.payload.object_register.atmosphere_rgba8 = o.atmosphere_rgba8;
-            cp.payload.object_register.atmosphere_thickness_m_q16_16 = (int32_t)llround((double)o.atmosphere_thickness_m_f32 * 65536.0);
-            cp.payload.object_register.emissive_q16_16 = (int32_t)llround((double)o.emissive_f32 * 65536.0);
-            (void)ew_runtime_submit_control_packet(&sm, &cp);
-        };
-        emit_planet(objects[0]);
-        emit_planet(objects[1]);
-    }
 }
     }
 
@@ -400,28 +388,11 @@ void Tick() {
         }
     }
 
-    // ------------------------------------------------------------
-    // Minimal solar-system demo: Earth orbiting Sun.
-    // ------------------------------------------------------------
-    // Deterministic analytic orbit update driven by canonical tick cadence.
-    // Genesis tick cadence: 360 Hz (viewport cadence is a projection of the
-    // authoritative substrate tick).
-    const double dt = 1.0 / 360.0; // seconds per tick
-    const double year = 365.25 * 86400.0;
-    const double omega = (2.0 * 3.14159265358979323846) / year;
-    earth_orbit_angle_rad += omega * dt;
-    // Wrap
-    if (earth_orbit_angle_rad > 2.0 * 3.14159265358979323846) earth_orbit_angle_rad -= 2.0 * 3.14159265358979323846;
-
-    const float AU = 149597870700.0f;
-    if (objects.size() >= 2) {
-        Object& earth = objects[1];
-        // Orbit updates are substrate-authoritative; viewport does not compute analytic motion.
-        // Earth position is updated from substrate-projected object packets when available.
-        (void)earth_orbit_angle_rad;
+    // World-play gates local viewport evolution. The substrate microprocessor
+    // tick already occurred above (sm.tick()).
+    if (sm.sim_world_play_u32 != 0u) {
+        lattice.step_one_tick();
     }
-
-    lattice.step_one_tick();
 }
 
     bool PopUiLine(std::string& out_utf8) {
@@ -1886,6 +1857,7 @@ static void set_dpi_awareness() {
 
 void App::CreateMainWindow(HINSTANCE hInst) {
     set_dpi_awareness();
+    ew_theme_init_once();
 
     WNDCLASSW wc{};
     wc.lpfnWndProc = &App::WndProcThunk;
@@ -1904,6 +1876,26 @@ void App::CreateMainWindow(HINSTANCE hInst) {
         CW_USEDEFAULT, CW_USEDEFAULT,
         r.right - r.left, r.bottom - r.top,
         nullptr, nullptr, hInst, this);
+
+    // Minimal Unreal-style menu bar. Actions only route through deterministic
+    // UI commands/control packets (no new simulation semantics).
+    HMENU hMenu = CreateMenu();
+    HMENU hFile = CreateMenu();
+    HMENU hEdit = CreateMenu();
+    HMENU hWindow = CreateMenu();
+    HMENU hTools = CreateMenu();
+    AppendMenuW(hFile, MF_STRING, 9001, L"Exit");
+    AppendMenuW(hEdit, MF_STRING, 9101, L"Copy");
+    AppendMenuW(hEdit, MF_STRING, 9102, L"Paste");
+    AppendMenuW(hWindow, MF_STRING | (content_visible_ ? MF_CHECKED : 0), 9201, L"Content Browser");
+    AppendMenuW(hWindow, MF_STRING, 9202, L"AI Panel");
+    AppendMenuW(hTools, MF_STRING, 9301, L"Reindex Content");
+    AppendMenuW(hTools, MF_STRING, 9302, L"List Content");
+    AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hFile, L"File");
+    AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hEdit, L"Edit");
+    AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hWindow, L"Window");
+    AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hTools, L"Tools");
+    SetMenu(hwnd_main_, hMenu);
 
     ShowWindow(hwnd_main_, SW_SHOW);
 }
@@ -1924,73 +1916,631 @@ void App::CreateChildWindows() {
                                 client_w_ - 420, 0, 420, client_h_,
                                 hwnd_main_, (HMENU)1002, GetModuleHandleW(nullptr), nullptr);
 
+    // Right dock: tabbed panels (Unreal-style). Pure UI layer: no core logic changes.
+    {
+        INITCOMMONCONTROLSEX icc{};
+        icc.dwSize = sizeof(icc);
+        icc.dwICC = ICC_TAB_CLASSES | ICC_LISTVIEW_CLASSES | ICC_BAR_CLASSES;
+        InitCommonControlsEx(&icc);
+    }
+    const int PAD = 12;
+    const int TAB_H = 30;
+    hwnd_rdock_tab_ = CreateWindowW(WC_TABCONTROLW, L"",
+                                    WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
+                                    PAD, PAD, 420 - 2*PAD, TAB_H,
+                                    hwnd_panel_, (HMENU)1500, GetModuleHandleW(nullptr), nullptr);
+
+    TCITEMW ti{};
+    ti.mask = TCIF_TEXT;
+    ti.pszText = (LPWSTR)L"Outliner";
+    TabCtrl_InsertItem(hwnd_rdock_tab_, 0, &ti);
+    ti.pszText = (LPWSTR)L"Details";
+    TabCtrl_InsertItem(hwnd_rdock_tab_, 1, &ti);
+    ti.pszText = (LPWSTR)L"Asset";
+    TabCtrl_InsertItem(hwnd_rdock_tab_, 2, &ti);
+    ti.pszText = (LPWSTR)L"Voxel";
+    TabCtrl_InsertItem(hwnd_rdock_tab_, 3, &ti);
+
+    // Panel roots (children of dock container). Only one visible at a time.
+    int panel_x = PAD;
+    int panel_y = PAD + TAB_H + 8;
+    int panel_w = 420 - 2*PAD;
+    int panel_h = client_h_ - panel_y - PAD;
+
+    hwnd_rdock_outliner_ = CreateWindowW(L"STATIC", L"", WS_CHILD | WS_VISIBLE,
+                                         panel_x, panel_y, panel_w, panel_h,
+                                         hwnd_panel_, (HMENU)1501, GetModuleHandleW(nullptr), nullptr);
+    hwnd_rdock_details_  = CreateWindowW(L"STATIC", L"", WS_CHILD,
+                                         panel_x, panel_y, panel_w, panel_h,
+                                         hwnd_panel_, (HMENU)1502, GetModuleHandleW(nullptr), nullptr);
+    hwnd_rdock_asset_    = CreateWindowW(L"STATIC", L"", WS_CHILD,
+                                         panel_x, panel_y, panel_w, panel_h,
+                                         hwnd_panel_, (HMENU)1503, GetModuleHandleW(nullptr), nullptr);
+    hwnd_rdock_voxel_    = CreateWindowW(L"STATIC", L"", WS_CHILD,
+                                         panel_x, panel_y, panel_w, panel_h,
+                                         hwnd_panel_, (HMENU)1504, GetModuleHandleW(nullptr), nullptr);
+
+    rdock_tab_index_u32_ = 0u;
+    TabCtrl_SetCurSel(hwnd_rdock_tab_, (int)rdock_tab_index_u32_);
+
+    // Bottom-docked content browser (v1: list view). Toggle via Window menu.
+    hwnd_content_ = CreateWindowW(L"STATIC", L"",
+                                  WS_CHILD | (content_visible_ ? WS_VISIBLE : 0) | WS_BORDER,
+                                  0, client_h_ - 260, client_w_, 260,
+                                  hwnd_main_, (HMENU)1010, GetModuleHandleW(nullptr), nullptr);
+    hwnd_content_search_ = CreateWindowW(L"EDIT", L"",
+                                         WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT,
+                                         10, 10, 260, 24,
+                                         hwnd_content_, (HMENU)1011, GetModuleHandleW(nullptr), nullptr);
+    hwnd_content_refresh_ = CreateWindowW(L"BUTTON", L"Refresh",
+                                          WS_CHILD | WS_VISIBLE,
+                                          278, 10, 80, 24,
+                                          hwnd_content_, (HMENU)1012, GetModuleHandleW(nullptr), nullptr);
+    hwnd_content_list_ = CreateWindowW(WC_LISTVIEWW, L"",
+                                       WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
+                                       10, 40, client_w_ - 20, 210,
+                                       hwnd_content_, (HMENU)1013, GetModuleHandleW(nullptr), nullptr);
+    ListView_SetExtendedListViewStyle(hwnd_content_list_, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
+    {
+        LVCOLUMNW col{};
+        col.mask = LVCF_TEXT | LVCF_WIDTH;
+        col.cx = 560;
+        col.pszText = (LPWSTR)L"Path";
+        ListView_InsertColumn(hwnd_content_list_, 0, &col);
+        col.cx = 240;
+        col.pszText = (LPWSTR)L"Label";
+        ListView_InsertColumn(hwnd_content_list_, 1, &col);
+    }
+
     // Controls in panel
+    HWND asset_parent = hwnd_rdock_asset_;
+    HWND outliner_parent = hwnd_rdock_outliner_;
+    HWND details_parent = hwnd_rdock_details_;
+    HWND voxel_parent = hwnd_rdock_voxel_;
     hwnd_input_ = CreateWindowW(L"EDIT", L"",
                                 WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT | ES_AUTOVSCROLL,
                                 10, 10, 400, 24,
-                                hwnd_panel_, (HMENU)2001, GetModuleHandleW(nullptr), nullptr);
+                                asset_parent, (HMENU)2001, GetModuleHandleW(nullptr), nullptr);
 
     hwnd_send_ = CreateWindowW(L"BUTTON", L"Send",
                                WS_CHILD | WS_VISIBLE,
                                10, 40, 80, 26,
-                               hwnd_panel_, (HMENU)2002, GetModuleHandleW(nullptr), nullptr);
+                               asset_parent, (HMENU)2002, GetModuleHandleW(nullptr), nullptr);
 
     hwnd_import_ = CreateWindowW(L"BUTTON", L"Import OBJ",
                                  WS_CHILD | WS_VISIBLE,
                                  100, 40, 110, 26,
-                                 hwnd_panel_, (HMENU)2003, GetModuleHandleW(nullptr), nullptr);
+                                 asset_parent, (HMENU)2003, GetModuleHandleW(nullptr), nullptr);
 
-    hwnd_bootstrap_ = CreateWindowW(L\"BUTTON\", L\"Bootstrap Engine\",
+    hwnd_bootstrap_ = CreateWindowW(L"BUTTON", L"Bootstrap Engine",
                                WS_CHILD | WS_VISIBLE,
                                220, 40, 190, 26,
-                               hwnd_panel_, (HMENU)2006, GetModuleHandleW(nullptr), nullptr);
+                               asset_parent, (HMENU)2006, GetModuleHandleW(nullptr), nullptr);
 
+    // ------------------------------------------------------------
+    // AI + sim toggles (owner-drawn switches)
+    // ------------------------------------------------------------
+    CreateWindowW(L"STATIC", L"Run", WS_CHILD | WS_VISIBLE, 10, 70, 28, 18, asset_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+    hwnd_toggle_play_ = CreateWindowW(L"BUTTON", L"",
+                                      WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                      42, 66, 86, 24,
+                                      asset_parent, (HMENU)2040, GetModuleHandleW(nullptr), nullptr);
+
+    CreateWindowW(L"STATIC", L"AI", WS_CHILD | WS_VISIBLE, 138, 70, 18, 18, asset_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+    hwnd_toggle_ai_ = CreateWindowW(L"BUTTON", L"",
+                                    WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                    162, 66, 86, 24,
+                                    asset_parent, (HMENU)2041, GetModuleHandleW(nullptr), nullptr);
+
+    // Second row: learning + crawling.
+    CreateWindowW(L"STATIC", L"Learn", WS_CHILD | WS_VISIBLE, 10, 96, 34, 18, asset_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+    hwnd_toggle_learning_ = CreateWindowW(L"BUTTON", L"",
+                                          WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                          52, 92, 86, 24,
+                                          asset_parent, (HMENU)2042, GetModuleHandleW(nullptr), nullptr);
+
+    CreateWindowW(L"STATIC", L"Crawl", WS_CHILD | WS_VISIBLE, 148, 96, 34, 18, asset_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+    hwnd_toggle_crawling_ = CreateWindowW(L"BUTTON", L"",
+                                          WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                          186, 92, 86, 24,
+                                          asset_parent, (HMENU)2043, GetModuleHandleW(nullptr), nullptr);
+
+
+    // AI vault browser entry point (read-only): triggers /vault_list.
+    hwnd_vault_ = CreateWindowW(L"BUTTON", L"Vault",
+                                WS_CHILD | WS_VISIBLE,
+                                280, 92, 60, 24,
+                                asset_parent, (HMENU)2045, GetModuleHandleW(nullptr), nullptr);
+
+
+    // AI details panel (crawler progress + experiments)
+    CreateWindowW(L"BUTTON", L"AI Panel",
+                  WS_CHILD | WS_VISIBLE,
+                  346, 92, 64, 24,
+                  asset_parent, (HMENU)2046, GetModuleHandleW(nullptr), nullptr);
+
+    hwnd_ai_status_ = CreateWindowW(L"STATIC", L"AI:IDLE",
+                                    WS_CHILD | WS_VISIBLE,
+                                    10, 120, 400, 18,
+                                    asset_parent, (HMENU)2044, GetModuleHandleW(nullptr), nullptr);
+
+    // Object list (blank world on boot).
     hwnd_objlist_ = CreateWindowW(L"LISTBOX", L"",
                                   WS_CHILD | WS_VISIBLE | WS_BORDER | LBS_NOTIFY,
-                                  10, 76, 400, 180,
+                                  10, 142, 400, 114,
                                   hwnd_panel_, (HMENU)2004, GetModuleHandleW(nullptr), nullptr);
     // Transform controls (position in meters). UI emits ObjectSetTransform packets.
-    CreateWindowW(L"STATIC", L"Pos X", WS_CHILD | WS_VISIBLE, 10, 266, 44, 18, hwnd_panel_, nullptr, GetModuleHandleW(nullptr), nullptr);
-    hwnd_posx_ = CreateWindowW(L"EDIT", L"0", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 58, 262, 90, 24, hwnd_panel_, (HMENU)2010, GetModuleHandleW(nullptr), nullptr);
-    CreateWindowW(L"STATIC", L"Y", WS_CHILD | WS_VISIBLE, 154, 266, 14, 18, hwnd_panel_, nullptr, GetModuleHandleW(nullptr), nullptr);
-    hwnd_posy_ = CreateWindowW(L"EDIT", L"0", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 172, 262, 90, 24, hwnd_panel_, (HMENU)2011, GetModuleHandleW(nullptr), nullptr);
-    CreateWindowW(L"STATIC", L"Z", WS_CHILD | WS_VISIBLE, 268, 266, 14, 18, hwnd_panel_, nullptr, GetModuleHandleW(nullptr), nullptr);
-    hwnd_posz_ = CreateWindowW(L"EDIT", L"0", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 286, 262, 90, 24, hwnd_panel_, (HMENU)2012, GetModuleHandleW(nullptr), nullptr);
-    hwnd_apply_xform_ = CreateWindowW(L"BUTTON", L"Apply", WS_CHILD | WS_VISIBLE, 10, 292, 80, 26, hwnd_panel_, (HMENU)2013, GetModuleHandleW(nullptr), nullptr);
+    {
+        const int X = 10, Y = 10, W = 380;
+        const int ROW = 26;
+        const int GAP = 8;
 
-    // Gizmo + snap controls.
-    hwnd_mode_translate_ = CreateWindowW(L"BUTTON", L"Translate", WS_CHILD | WS_VISIBLE, 100, 292, 90, 26, hwnd_panel_, (HMENU)2020, GetModuleHandleW(nullptr), nullptr);
-    hwnd_mode_rotate_    = CreateWindowW(L"BUTTON", L"Rotate", WS_CHILD | WS_VISIBLE, 196, 292, 70, 26, hwnd_panel_, (HMENU)2021, GetModuleHandleW(nullptr), nullptr);
-    hwnd_frame_sel_      = CreateWindowW(L"BUTTON", L"Frame", WS_CHILD | WS_VISIBLE, 272, 292, 60, 26, hwnd_panel_, (HMENU)2022, GetModuleHandleW(nullptr), nullptr);
-// Axis constraint + undo/redo.
-hwnd_axis_none_ = CreateWindowW(L"BUTTON", L"Axis:None", WS_CHILD | WS_VISIBLE, 10, 350, 80, 24, hwnd_panel_, (HMENU)2026, GetModuleHandleW(nullptr), nullptr);
-hwnd_axis_x_    = CreateWindowW(L"BUTTON", L"X", WS_CHILD | WS_VISIBLE, 96, 350, 28, 24, hwnd_panel_, (HMENU)2027, GetModuleHandleW(nullptr), nullptr);
-hwnd_axis_y_    = CreateWindowW(L"BUTTON", L"Y", WS_CHILD | WS_VISIBLE, 128, 350, 28, 24, hwnd_panel_, (HMENU)2028, GetModuleHandleW(nullptr), nullptr);
-hwnd_axis_z_    = CreateWindowW(L"BUTTON", L"Z", WS_CHILD | WS_VISIBLE, 160, 350, 28, 24, hwnd_panel_, (HMENU)2029, GetModuleHandleW(nullptr), nullptr);
-hwnd_undo_      = CreateWindowW(L"BUTTON", L"Undo", WS_CHILD | WS_VISIBLE, 196, 350, 60, 24, hwnd_panel_, (HMENU)2030, GetModuleHandleW(nullptr), nullptr);
-hwnd_redo_      = CreateWindowW(L"BUTTON", L"Redo", WS_CHILD | WS_VISIBLE, 262, 350, 60, 24, hwnd_panel_, (HMENU)2031, GetModuleHandleW(nullptr), nullptr);
+        HWND h_transform_hdr = CreateWindowW(L"STATIC", L"Transform", WS_CHILD | WS_VISIBLE,
+                      X, Y, W, 18, details_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+        if (h_transform_hdr && g_font_ui_bold) SendMessageW(h_transform_hdr, WM_SETFONT, (WPARAM)g_font_ui_bold, TRUE);
 
-    hwnd_snap_enable_ = CreateWindowW(L"BUTTON", L"Snap", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 338, 296, 70, 22, hwnd_panel_, (HMENU)2023, GetModuleHandleW(nullptr), nullptr);
-    // Grid/angle fields
-    CreateWindowW(L"STATIC", L"Grid(m)", WS_CHILD | WS_VISIBLE, 10, 322, 56, 18, hwnd_panel_, nullptr, GetModuleHandleW(nullptr), nullptr);
-    hwnd_grid_step_ = CreateWindowW(L"EDIT", L"1.0", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 68, 318, 72, 24, hwnd_panel_, (HMENU)2024, GetModuleHandleW(nullptr), nullptr);
-    CreateWindowW(L"STATIC", L"Angle(deg)", WS_CHILD | WS_VISIBLE, 150, 322, 72, 18, hwnd_panel_, nullptr, GetModuleHandleW(nullptr), nullptr);
-    hwnd_angle_step_ = CreateWindowW(L"EDIT", L"15", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 226, 318, 60, 24, hwnd_panel_, (HMENU)2025, GetModuleHandleW(nullptr), nullptr);
+        int y = Y + 22;
+        CreateWindowW(L"STATIC", L"Pos X", WS_CHILD | WS_VISIBLE, X, y+4, 44, 18, details_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+        hwnd_posx_ = CreateWindowW(L"EDIT", L"0", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT,
+                                   X + 52, y, 90, ROW, details_parent, (HMENU)2010, GetModuleHandleW(nullptr), nullptr);
+        CreateWindowW(L"STATIC", L"Y", WS_CHILD | WS_VISIBLE, X + 150, y+4, 14, 18, details_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+        hwnd_posy_ = CreateWindowW(L"EDIT", L"0", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT,
+                                   X + 168, y, 90, ROW, details_parent, (HMENU)2011, GetModuleHandleW(nullptr), nullptr);
+        CreateWindowW(L"STATIC", L"Z", WS_CHILD | WS_VISIBLE, X + 266, y+4, 14, 18, details_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+        hwnd_posz_ = CreateWindowW(L"EDIT", L"0", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT,
+                                   X + 284, y, 90, ROW, details_parent, (HMENU)2012, GetModuleHandleW(nullptr), nullptr);
+
+        y += ROW + GAP;
+        hwnd_apply_xform_ = CreateWindowW(L"BUTTON", L"Apply", WS_CHILD | WS_VISIBLE,
+                                          X, y, 80, ROW, details_parent, (HMENU)2013, GetModuleHandleW(nullptr), nullptr);
+        // Property-style copy/paste for transform block.
+        CreateWindowW(L"BUTTON", L"Copy", WS_CHILD | WS_VISIBLE,
+                      X + 88, y, 60, ROW, details_parent, (HMENU)2090, GetModuleHandleW(nullptr), nullptr);
+        CreateWindowW(L"BUTTON", L"Paste", WS_CHILD | WS_VISIBLE,
+                      X + 154, y, 60, ROW, details_parent, (HMENU)2091, GetModuleHandleW(nullptr), nullptr);
+
+        hwnd_mode_translate_ = CreateWindowW(L"BUTTON", L"Translate", WS_CHILD | WS_VISIBLE,
+                                             X + 90, y, 90, ROW, details_parent, (HMENU)2020, GetModuleHandleW(nullptr), nullptr);
+        hwnd_mode_rotate_    = CreateWindowW(L"BUTTON", L"Rotate", WS_CHILD | WS_VISIBLE,
+                                             X + 186, y, 70, ROW, details_parent, (HMENU)2021, GetModuleHandleW(nullptr), nullptr);
+        hwnd_frame_sel_      = CreateWindowW(L"BUTTON", L"Frame", WS_CHILD | WS_VISIBLE,
+                                             X + 262, y, 60, ROW, details_parent, (HMENU)2022, GetModuleHandleW(nullptr), nullptr);
+
+        y += ROW + GAP;
+        hwnd_snap_enable_ = CreateWindowW(L"BUTTON", L"Snap", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                                          X, y+2, 64, 22, details_parent, (HMENU)2023, GetModuleHandleW(nullptr), nullptr);
+        CreateWindowW(L"STATIC", L"Grid", WS_CHILD | WS_VISIBLE, X + 72, y+4, 32, 18, details_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+        hwnd_grid_step_ = CreateWindowW(L"EDIT", L"1.0", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT,
+                                        X + 108, y, 60, ROW, details_parent, (HMENU)2024, GetModuleHandleW(nullptr), nullptr);
+        CreateWindowW(L"STATIC", L"Angle", WS_CHILD | WS_VISIBLE, X + 176, y+4, 40, 18, details_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+        hwnd_angle_step_ = CreateWindowW(L"EDIT", L"15", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT,
+                                         X + 220, y, 50, ROW, details_parent, (HMENU)2025, GetModuleHandleW(nullptr), nullptr);
+
+        // Axis constraint + undo/redo.
+        y += ROW + GAP;
+        hwnd_axis_none_ = CreateWindowW(L"BUTTON", L"Axis:None", WS_CHILD | WS_VISIBLE,
+                                        X, y, 80, ROW, details_parent, (HMENU)2026, GetModuleHandleW(nullptr), nullptr);
+        hwnd_axis_x_    = CreateWindowW(L"BUTTON", L"X", WS_CHILD | WS_VISIBLE,
+                                        X + 86, y, 28, ROW, details_parent, (HMENU)2027, GetModuleHandleW(nullptr), nullptr);
+        hwnd_axis_y_    = CreateWindowW(L"BUTTON", L"Y", WS_CHILD | WS_VISIBLE,
+                                        X + 118, y, 28, ROW, details_parent, (HMENU)2028, GetModuleHandleW(nullptr), nullptr);
+        hwnd_axis_z_    = CreateWindowW(L"BUTTON", L"Z", WS_CHILD | WS_VISIBLE,
+                                        X + 150, y, 28, ROW, details_parent, (HMENU)2029, GetModuleHandleW(nullptr), nullptr);
+        hwnd_undo_      = CreateWindowW(L"BUTTON", L"Undo", WS_CHILD | WS_VISIBLE,
+                                        X + 186, y, 60, ROW, details_parent, (HMENU)2030, GetModuleHandleW(nullptr), nullptr);
+        hwnd_redo_      = CreateWindowW(L"BUTTON", L"Redo", WS_CHILD | WS_VISIBLE,
+                                        X + 252, y, 60, ROW, details_parent, (HMENU)2031, GetModuleHandleW(nullptr), nullptr);
+        // Remember bottom of fixed controls so log/output can anchor beneath.
+        details_controls_h_ = y + ROW + GAP + 12;
+    }
+
 
     hwnd_output_ = CreateWindowW(L"EDIT", L"",
                                  WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL,
                                  10, 350, 400, client_h_ - 360,
-                                 hwnd_panel_, (HMENU)2005, GetModuleHandleW(nullptr), nullptr);
+                                 details_parent, (HMENU)2005, GetModuleHandleW(nullptr), nullptr);
+
+    // Voxel Designer (materials) placeholder UI: pure authoring surface for future Material Mixer wiring.
+    {
+        const int X = 10, Y = 10, W = 380;
+        HWND h_vox_hdr = CreateWindowW(L"STATIC", L"Voxel Designer (Materials)", WS_CHILD | WS_VISIBLE,
+                      X, Y, W, 18, voxel_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+        if (h_vox_hdr && g_font_ui_bold) SendMessageW(h_vox_hdr, WM_SETFONT, (WPARAM)g_font_ui_bold, TRUE);
+        CreateWindowW(L"STATIC", L"This panel will host the Material Mixer + voxelization controls.",
+                      WS_CHILD | WS_VISIBLE, X, Y + 22, W, 18, voxel_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+        CreateWindowW(L"STATIC", L"(UI only for now — backend wiring comes next)",
+                      WS_CHILD | WS_VISIBLE, X, Y + 42, W, 18, voxel_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+
+        // A few representative knobs (placeholders).
+        CreateWindowW(L"STATIC", L"Density", WS_CHILD | WS_VISIBLE, X, Y + 78, 60, 18, voxel_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+        CreateWindowW(TRACKBAR_CLASSW, L"", WS_CHILD | WS_VISIBLE | TBS_AUTOTICKS,
+                      X + 70, Y + 72, W - 80, 30, voxel_parent, (HMENU)2601, GetModuleHandleW(nullptr), nullptr);
+        CreateWindowW(L"STATIC", L"Hardness", WS_CHILD | WS_VISIBLE, X, Y + 112, 60, 18, voxel_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+        CreateWindowW(TRACKBAR_CLASSW, L"", WS_CHILD | WS_VISIBLE | TBS_AUTOTICKS,
+                      X + 70, Y + 106, W - 80, 30, voxel_parent, (HMENU)2602, GetModuleHandleW(nullptr), nullptr);
+        CreateWindowW(L"STATIC", L"Roughness", WS_CHILD | WS_VISIBLE, X, Y + 146, 60, 18, voxel_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+        CreateWindowW(TRACKBAR_CLASSW, L"", WS_CHILD | WS_VISIBLE | TBS_AUTOTICKS,
+                      X + 70, Y + 140, W - 80, 30, voxel_parent, (HMENU)2603, GetModuleHandleW(nullptr), nullptr);
+    }
+
+    // Apply consistent editor fonts (Segoe UI) across UI controls.
+    ew_apply_editor_fonts(hwnd_panel_);
+    if (hwnd_content_) ew_apply_editor_fonts(hwnd_content_);
     LayoutChildren(client_w_, client_h_);
+
+}
+
+
+// -----------------------------------------------------------------------------
+// AI Panel Window (Crawler progress + Experiments)
+// - Separate window so editor controls remain uncluttered.
+// - Always boots with Learning/Crawling OFF.
+// - Bell badge indicates unseen experiments (committed count delta).
+// -----------------------------------------------------------------------------
+
+static void ew_draw_bell_badge(const DRAWITEMSTRUCT* dis, uint32_t badge_u32) {
+    if (!dis) return;
+    ew_theme_init_once();
+    HDC hdc = dis->hDC;
+    RECT rc = dis->rcItem;
+
+    FillRect(hdc, &rc, g_brush_panel);
+
+    // Simple bell glyph (text) + red badge.
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, g_theme.gold);
+    HFONT hFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+    HFONT old = (HFONT)SelectObject(hdc, hFont);
+
+    // Simple bell glyph. We intentionally keep this ASCII-ish so it renders on
+    // default Win32 fonts without requiring a symbol font.
+    const wchar_t* bell = L"!";
+    RECT tr = rc;
+    DrawTextW(hdc, bell, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    if (badge_u32 > 0u) {
+        // Draw red dot with number.
+        const int dot_r = 10;
+        int cx = rc.right - dot_r - 2;
+        int cy = rc.top + dot_r + 2;
+        HBRUSH red = CreateSolidBrush(RGB(220, 0, 0));
+        HPEN pen = CreatePen(PS_SOLID, 1, RGB(220,0,0));
+        HGDIOBJ oldb = SelectObject(hdc, red);
+        HGDIOBJ oldp = SelectObject(hdc, pen);
+        Ellipse(hdc, cx - dot_r, cy - dot_r, cx + dot_r, cy + dot_r);
+        SelectObject(hdc, oldp);
+        SelectObject(hdc, oldb);
+        DeleteObject(pen);
+        DeleteObject(red);
+
+        wchar_t num[16];
+        uint32_t shown = badge_u32;
+        if (shown > 963u) shown = 963u;
+        _snwprintf(num, 16, L"%u", (unsigned)shown);
+        SetTextColor(hdc, RGB(255,255,255));
+        RECT nr{cx - dot_r, cy - dot_r, cx + dot_r, cy + dot_r};
+        DrawTextW(hdc, num, -1, &nr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        SetTextColor(hdc, g_theme.gold);
+    }
+
+    SelectObject(hdc, old);
+}
+
+void App::CreateAiPanelWindow() {
+    if (hwnd_ai_panel_) return;
+
+    INITCOMMONCONTROLSEX icc{};
+    icc.dwSize = sizeof(icc);
+    icc.dwICC = ICC_TAB_CLASSES | ICC_PROGRESS_CLASS | ICC_LISTVIEW_CLASSES;
+    InitCommonControlsEx(&icc);
+
+    hwnd_ai_panel_ = CreateWindowW(L"STATIC", L"AI",
+                                   WS_OVERLAPPEDWINDOW,
+                                   CW_USEDEFAULT, CW_USEDEFAULT, 560, 460,
+                                   hwnd_main_, nullptr, GetModuleHandleW(nullptr), nullptr);
+
+    // Learning/Crawling toggles inside the AI panel.
+    CreateWindowW(L"STATIC", L"Learning", WS_CHILD | WS_VISIBLE, 12, 10, 58, 18,
+                  hwnd_ai_panel_, nullptr, GetModuleHandleW(nullptr), nullptr);
+    hwnd_ai_toggle_learning_ = CreateWindowW(L"BUTTON", L"",
+                                             WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                             74, 6, 56, 24,
+                                             hwnd_ai_panel_, (HMENU)4055, GetModuleHandleW(nullptr), nullptr);
+
+    CreateWindowW(L"STATIC", L"Crawling", WS_CHILD | WS_VISIBLE, 140, 10, 58, 18,
+                  hwnd_ai_panel_, nullptr, GetModuleHandleW(nullptr), nullptr);
+    hwnd_ai_toggle_crawling_ = CreateWindowW(L"BUTTON", L"",
+                                             WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                             202, 6, 56, 24,
+                                             hwnd_ai_panel_, (HMENU)4056, GetModuleHandleW(nullptr), nullptr);
+
+    // Bell (owner-drawn) top-right.
+    hwnd_ai_bell_ = CreateWindowW(L"BUTTON", L"",
+                                  WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                  520, 10, 24, 24,
+                                  hwnd_ai_panel_, (HMENU)4050, GetModuleHandleW(nullptr), nullptr);
+
+    // Tabs.
+    hwnd_ai_tab_ = CreateWindowW(WC_TABCONTROLW, L"",
+                                 WS_CHILD | WS_VISIBLE,
+                                 10, 40, 530, 370,
+                                 hwnd_ai_panel_, (HMENU)4051, GetModuleHandleW(nullptr), nullptr);
+
+    TCITEMW ti{};
+    ti.mask = TCIF_TEXT;
+    ti.pszText = (LPWSTR)L"Crawler";
+    TabCtrl_InsertItem(hwnd_ai_tab_, 0, &ti);
+    ti.pszText = (LPWSTR)L"Experiments";
+    TabCtrl_InsertItem(hwnd_ai_tab_, 1, &ti);
+
+    // Crawler tab controls
+    hwnd_ai_progress_overall_ = CreateWindowW(PROGRESS_CLASSW, L"",
+                                              WS_CHILD | WS_VISIBLE,
+                                              20, 74, 510, 18,
+                                              hwnd_ai_panel_, (HMENU)4052, GetModuleHandleW(nullptr), nullptr);
+    SendMessageW(hwnd_ai_progress_overall_, PBM_SETRANGE, 0, MAKELPARAM(0, 100));
+
+    hwnd_ai_domain_list_ = CreateWindowW(WC_LISTVIEWW, L"",
+                                         WS_CHILD | WS_VISIBLE | WS_BORDER | LVS_REPORT | LVS_SINGLESEL,
+                                         20, 98, 510, 300,
+                                         hwnd_ai_panel_, (HMENU)4053, GetModuleHandleW(nullptr), nullptr);
+
+    LVCOLUMNW col{};
+    col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
+    col.cx = 260; col.pszText = (LPWSTR)L"Domain"; ListView_InsertColumn(hwnd_ai_domain_list_, 0, &col);
+    col.cx = 90;  col.pszText = (LPWSTR)L"Pages";  col.iSubItem = 1; ListView_InsertColumn(hwnd_ai_domain_list_, 1, &col);
+    col.cx = 140; col.pszText = (LPWSTR)L"Progress"; col.iSubItem = 2; ListView_InsertColumn(hwnd_ai_domain_list_, 2, &col);
+
+    // Experiments tab control: listbox over same area (we show/hide based on tab)
+    hwnd_ai_experiment_list_ = CreateWindowW(L"LISTBOX", L"",
+                                             WS_CHILD | WS_BORDER | LBS_NOTIFY | WS_VSCROLL,
+                                             20, 74, 510, 324,
+                                             hwnd_ai_panel_, (HMENU)4054, GetModuleHandleW(nullptr), nullptr);
+    ShowWindow(hwnd_ai_experiment_list_, SW_HIDE);
+
+    // Default: crawler tab visible.
+    ai_tab_index_u32_ = 0u;
+    ShowWindow(hwnd_ai_progress_overall_, SW_SHOW);
+    ShowWindow(hwnd_ai_domain_list_, SW_SHOW);
+
+    // Populate both views once so the first show is instant.
+    RefreshAiDomainProgressList();
+    RefreshAiExperimentList();
+    UpdateAiPanel();
+
+    // Start hidden; user opens via UI.
+    ShowWindow(hwnd_ai_panel_, SW_HIDE);
+}
+
+void App::ToggleAiPanel() {
+    CreateAiPanelWindow();
+    if (!hwnd_ai_panel_) return;
+    const BOOL vis = IsWindowVisible(hwnd_ai_panel_);
+    ShowWindow(hwnd_ai_panel_, vis ? SW_HIDE : SW_SHOW);
+    if (!vis) {
+        RefreshAiExperimentList();
+        RefreshAiDomainProgressList();
+        UpdateAiPanel();
+    }
+}
+
+void App::MarkAiExperimentsSeen() {
+    if (!scene_) return;
+    ai_experiments_seen_u64_ = scene_->sm.vault_experiments_committed_u64;
+    ai_unseen_experiments_u32_ = 0u;
+    if (hwnd_ai_bell_) InvalidateRect(hwnd_ai_bell_, nullptr, TRUE);
+}
+
+static std::wstring ew_utf8_to_wide_lossy(const std::string& s) {
+    if (s.empty()) return L"";
+    int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), nullptr, 0);
+    if (n <= 0) return L"";
+    std::wstring out; out.resize((size_t)n);
+    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), &out[0], n);
+    return out;
+}
+
+void App::RefreshAiExperimentList() {
+    if (!hwnd_ai_experiment_list_) return;
+    SendMessageW(hwnd_ai_experiment_list_, LB_RESETCONTENT, 0, 0);
+
+    // Mirror vault artifacts into Draft Container/AssetSubstrate/AI.
+    // Experiments are stored as .geassetref files.
+    const std::wstring base = L"Draft Container\\AssetSubstrate\\AI\\experiments\\metrics";
+
+    WIN32_FIND_DATAW fd{};
+    HANDLE h = FindFirstFileW((base + L"\\*.geassetref").c_str(), &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+                SendMessageW(hwnd_ai_experiment_list_, LB_ADDSTRING, 0, (LPARAM)fd.cFileName);
+            }
+        } while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
+
+    // Also list failures.
+    const std::wstring base2 = L"Draft Container\\AssetSubstrate\\AI\\experiments\\metrics_failures";
+    h = FindFirstFileW((base2 + L"\\*.geassetref").c_str(), &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+                std::wstring name = L"(fail) ";
+                name += fd.cFileName;
+                SendMessageW(hwnd_ai_experiment_list_, LB_ADDSTRING, 0, (LPARAM)name.c_str());
+            }
+        } while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
+}
+
+void App::RefreshAiDomainProgressList() {
+    if (!hwnd_ai_domain_list_ || !scene_) return;
+
+    ListView_DeleteAllItems(hwnd_ai_domain_list_);
+
+    // Pull deterministic stats from substrate manager. These are cheap counters
+    // updated by the crawler/vault commits.
+    const uint32_t n = scene_->sm.domain_crawl_stats_n_u32;
+    uint64_t total_seen = 0ull;
+    uint64_t total_target = 0ull;
+
+    // Sort domains by ASCII name for a stable, user-friendly display.
+    uint32_t idx[DOMAIN_CRAWL_STATS_MAX_U32];
+    for (uint32_t i = 0u; i < n; ++i) idx[i] = i;
+    for (uint32_t i = 0u; i + 1u < n; ++i) {
+        uint32_t best = i;
+        for (uint32_t j = i + 1u; j < n; ++j) {
+            const auto& a = scene_->sm.domain_crawl_stats[idx[j]].domain_ascii;
+            const auto& b = scene_->sm.domain_crawl_stats[idx[best]].domain_ascii;
+            if (a < b) best = j;
+        }
+        uint32_t tmp = idx[i];
+        idx[i] = idx[best];
+        idx[best] = tmp;
+    }
+
+    for (uint32_t row = 0u; row < n; ++row) {
+        const uint32_t i = idx[row];
+        const auto& ds = scene_->sm.domain_crawl_stats[i];
+        total_seen += (uint64_t)ds.pages_seen_u32;
+        total_target += (uint64_t)ds.pages_target_u32;
+
+        LVITEMW it{};
+        it.mask = LVIF_TEXT;
+        it.iItem = (int)row;
+        std::wstring dom = ew_utf8_to_wide_lossy(ds.domain_ascii);
+        it.pszText = dom.empty() ? (LPWSTR)L"(unknown)" : (LPWSTR)dom.c_str();
+        ListView_InsertItem(hwnd_ai_domain_list_, &it);
+
+        wchar_t pages[32];
+        _snwprintf(pages, 32, L"%u/%u", (unsigned)ds.pages_seen_u32, (unsigned)ds.pages_target_u32);
+        ListView_SetItemText(hwnd_ai_domain_list_, (int)row, 1, pages);
+
+        uint32_t pct = 0u;
+        if (ds.pages_target_u32 > 0u) {
+            pct = (uint32_t)(((uint64_t)ds.pages_seen_u32 * 100ull) / (uint64_t)ds.pages_target_u32);
+            if (pct > 100u) pct = 100u;
+        }
+        wchar_t prog[32];
+        _snwprintf(prog, 32, L"%u%%", (unsigned)pct);
+        ListView_SetItemText(hwnd_ai_domain_list_, (int)row, 2, prog);
+    }
+
+    // Overall progress.
+    uint32_t pct_all = 0u;
+    if (total_target > 0ull) {
+        pct_all = (uint32_t)((total_seen * 100ull) / total_target);
+        if (pct_all > 100u) pct_all = 100u;
+    }
+    if (hwnd_ai_progress_overall_) {
+        SendMessageW(hwnd_ai_progress_overall_, PBM_SETPOS, (WPARAM)pct_all, 0);
+    }
+}
+
+void App::UpdateAiPanel() {
+    if (!scene_) return;
+
+    const uint64_t committed = scene_->sm.vault_experiments_committed_u64;
+    if (committed >= ai_experiments_seen_u64_) {
+        uint64_t delta = committed - ai_experiments_seen_u64_;
+        if (delta > 0ull) {
+            uint64_t capped = (delta > 963ull) ? 963ull : delta;
+            ai_unseen_experiments_u32_ = (uint32_t)capped;
+        } else {
+            ai_unseen_experiments_u32_ = 0u;
+        }
+    } else {
+        // Counter reset should not happen, but fail closed.
+        ai_experiments_seen_u64_ = committed;
+        ai_unseen_experiments_u32_ = 0u;
+    }
+
+    if (hwnd_ai_bell_) InvalidateRect(hwnd_ai_bell_, nullptr, TRUE);
+
+    // Keep progress list fresh while visible.
+    if (hwnd_ai_panel_ && IsWindowVisible(hwnd_ai_panel_)) {
+        RefreshAiDomainProgressList();
+    }
 }
 
 void App::LayoutChildren(int w, int h) {
-    int panel_w = 420;
-    MoveWindow(hwnd_viewport_, 0, 0, w - panel_w, h, TRUE);
-    MoveWindow(hwnd_panel_, w - panel_w, 0, panel_w, h, TRUE);
+    const int panel_w = 420;
+    const int content_h = (content_visible_ ? 260 : 0);
+    const int top_h = (h > content_h) ? (h - content_h) : h;
 
-    MoveWindow(hwnd_output_, 10, 350, panel_w - 20, h - 360, TRUE);
+    MoveWindow(hwnd_viewport_, 0, 0, w - panel_w, top_h, TRUE);
+    MoveWindow(hwnd_panel_, w - panel_w, 0, panel_w, top_h, TRUE);
+
+    // Bottom content browser.
+    if (hwnd_content_) {
+        MoveWindow(hwnd_content_, 0, top_h, w, content_h, TRUE);
+        if (hwnd_content_list_) MoveWindow(hwnd_content_list_, 10, 40, w - 20, content_h - 50, TRUE);
+    }
+
+    // Right dock layout (tab strip + panel roots).
+    const int PAD = 12;
+    const int TAB_H = 30;
+    int tab_x = PAD;
+    int tab_y = PAD;
+    int tab_w = panel_w - 2 * PAD;
+
+    int panel_x = PAD;
+    int panel_y = PAD + TAB_H + 8;
+    int panel_w_in = panel_w - 2 * PAD;
+    int panel_h_in = top_h - panel_y - PAD;
+    if (panel_h_in < 64) panel_h_in = 64;
+
+    if (hwnd_rdock_tab_) MoveWindow(hwnd_rdock_tab_, tab_x, tab_y, tab_w, TAB_H, TRUE);
+    if (hwnd_rdock_outliner_) MoveWindow(hwnd_rdock_outliner_, panel_x, panel_y, panel_w_in, panel_h_in, TRUE);
+    if (hwnd_rdock_details_)  MoveWindow(hwnd_rdock_details_,  panel_x, panel_y, panel_w_in, panel_h_in, TRUE);
+    if (hwnd_rdock_asset_)    MoveWindow(hwnd_rdock_asset_,    panel_x, panel_y, panel_w_in, panel_h_in, TRUE);
+    if (hwnd_rdock_voxel_)    MoveWindow(hwnd_rdock_voxel_,    panel_x, panel_y, panel_w_in, panel_h_in, TRUE);
+    if (hwnd_objlist_ && hwnd_rdock_outliner_) {
+        MoveWindow(hwnd_objlist_, 10, 10, panel_w_in - 20, panel_h_in - 20, TRUE);
+    }
+
+    // Asset panel (command + basic tools) layout.
+    if (hwnd_rdock_asset_) {
+        const int X = 10;
+        int y = 10;
+        const int ROW = 26;
+        const int GAP = 8;
+        const int W = panel_w_in - 20;
+
+        if (hwnd_input_) MoveWindow(hwnd_input_, X, y, W, ROW, TRUE);
+        y += ROW + GAP;
+        // Buttons row
+        if (hwnd_send_) MoveWindow(hwnd_send_, X, y, 80, ROW, TRUE);
+        if (hwnd_import_) MoveWindow(hwnd_import_, X + 88, y, 110, ROW, TRUE);
+        if (hwnd_bootstrap_) MoveWindow(hwnd_bootstrap_, X + 206, y, W - 206, ROW, TRUE);
+        y += ROW + GAP;
+
+        // Toggle rows (the labels are static windows without handles; they remain positioned from creation).
+        if (hwnd_toggle_play_) MoveWindow(hwnd_toggle_play_, X + 32, y, 86, 24, TRUE);
+        if (hwnd_toggle_ai_) MoveWindow(hwnd_toggle_ai_, X + 152, y, 86, 24, TRUE);
+        y += 26;
+        if (hwnd_toggle_learning_) MoveWindow(hwnd_toggle_learning_, X + 42, y, 86, 24, TRUE);
+        if (hwnd_toggle_crawling_) MoveWindow(hwnd_toggle_crawling_, X + 176, y, 86, 24, TRUE);
+        if (hwnd_vault_) MoveWindow(hwnd_vault_, X + W - 120, y, 56, 24, TRUE);
+        if (hwnd_ai_panel_) { /* separate window */ }
+        y += 28;
+        if (hwnd_ai_status_) MoveWindow(hwnd_ai_status_, X, y, W, 18, TRUE);
+    }
+
+    // Details panel: log/output fills remaining space below the fixed controls.
+    if (hwnd_output_ && hwnd_rdock_details_) {
+        const int out_x = 10;
+        const int out_y = details_controls_h_;
+        const int out_w = panel_w_in - 20;
+        int out_h = panel_h_in - out_y - 10;
+        if (out_h < 64) out_h = 64;
+        MoveWindow(hwnd_output_, out_x, out_y, out_w, out_h, TRUE);
+    }
+
+    // Content browser children already handled in their own WM_SIZE path.
 }
+
 
 int App::Run(HINSTANCE hInst) {
     // Win64 enforcement at runtime too (belt + suspenders)
@@ -2000,6 +2550,28 @@ int App::Run(HINSTANCE hInst) {
     CreateChildWindows();
 
     scene_ = new Scene();
+
+    // Populate content browser after substrate/runtime is live.
+    scene_->SubmitUiLine("/content_list part=all limit=200");
+
+    // Ensure AI learning/crawling boot OFF (UI + substrate).
+    ai_learning_enabled_ = false;
+    ai_crawling_enabled_ = false;
+    {
+        EwControlPacket cp{};
+        cp.source_u16 = 1;
+        cp.tick_u64 = 0;
+        cp.kind = EwControlPacketKind::AiSetLearning;
+        cp.payload.ai_set_learning.enabled_u8 = 0;
+        (void)ew_runtime_submit_control_packet(&scene_->sm, &cp);
+        cp.kind = EwControlPacketKind::AiSetCrawling;
+        cp.payload.ai_set_crawling.enabled_u8 = 0;
+        (void)ew_runtime_submit_control_packet(&scene_->sm, &cp);
+    }
+
+    // Create AI panel window (hidden by default).
+    CreateAiPanelWindow();
+
 
     // Headless visualization mode: keep simulation running but skip continuous presentation.
     visualize_enabled_ = !(env_truthy("GENESIS_HEADLESS") || env_truthy("HEADLESS"));
@@ -2077,6 +2649,138 @@ int App::Run(HINSTANCE hInst) {
 
 static inline float ew_clampf(float v, float lo, float hi) { return (v < lo) ? lo : (v > hi) ? hi : v; }
 
+static void ew_draw_toggle_switch(const DRAWITEMSTRUCT* dis, bool on) {
+    if (!dis) return;
+    ew_theme_init_once();
+    HDC hdc = dis->hDC;
+    RECT rc = dis->rcItem;
+
+    // Background
+    FillRect(hdc, &rc, g_brush_panel);
+
+    // Track
+    RECT tr = rc;
+    const int pad = 2;
+    tr.left += pad; tr.top += pad; tr.right -= pad; tr.bottom -= pad;
+    const int w = tr.right - tr.left;
+    const int h = tr.bottom - tr.top;
+    const int r = (h > 4) ? (h/2) : 2;
+
+    COLORREF track_col = on ? g_theme.gold : g_theme.edit_bg;
+    HBRUSH track = CreateSolidBrush(track_col);
+    HPEN pen = CreatePen(PS_SOLID, 1, g_theme.gold);
+    HGDIOBJ oldb = SelectObject(hdc, track);
+    HGDIOBJ oldp = SelectObject(hdc, pen);
+    RoundRect(hdc, tr.left, tr.top, tr.right, tr.bottom, r*2, r*2);
+    SelectObject(hdc, oldp);
+    SelectObject(hdc, oldb);
+    DeleteObject(pen);
+    DeleteObject(track);
+
+    // Knob
+    const int knob_d = h - 2;
+    RECT kb{};
+    kb.top = tr.top + 1;
+    kb.bottom = kb.top + knob_d;
+    if (on) {
+        kb.right = tr.right - 1;
+        kb.left = kb.right - knob_d;
+    } else {
+        kb.left = tr.left + 1;
+        kb.right = kb.left + knob_d;
+    }
+    HBRUSH knob = CreateSolidBrush(on ? g_theme.bg : g_theme.gold);
+    HGDIOBJ oldk = SelectObject(hdc, knob);
+    Ellipse(hdc, kb.left, kb.top, kb.right, kb.bottom);
+    SelectObject(hdc, oldk);
+    DeleteObject(knob);
+
+    // Focus rectangle
+    if (dis->itemState & ODS_FOCUS) {
+        DrawFocusRect(hdc, &rc);
+    }
+}
+
+static bool ew_clip_set_text_utf16(HWND owner, const std::wstring& text) {
+    if (!OpenClipboard(owner)) return false;
+    EmptyClipboard();
+    const size_t bytes = (text.size() + 1) * sizeof(wchar_t);
+    HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, bytes);
+    if (!h) { CloseClipboard(); return false; }
+    void* p = GlobalLock(h);
+    std::memcpy(p, text.c_str(), bytes);
+    GlobalUnlock(h);
+    SetClipboardData(CF_UNICODETEXT, h);
+    CloseClipboard();
+    return true;
+}
+
+static std::wstring ew_clip_get_text_utf16(HWND owner) {
+    std::wstring out;
+    if (!OpenClipboard(owner)) return out;
+    HANDLE h = GetClipboardData(CF_UNICODETEXT);
+    if (h) {
+        const wchar_t* p = (const wchar_t*)GlobalLock(h);
+        if (p) {
+            out = p;
+            GlobalUnlock(h);
+        }
+    }
+    CloseClipboard();
+    return out;
+}
+
+// Owner-drawn-ish TabControl styling via NM_CUSTOMDRAW.
+static LRESULT ew_tab_custom_draw(const NMHDR* nh, LRESULT* out_res) {
+    if (!nh || !out_res) return 0;
+    const NMCUSTOMDRAW* cd = (const NMCUSTOMDRAW*)nh;
+    ew_theme_init_once();
+    switch (cd->dwDrawStage) {
+        case CDDS_PREPAINT: {
+            *out_res = CDRF_NOTIFYITEMDRAW;
+            return 1;
+        }
+        case CDDS_ITEMPREPAINT: {
+            HWND htab = nh->hwndFrom;
+            const int i = (int)cd->dwItemSpec;
+            RECT rc{};
+            if (!TabCtrl_GetItemRect(htab, i, &rc)) { *out_res = CDRF_DODEFAULT; return 1; }
+            const int sel = TabCtrl_GetCurSel(htab);
+            const bool selected = (i == sel);
+            // Background
+            HBRUSH bg = CreateSolidBrush(selected ? RGB(32,32,32) : g_theme.panel);
+            FillRect(cd->hdc, &rc, bg);
+            DeleteObject(bg);
+            // Gold underline for selected tab
+            if (selected) {
+                HPEN pen = CreatePen(PS_SOLID, 2, g_theme.gold);
+                HGDIOBJ oldp = SelectObject(cd->hdc, pen);
+                MoveToEx(cd->hdc, rc.left + 6, rc.bottom - 2, nullptr);
+                LineTo(cd->hdc, rc.right - 6, rc.bottom - 2);
+                SelectObject(cd->hdc, oldp);
+                DeleteObject(pen);
+            }
+            // Text
+            wchar_t buf[128] = {0};
+            TCITEMW ti{}; ti.mask = TCIF_TEXT; ti.pszText = buf; ti.cchTextMax = 127;
+            TabCtrl_GetItem(htab, i, &ti);
+            SetBkMode(cd->hdc, TRANSPARENT);
+            SetTextColor(cd->hdc, selected ? g_theme.gold : g_theme.text);
+            HFONT f = selected ? g_font_ui_bold : g_font_ui;
+            HGDIOBJ oldf = nullptr;
+            if (f) oldf = SelectObject(cd->hdc, f);
+            RECT tr = rc; tr.left += 10; tr.right -= 10; tr.top += 6;
+            DrawTextW(cd->hdc, buf, -1, &tr, DT_SINGLELINE | DT_VCENTER | DT_LEFT);
+            if (oldf) SelectObject(cd->hdc, oldf);
+            *out_res = CDRF_SKIPDEFAULT;
+            return 1;
+        }
+        default: break;
+    }
+    *out_res = CDRF_DODEFAULT;
+    return 1;
+}
+
 void App::Tick() {
     static auto last = std::chrono::high_resolution_clock::now();
     static float acc = 0.0f;
@@ -2125,6 +2829,55 @@ void App::Tick() {
     }
     // If we fell behind, drop excess accumulated time deterministically.
     if (acc > tick_dt * (float)kMaxTicksPerFrame) acc = 0.0f;
+
+    // AI status line (deterministic telemetry from substrate).
+    if (hwnd_ai_status_ && scene_) {
+        const uint32_t st = scene_->sm.ai_state_u32;
+        const uint32_t stage = scene_->sm.learning_curriculum_stage_u32;
+        const char* stage_name = genesis::ew_curriculum_stage_name_ascii(stage);
+        const uint32_t stage_missing = scene_->sm.learning_stage_missing_count_u32;
+        const uint32_t stage_required = scene_->sm.learning_stage_required_count_u32;
+        const uint32_t lane_max = scene_->sm.learning_stage_lane_max_u32;
+        const uint32_t pend = scene_->sm.learning_gate.registry().pending_count_u32();
+        const uint32_t inflight = (uint32_t)scene_->sm.external_api_inflight.size();
+        const uint32_t pending = (uint32_t)scene_->sm.external_api_pending.size();
+        const uint32_t autoq = scene_->sm.learning_automation.bus().size_u32();
+        const uint64_t vault_exp = scene_->sm.vault_experiments_committed_u64;
+        const uint64_t vault_eph = scene_->sm.vault_experiments_ephemeral_u64;
+        const uint64_t vault_allow = scene_->sm.vault_allowlist_pages_u64;
+
+        const uint16_t coh = scene_->sm.global_coherence.global_q15;
+        const char* st_name = "IDLE";
+        if (st == 1u) st_name = "SPEECH_BOOT";
+        else if (st == 2u) st_name = "LEARNING";
+        else if (st == 3u) st_name = "EXPLORING";
+        else if (st == 4u) st_name = "SIM_SYNTH";
+        else if (st == 5u) st_name = "VALIDATING";
+        else if (st == 6u) st_name = "COMMIT";
+        const uint32_t play_u32 = scene_->sm.sim_world_play_u32;
+        const uint32_t ai_on_u32 = scene_->sm.ai_enabled_u32;
+        const uint32_t learn_on_u32 = scene_->sm.ai_learning_enabled_u32;
+        const uint32_t crawl_on_u32 = scene_->sm.ai_crawling_enabled_u32;
+
+        std::string s = std::string("Play=") + (play_u32 ? "ON" : "OFF") +
+                        " | AI=" + (ai_on_u32 ? "ON" : "OFF") +
+                        " | Learn=" + (learn_on_u32 ? "ON" : "OFF") +
+                        " | Crawl=" + (crawl_on_u32 ? "ON" : "OFF") +
+                        " | State=" + st_name +
+                        " | Stage=" + std::to_string(stage) +
+                        "(" + stage_name + ")" +
+                        " | Missing=" + std::to_string(stage_missing) + "/" + std::to_string(stage_required) +
+                        " | LaneMax=" + std::to_string(lane_max) +
+                        " | Coh_q15=" + std::to_string((uint32_t)coh) +
+                        " | PendingMetrics=" + std::to_string(pend) +
+                        " | AutoQ=" + std::to_string(autoq) +
+                        " | VaultExp=" + std::to_string((unsigned long long)vault_exp) +
+                        " | EphExp=" + std::to_string((unsigned long long)vault_eph) +
+                        " | AllowPages=" + std::to_string((unsigned long long)vault_allow) +
+                        " | ResPages=" + std::to_string((unsigned long long)scene_->sm.vault_resonant_pages_u64) +
+                        " | Net(inflight/pending)=" + std::to_string(inflight) + "/" + std::to_string(pending);
+        SetWindowTextW(hwnd_ai_status_, utf8_to_wide(s).c_str());
+    }
 
     // ------------------------------------------------------------------
     // Editor interaction polish (production-grade feel)
@@ -3670,6 +4423,45 @@ void App::AppendOutputUtf8(const std::string& line) {
     int len = GetWindowTextLengthW(hwnd_output_);
     SendMessageW(hwnd_output_, EM_SETSEL, (WPARAM)len, (LPARAM)len);
     SendMessageW(hwnd_output_, EM_REPLACESEL, FALSE, (LPARAM)wline.c_str());
+
+    // Content browser capture (deterministic): parse /content_list output.
+    if (line.rfind("CONTENT_LIST", 0) == 0) {
+        content_items_.clear();
+        if (hwnd_content_list_) ListView_DeleteAllItems(hwnd_content_list_);
+        return;
+    }
+    if (line.rfind("CONTENT_ITEM ", 0) == 0) {
+        auto find_tok = [&](const char* key) -> std::string {
+            const std::string k = std::string(key) + "=";
+            size_t p = line.find(k);
+            if (p == std::string::npos) return "";
+            p += k.size();
+            size_t e = line.find(' ', p);
+            if (e == std::string::npos) e = line.size();
+            return line.substr(p, e - p);
+        };
+        std::string rel = find_tok("rel");
+        std::string label = find_tok("label");
+        if (!rel.empty()) {
+            content_items_.push_back({rel, label});
+            bool show = true;
+            if (!content_search_utf8_.empty()) {
+                const std::string& q = content_search_utf8_;
+                if (rel.find(q) == std::string::npos && label.find(q) == std::string::npos) show = false;
+            }
+            if (show && hwnd_content_list_) {
+                LVITEMW it{};
+                it.mask = LVIF_TEXT;
+                it.iItem = ListView_GetItemCount(hwnd_content_list_);
+                std::wstring wrel = utf8_to_wide(rel);
+                it.pszText = (LPWSTR)wrel.c_str();
+                int row = ListView_InsertItem(hwnd_content_list_, &it);
+                std::wstring wlab = utf8_to_wide(label);
+                ListView_SetItemText(hwnd_content_list_, row, 1, (LPWSTR)wlab.c_str());
+            }
+        }
+        return;
+    }
 }
 
 LRESULT CALLBACK App::WndProcThunk(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
@@ -3684,6 +4476,50 @@ LRESULT CALLBACK App::WndProcThunk(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
 
 LRESULT App::WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     switch (msg) {
+        case WM_ERASEBKGND: {
+            ew_theme_init_once();
+            HDC hdc = (HDC)wparam;
+            RECT rc{}; GetClientRect(hwnd, &rc);
+            FillRect(hdc, &rc, g_brush_bg);
+            return 1;
+        }
+        case WM_CTLCOLORDLG: {
+            ew_theme_init_once();
+            HDC hdc = (HDC)wparam;
+            SetBkColor(hdc, g_theme.bg);
+            SetTextColor(hdc, g_theme.text);
+            return (INT_PTR)g_brush_bg;
+        }
+        case WM_CTLCOLORSTATIC: {
+            ew_theme_init_once();
+            HDC hdc = (HDC)wparam;
+            SetBkMode(hdc, TRANSPARENT);
+            SetTextColor(hdc, g_theme.text);
+            SetBkColor(hdc, g_theme.panel);
+            return (INT_PTR)g_brush_panel;
+        }
+        case WM_CTLCOLOREDIT: {
+            ew_theme_init_once();
+            HDC hdc = (HDC)wparam;
+            SetBkColor(hdc, g_theme.edit_bg);
+            SetTextColor(hdc, g_theme.text);
+            return (INT_PTR)g_brush_edit;
+        }
+        case WM_CTLCOLORLISTBOX: {
+            ew_theme_init_once();
+            HDC hdc = (HDC)wparam;
+            SetBkColor(hdc, g_theme.edit_bg);
+            SetTextColor(hdc, g_theme.text);
+            return (INT_PTR)g_brush_edit;
+        }
+        case WM_CTLCOLORBTN: {
+            ew_theme_init_once();
+            HDC hdc = (HDC)wparam;
+            SetBkColor(hdc, g_theme.panel);
+            SetTextColor(hdc, g_theme.text);
+            return (INT_PTR)g_brush_panel;
+        }
+
         case WM_SIZE: {
             RECT rc{}; GetClientRect(hwnd_main_, &rc);
             client_w_ = rc.right - rc.left;
@@ -3694,6 +4530,186 @@ LRESULT App::WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         case WM_COMMAND: {
             const int id = LOWORD(wparam);
             const int code = HIWORD(wparam);
+
+            // Menu actions (HIWORD==0).
+            if (code == 0) {
+                if (id == 9001) { PostQuitMessage(0); return 0; }
+                if (id == 9201) {
+                    content_visible_ = !content_visible_;
+                    if (hwnd_content_) ShowWindow(hwnd_content_, content_visible_ ? SW_SHOW : SW_HIDE);
+                    LayoutChildren(client_w_, client_h_);
+                    return 0;
+                }
+                if (id == 9202) { ToggleAiPanel(); return 0; }
+                if (id == 9301 && scene_) { scene_->SubmitUiLine("/content_reindex"); return 0; }
+                if (id == 9302 && scene_) { scene_->SubmitUiLine("/content_list part=all limit=200"); return 0; }
+                if (id == 9101 || id == 2090) {
+                    // Copy transform block (pos only for now) to clipboard.
+                    auto getw = [&](HWND h)->std::wstring { wchar_t b[128]; GetWindowTextW(h, b, 127); b[127]=0; return std::wstring(b); };
+                    std::wstring txt = L"pos " + getw(hwnd_posx_) + L" " + getw(hwnd_posy_) + L" " + getw(hwnd_posz_);
+                    (void)ew_clip_set_text_utf16(hwnd_main_, txt);
+                    return 0;
+                }
+                if (id == 9102 || id == 2091) {
+                    // Paste transform block (expects: 'pos x y z' or 'x y z').
+                    std::wstring txt = ew_clip_get_text_utf16(hwnd_main_);
+                    if (!txt.empty()) {
+                        // Simple parse.
+                        std::wstringstream ss(txt);
+                        std::wstring t0; ss >> t0;
+                        double x=0,y=0,z=0;
+                        if (t0 == L"pos" || t0 == L"Pos") { ss >> x >> y >> z; }
+                        else { try { x = std::stod(t0); } catch(...) { x = 0; } ss >> y >> z; }
+                        wchar_t b[64];
+                        swprintf(b, 64, L"%.6f", x); SetWindowTextW(hwnd_posx_, b);
+                        swprintf(b, 64, L"%.6f", y); SetWindowTextW(hwnd_posy_, b);
+                        swprintf(b, 64, L"%.6f", z); SetWindowTextW(hwnd_posz_, b);
+                    }
+                    return 0;
+                }
+            }
+
+            auto send_toggle = [&](EwControlPacketKind k, bool enabled) {
+                if (!scene_) return;
+                EwControlPacket cp{};
+                cp.kind = k;
+                cp.source_u16 = 1;
+                cp.tick_u64 = scene_->sm.canonical_tick;
+                if (k == EwControlPacketKind::SimSetPlay) cp.payload.sim_set_play.enabled_u8 = enabled ? 1u : 0u;
+                else if (k == EwControlPacketKind::AiSetEnabled) cp.payload.ai_set_enabled.enabled_u8 = enabled ? 1u : 0u;
+                else if (k == EwControlPacketKind::AiSetLearning) cp.payload.ai_set_learning.enabled_u8 = enabled ? 1u : 0u;
+                else if (k == EwControlPacketKind::AiSetCrawling) cp.payload.ai_set_crawling.enabled_u8 = enabled ? 1u : 0u;
+                (void)ew_runtime_submit_control_packet(&scene_->sm, &cp);
+            };
+
+            // AI/sim toggle switches.
+            if (code == BN_CLICKED) {
+                if (id == 2090) { SendMessageW(hwnd_main_, WM_COMMAND, MAKEWPARAM(9101,0), 0); return 0; }
+                if (id == 2091) { SendMessageW(hwnd_main_, WM_COMMAND, MAKEWPARAM(9102,0), 0); return 0; }
+
+                if (id == 2040) {
+                    sim_play_enabled_ = !sim_play_enabled_;
+                    send_toggle(EwControlPacketKind::SimSetPlay, sim_play_enabled_);
+                    InvalidateRect(hwnd_toggle_play_, nullptr, TRUE);
+                } else if (id == 2041) {
+                    ai_enabled_ = !ai_enabled_;
+                    // Turning AI off also disables learning/crawling at UI level.
+                    if (!ai_enabled_) { ai_learning_enabled_ = false; ai_crawling_enabled_ = false; }
+                    send_toggle(EwControlPacketKind::AiSetEnabled, ai_enabled_);
+                    send_toggle(EwControlPacketKind::AiSetLearning, ai_learning_enabled_);
+                    send_toggle(EwControlPacketKind::AiSetCrawling, ai_crawling_enabled_);
+                    InvalidateRect(hwnd_toggle_ai_, nullptr, TRUE);
+                    InvalidateRect(hwnd_toggle_learning_, nullptr, TRUE);
+                    InvalidateRect(hwnd_toggle_crawling_, nullptr, TRUE);
+                } else if (id == 2042) {
+                    ai_learning_enabled_ = !ai_learning_enabled_;
+                    if (ai_learning_enabled_) ai_enabled_ = true;
+                    send_toggle(EwControlPacketKind::AiSetEnabled, ai_enabled_);
+                    send_toggle(EwControlPacketKind::AiSetLearning, ai_learning_enabled_);
+                    InvalidateRect(hwnd_toggle_ai_, nullptr, TRUE);
+                    InvalidateRect(hwnd_toggle_learning_, nullptr, TRUE);
+                } else if (id == 2043) {
+                    ai_crawling_enabled_ = !ai_crawling_enabled_;
+                    if (ai_crawling_enabled_) ai_enabled_ = true;
+                    send_toggle(EwControlPacketKind::AiSetEnabled, ai_enabled_);
+                    send_toggle(EwControlPacketKind::AiSetCrawling, ai_crawling_enabled_);
+                    InvalidateRect(hwnd_toggle_ai_, nullptr, TRUE);
+                    InvalidateRect(hwnd_toggle_crawling_, nullptr, TRUE);
+                } else if (id == 4055) {
+                    // AI panel learning toggle
+                    ai_learning_enabled_ = !ai_learning_enabled_;
+                    if (ai_learning_enabled_) ai_enabled_ = true;
+                    send_toggle(EwControlPacketKind::AiSetEnabled, ai_enabled_);
+                    send_toggle(EwControlPacketKind::AiSetLearning, ai_learning_enabled_);
+                    if (hwnd_toggle_ai_) InvalidateRect(hwnd_toggle_ai_, nullptr, TRUE);
+                    if (hwnd_toggle_learning_) InvalidateRect(hwnd_toggle_learning_, nullptr, TRUE);
+                    if (hwnd_ai_toggle_learning_) InvalidateRect(hwnd_ai_toggle_learning_, nullptr, TRUE);
+                } else if (id == 4056) {
+                    // AI panel crawling toggle
+                    ai_crawling_enabled_ = !ai_crawling_enabled_;
+                    if (ai_crawling_enabled_) ai_enabled_ = true;
+                    send_toggle(EwControlPacketKind::AiSetEnabled, ai_enabled_);
+                    send_toggle(EwControlPacketKind::AiSetCrawling, ai_crawling_enabled_);
+                    if (hwnd_toggle_ai_) InvalidateRect(hwnd_toggle_ai_, nullptr, TRUE);
+                    if (hwnd_toggle_crawling_) InvalidateRect(hwnd_toggle_crawling_, nullptr, TRUE);
+                    if (hwnd_ai_toggle_crawling_) InvalidateRect(hwnd_ai_toggle_crawling_, nullptr, TRUE);
+                }
+            }
+
+            if (id == 2045 && code == BN_CLICKED) {
+                if (scene_) {
+                    scene_->SubmitUiLine("/vault_list cat=all limit=20");
+                    AppendOutputUtf8("VAULT: list requested");
+                }
+            }
+
+            if (id == 2046 && code == BN_CLICKED) {
+                ToggleAiPanel();
+            }
+
+            // Content browser refresh
+            if (id == 1012 && code == BN_CLICKED) {
+                if (scene_) scene_->SubmitUiLine("/content_list part=all limit=200");
+                return 0;
+            }
+
+            // Content search (simple substring filter; deterministic rebuild from cached list)
+            if (id == 1011 && code == EN_CHANGE) {
+                wchar_t buf[256];
+                GetWindowTextW(hwnd_content_search_, buf, 256);
+                content_search_utf8_ = wide_to_utf8(std::wstring(buf));
+                if (hwnd_content_list_) ListView_DeleteAllItems(hwnd_content_list_);
+                for (const auto& e : content_items_) {
+                    bool show = true;
+                    if (!content_search_utf8_.empty()) {
+                        const std::string& q = content_search_utf8_;
+                        if (e.rel_utf8.find(q) == std::string::npos && e.label_utf8.find(q) == std::string::npos) show = false;
+                    }
+                    if (!show) continue;
+                    LVITEMW it{};
+                    it.mask = LVIF_TEXT;
+                    it.iItem = ListView_GetItemCount(hwnd_content_list_);
+                    std::wstring wrel = utf8_to_wide(e.rel_utf8);
+                    it.pszText = (LPWSTR)wrel.c_str();
+                    int row = ListView_InsertItem(hwnd_content_list_, &it);
+                    std::wstring wlab = utf8_to_wide(e.label_utf8);
+                    ListView_SetItemText(hwnd_content_list_, row, 1, (LPWSTR)wlab.c_str());
+                }
+                return 0;
+            }
+
+            // AI panel bell: jump to Experiments + clear badge.
+            if (id == 4050 && code == BN_CLICKED) {
+                if (hwnd_ai_panel_ && IsWindowVisible(hwnd_ai_panel_)) {
+                    TabCtrl_SetCurSel(hwnd_ai_tab_, 1);
+                    ai_tab_index_u32_ = 1u;
+                    if (hwnd_ai_progress_overall_) ShowWindow(hwnd_ai_progress_overall_, SW_HIDE);
+                    if (hwnd_ai_domain_list_) ShowWindow(hwnd_ai_domain_list_, SW_HIDE);
+                    if (hwnd_ai_experiment_list_) ShowWindow(hwnd_ai_experiment_list_, SW_SHOW);
+                    MarkAiExperimentsSeen();
+                }
+            }
+
+            if (id == 4054 && code == LBN_DBLCLK) {
+                // Open selected experiment file and mark as seen.
+                int sel = (int)SendMessageW(hwnd_ai_experiment_list_, LB_GETCURSEL, 0, 0);
+                if (sel != LB_ERR) {
+                    wchar_t item[512]; item[0] = 0;
+                    SendMessageW(hwnd_ai_experiment_list_, LB_GETTEXT, (WPARAM)sel, (LPARAM)item);
+                    std::wstring fname(item);
+                    std::wstring full;
+                    if (fname.rfind(L"(fail) ", 0) == 0) {
+                        fname = fname.substr(7);
+                        full = L"Draft Container\\AssetSubstrate\\AI\\experiments\\metrics_failures\" + fname;
+                    } else {
+                        full = L"Draft Container\\AssetSubstrate\\AI\\experiments\\metrics\" + fname;
+                    }
+                    // Let Windows pick the default handler (usually opens in the editor).
+                    ShellExecuteW(hwnd, L"open", full.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                }
+                MarkAiExperimentsSeen();
+            }
+
             if (id == 2002 && code == BN_CLICKED) { OnSend(); }
             if (id == 2003 && code == BN_CLICKED) { OnImportObj(); }
             if (id == 2006 && code == BN_CLICKED) { OnBootstrapGame(); }
@@ -3779,6 +4795,58 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); AppendOutputUtf8("EDIT
                     SetWindowTextW(hwnd_posz_, fmt(o.pos_q16_16[2]).c_str());
                 }
             }
+        } break;
+        case WM_NOTIFY: {
+            const NMHDR* nh = (const NMHDR*)lparam;
+            if (nh && nh->code == NM_CUSTOMDRAW) {
+                LRESULT res = 0;
+                if (nh->hwndFrom == hwnd_rdock_tab_ || nh->hwndFrom == hwnd_ai_tab_) {
+                    if (ew_tab_custom_draw(nh, &res)) return res;
+                }
+            }
+            if (nh && hwnd_rdock_tab_ && nh->hwndFrom == hwnd_rdock_tab_ && nh->code == TCN_SELCHANGE) {
+                const int sel = TabCtrl_GetCurSel(hwnd_rdock_tab_);
+                if (sel >= 0) {
+                    rdock_tab_index_u32_ = (uint32_t)sel;
+                    if (hwnd_rdock_outliner_) ShowWindow(hwnd_rdock_outliner_, (sel == 0) ? SW_SHOW : SW_HIDE);
+                    if (hwnd_rdock_details_)  ShowWindow(hwnd_rdock_details_,  (sel == 1) ? SW_SHOW : SW_HIDE);
+                    if (hwnd_rdock_asset_)    ShowWindow(hwnd_rdock_asset_,    (sel == 2) ? SW_SHOW : SW_HIDE);
+                    if (hwnd_rdock_voxel_)    ShowWindow(hwnd_rdock_voxel_,    (sel == 3) ? SW_SHOW : SW_HIDE);
+                    LayoutChildren(client_w_, client_h_);
+                }
+                return 0;
+            }
+            if (nh && hwnd_ai_tab_ && nh->hwndFrom == hwnd_ai_tab_ && nh->code == TCN_SELCHANGE) {
+                const int sel = TabCtrl_GetCurSel(hwnd_ai_tab_);
+                if (sel >= 0) {
+                    ai_tab_index_u32_ = (uint32_t)sel;
+                    if (sel == 0) {
+                        if (hwnd_ai_experiment_list_) ShowWindow(hwnd_ai_experiment_list_, SW_HIDE);
+                        if (hwnd_ai_progress_overall_) ShowWindow(hwnd_ai_progress_overall_, SW_SHOW);
+                        if (hwnd_ai_domain_list_) ShowWindow(hwnd_ai_domain_list_, SW_SHOW);
+                        RefreshAiDomainProgressList();
+                    } else {
+                        if (hwnd_ai_progress_overall_) ShowWindow(hwnd_ai_progress_overall_, SW_HIDE);
+                        if (hwnd_ai_domain_list_) ShowWindow(hwnd_ai_domain_list_, SW_HIDE);
+                        if (hwnd_ai_experiment_list_) ShowWindow(hwnd_ai_experiment_list_, SW_SHOW);
+                        RefreshAiExperimentList();
+                        MarkAiExperimentsSeen();
+                    }
+                }
+                return 0;
+            }
+        } break;
+        case WM_DRAWITEM: {
+            const DRAWITEMSTRUCT* dis = (const DRAWITEMSTRUCT*)lparam;
+            if (!dis) break;
+            const int id = (int)dis->CtlID;
+            if (id == 2040) { ew_draw_toggle_switch(dis, sim_play_enabled_); return TRUE; }
+            if (id == 2041) { ew_draw_toggle_switch(dis, ai_enabled_); return TRUE; }
+            if (id == 2042) { ew_draw_toggle_switch(dis, ai_learning_enabled_); return TRUE; }
+            if (id == 2043) { ew_draw_toggle_switch(dis, ai_crawling_enabled_); return TRUE; }
+            if (id == 4050) { ew_draw_bell_badge(dis, ai_unseen_experiments_u32_); return TRUE; }
+            if (id == 4055) { ew_draw_toggle_switch(dis, ai_learning_enabled_); return TRUE; }
+            if (id == 4056) { ew_draw_toggle_switch(dis, ai_crawling_enabled_); return TRUE; }
         } break;
         case WM_KEYDOWN:
         case WM_SYSKEYDOWN: {

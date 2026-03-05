@@ -35,7 +35,7 @@ int main(int argc, char** argv) {
     (void)ew::ew_cli_get_u32(args, "anchors", anchors);
     (void)ew::ew_cli_get_u64(args, "seed", seed);
 
-    SubstrateManager sm(anchors);
+    SubstrateMicroprocessor sm(anchors);
     sm.set_projection_seed(seed);
 
     // Ingest stdin lines as substrate observations.
@@ -59,7 +59,7 @@ int main(int argc, char** argv) {
               << "\n";
 
     std::vector<EwAiActionEvent> events;
-    events.resize(SubstrateManager::AI_ACTION_LOG_CAP);
+    events.resize(SubstrateMicroprocessor::AI_ACTION_LOG_CAP);
     const uint32_t n = sm.ai_get_action_log(events.data(), (uint32_t)events.size());
     std::cout << "AI_ACTION_LOG count=" << n << "\n";
     for (uint32_t i = 0; i < n; ++i) {

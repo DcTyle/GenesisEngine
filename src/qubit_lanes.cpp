@@ -14,12 +14,6 @@ static inline int64_t q32_32_mul_local(int64_t a_q32_32, int64_t b_q32_32) {
     return (int64_t)(p >> 32);
 }
 
-static inline uint32_t clamp_u32(uint32_t x, uint32_t lo, uint32_t hi) {
-    if (x < lo) return lo;
-    if (x > hi) return hi;
-    return x;
-}
-
 uint32_t ew_compute_lane_count(const std::vector<Pulse>& inbound, const EwLanePolicy& pol) {
     uint64_t amp_sum = 0;
     uint8_t max_profile = 0;

@@ -5,11 +5,11 @@
 class SubstrateManager;
 
 // Deterministic 9D state fingerprint harness.
-// This is NOT a security hash; it is a reproducibility fingerprint used to
-// detect determinism regressions.
+// This is NOT a security mechanism; it is a reproducibility fingerprint used
+// to detect determinism regressions.
 
 // Compute a 64-bit fingerprint from CPU-visible authoritative state.
-// The goal is high sensitivity to divergence, not cryptographic strength.
+// The goal is high sensitivity to divergence.
 uint64_t ge_compute_state_fingerprint_9d(const SubstrateManager* sm);
 
 // Optional: load a reference fingerprint trace from a text file.

@@ -41,4 +41,10 @@ struct GE_CoherenceGraphStore {
 
     // Retrieve neighbor list indices for a node. Returns false if not found.
     bool get_edges(const EigenWare::EwId9& node_id9, std::vector<GE_CoherenceEdge>& out) const;
+
+    // Deterministic compaction pass used by training:
+    //  - stable-sort nodes and edges
+    //  - dedupe edges per node by neighbor_id9, keeping max |weight|
+    //  - enforce bounded degree by keeping highest |weight| edges
+    void sort_and_compact(uint32_t degree_cap_u32);
 };

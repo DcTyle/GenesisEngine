@@ -95,10 +95,17 @@ bool GE_CorpusPulseLog::load_from_file(const std::string& path_utf8) {
         ok = ok && ge_read_u32(f,&r.offset_u32);
         ok = ok && ge_read_u32(f,&r.size_u32);
 
-        ok = ok && ge_read_u32(f,&r.sc4.f_code);
-        ok = ok && ge_read_u32(f,&r.sc4.a_code);
-        ok = ok && ge_read_u32(f,&r.sc4.v_code);
-        ok = ok && ge_read_u32(f,&r.sc4.i_code);
+        {
+            uint32_t tmp = 0;
+            ok = ok && ge_read_u32(f, &tmp);
+            r.sc4.f_code = (int32_t)tmp;
+            ok = ok && ge_read_u32(f, &tmp);
+            r.sc4.a_code = (uint16_t)tmp;
+            ok = ok && ge_read_u32(f, &tmp);
+            r.sc4.v_code = (uint16_t)tmp;
+            ok = ok && ge_read_u32(f, &tmp);
+            r.sc4.i_code = (uint16_t)tmp;
+        }
 
         ok = ok && ge_read_i64(f,&r.carrier.f_carrier_turns_q32_32);
         ok = ok && ge_read_i64(f,&r.carrier.A_carrier_q32_32);
@@ -175,7 +182,10 @@ bool GE_pulse_record_verify_against_payload(const GE_CorpusPulseRecord& rec,
         return false;
     }
 
-    if (!(sc4 == rec.sc4)) {
+    if (!(sc4.f_code == rec.sc4.f_code &&
+          sc4.a_code == rec.sc4.a_code &&
+          sc4.v_code == rec.sc4.v_code &&
+          sc4.i_code == rec.sc4.i_code)) {
         if (opt_err_utf8) *opt_err_utf8 = "sc4_mismatch";
         return false;
     }

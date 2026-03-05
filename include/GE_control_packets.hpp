@@ -25,6 +25,15 @@ enum class EwControlPacketKind : uint16_t {
     EditorCommitTransformTxn = 55,
     EditorUndo = 56,
     EditorRedo = 57,
+
+    // ------------------------------------------------------------
+    // AI + simulation runtime toggles (UI switch surfaces)
+    // ------------------------------------------------------------
+    SimSetPlay = 60,
+    AiSetEnabled = 61,
+    AiSetLearning = 62,
+    AiSetCrawling = 63,
+    AiConfigSet = 64,
 };
 
 struct EwControlPacket {
@@ -113,6 +122,32 @@ struct {
 struct {
     uint32_t pad_u32;
 } editor_redo;
+
+        struct {
+            uint8_t enabled_u8; // 0 off, 1 on
+            uint8_t pad_u8[7];
+        } sim_set_play;
+
+        struct {
+            uint8_t enabled_u8; // 0 off, 1 on
+            uint8_t pad_u8[7];
+        } ai_set_enabled;
+
+        struct {
+            uint8_t enabled_u8; // 0 off, 1 on
+            uint8_t pad_u8[7];
+        } ai_set_learning;
+
+        struct {
+            uint8_t enabled_u8; // 0 off, 1 on
+            uint8_t pad_u8[7];
+        } ai_set_crawling;
+
+        struct {
+            uint32_t field_u32;
+            uint32_t pad_u32;
+            int64_t value_s64;
+        } ai_config_set;
 
         struct {
             uint32_t tab_u32;

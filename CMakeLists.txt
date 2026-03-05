@@ -71,6 +71,10 @@ add_library(EigenWareCore
     src/GE_fourier_fanout.cpp
     src/GE_nbody.cpp
     src/GE_metric_registry.cpp
+    src/GE_metric_claim.cpp
+    src/GE_metric_templates.cpp
+
+    src/GE_ai_vault.cpp
     src/GE_language_foundation.cpp
     src/GE_audio_wav.cpp
     src/GE_audio_features.cpp
@@ -88,9 +92,11 @@ add_library(EigenWareCore
     src/GE_domain_policy.cpp
     src/GE_rate_limiter.cpp
     src/GE_live_crawler.cpp
+    src/GE_repo_reader.cpp
     src/GE_curriculum_manager.cpp
     src/GE_learning_checkpoint_gate.cpp
     src/GE_learning_automation.cpp
+    src/GE_ai_regression_tests.cpp
     src/code_artifact_ops.cpp
     src/inspector_fields.cpp
     src/anchor_pack.cpp
@@ -432,5 +438,10 @@ add_executable(ge_regression_suite
     src/tools/ge_regression_suite_main.cpp
 )
 target_link_libraries(ge_regression_suite PRIVATE EigenWareCore)
+
+add_executable(ge_ai_determinism_test
+    src/tools/ge_ai_determinism_test_main.cpp
+)
+target_link_libraries(ge_ai_determinism_test PRIVATE EigenWareCore)
 # txn file
 list(APPEND genesis_engine_src src/ew_txn_file.cpp)

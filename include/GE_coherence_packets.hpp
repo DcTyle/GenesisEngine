@@ -14,6 +14,8 @@ enum class EwCoherenceSuggestedAction : uint8_t {
     FreezeTick = 5,
     AdjustLearning = 6,
     OperatorReplace = 7,
+    StartCalibration = 8,
+    EmitActuationOp = 9,
 };
 
 enum class EwCoherenceHookOp : uint8_t {
@@ -25,6 +27,8 @@ enum class EwCoherenceHookOp : uint8_t {
     HookFreezeTick = 5,
     HookAdjustLearning = 6,
     HookOperatorReplace = 7,
+    HookStartCalibration = 8,
+    HookEmitActuationOp = 9,
 };
 
 struct EwLeakagePublishPacket {

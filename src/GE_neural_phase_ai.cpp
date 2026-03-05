@@ -4,6 +4,8 @@
 #include "GE_runtime.hpp"
 #include "fixed_point.hpp"
 #include <climits>
+#include <ostream>
+#include <istream>
 
 EwNeuralPhaseAI::EwNeuralPhaseAI() : seed_u64_(1) {
     status_.tick_u64 = 0;
@@ -25,6 +27,48 @@ void EwNeuralPhaseAI::init(uint64_t projection_seed) {
     last_strength_q32_32_ = 0;
 }
 
+bool EwNeuralPhaseAI::serialize_binary(std::ostream& out) const {
+    if (!out.good()) return false;
+    const uint32_t magic = 0x4E504149u; // 'NPAI'
+    const uint32_t ver = 1u;
+    out.write(reinterpret_cast<const char*>(&magic), sizeof(magic));
+    out.write(reinterpret_cast<const char*>(&ver), sizeof(ver));
+    out.write(reinterpret_cast<const char*>(&seed_u64_), sizeof(seed_u64_));
+    out.write(reinterpret_cast<const char*>(&status_), sizeof(status_));
+    out.write(reinterpret_cast<const char*>(&last_strength_q32_32_), sizeof(last_strength_q32_32_));
+
+    uint32_t n = (uint32_t)mem_.size();
+    if (n > 4096u) n = 4096u;
+    out.write(reinterpret_cast<const char*>(&n), sizeof(n));
+    for (uint32_t i = 0; i < n; ++i) {
+        out.write(reinterpret_cast<const char*>(&mem_[i]), sizeof(EwAttractorEntry));
+    }
+    return out.good();
+}
+
+bool EwNeuralPhaseAI::deserialize_binary(std::istream& in) {
+    if (!in.good()) return false;
+    uint32_t magic = 0, ver = 0;
+    in.read(reinterpret_cast<char*>(&magic), sizeof(magic));
+    in.read(reinterpret_cast<char*>(&ver), sizeof(ver));
+    if (!in.good() || magic != 0x4E504149u || ver != 1u) return false;
+
+    in.read(reinterpret_cast<char*>(&seed_u64_), sizeof(seed_u64_));
+    in.read(reinterpret_cast<char*>(&status_), sizeof(status_));
+    in.read(reinterpret_cast<char*>(&last_strength_q32_32_), sizeof(last_strength_q32_32_));
+
+    uint32_t n = 0;
+    in.read(reinterpret_cast<char*>(&n), sizeof(n));
+    if (!in.good() || n > 4096u) return false;
+    mem_.clear();
+    mem_.resize(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        in.read(reinterpret_cast<char*>(&mem_[i]), sizeof(EwAttractorEntry));
+        if (!in.good()) return false;
+    }
+    return true;
+}
+
 int64_t EwNeuralPhaseAI::attractor_strength_for_sig9(uint64_t sig9_u64) const {
     for (size_t i = 0; i < mem_.size(); ++i) {
         if (mem_[i].sig9_u64 == sig9_u64) return mem_[i].strength_q32_32;
@@ -38,7 +82,7 @@ uint64_t EwNeuralPhaseAI::sig9_fold(uint64_t acc, uint64_t x) {
     return acc;
 }
 
-uint64_t EwNeuralPhaseAI::sig9_from_state(const SubstrateManager* sm) {
+uint64_t EwNeuralPhaseAI::sig9_from_state(const SubstrateMicroprocessor* sm) {
     uint64_t acc = 0;
     acc = sig9_fold(acc, sm->canonical_tick);
     acc = sig9_fold(acc, (uint64_t)sm->anchors.size());
@@ -86,7 +130,7 @@ uint32_t EwNeuralPhaseAI::class_id_from_sig9(uint64_t sig9_u64) {
     return (uint32_t)((sig9_u64 >> 40) & 0xFFULL);
 }
 
-int64_t EwNeuralPhaseAI::confidence_from_state(const SubstrateManager* sm) {
+int64_t EwNeuralPhaseAI::confidence_from_state(const SubstrateMicroprocessor* sm) {
     if (sm->anchors.empty()) return (1LL << 31);
 
     int64_t sum_chi = 0;
@@ -119,7 +163,7 @@ int64_t EwNeuralPhaseAI::confidence_from_state(const SubstrateManager* sm) {
     return mul_q32_32(chi_q32_32, pen_q32_32);
 }
 
-void EwNeuralPhaseAI::pre_tick(SubstrateManager* sm) {
+void EwNeuralPhaseAI::pre_tick(SubstrateMicroprocessor* sm) {
     if (!sm) return;
 
     // ---------------------------------------------------------------------
@@ -313,7 +357,7 @@ void EwNeuralPhaseAI::pre_tick(SubstrateManager* sm) {
     sm->ai_log_event(evp);
 }
 
-void EwNeuralPhaseAI::post_tick(SubstrateManager* sm) {
+void EwNeuralPhaseAI::post_tick(SubstrateMicroprocessor* sm) {
     if (!sm) return;
 
     status_.tick_u64 = sm->canonical_tick;

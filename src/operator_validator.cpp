@@ -115,10 +115,10 @@ EwOperatorValidationReport validate_operators_and_microprocessor() {
     }
 
     // -----------------------------------------------------------------
-    // Microprocessor actuation path: SubstrateManager tick
+    // Microprocessor actuation path: SubstrateMicroprocessor tick
     // -----------------------------------------------------------------
     {
-        SubstrateManager sim(16);
+        SubstrateMicroprocessor sim(16);
         sim.projection_seed = 17;
         sim.configure_cosmic_expansion(1, 1);
         sim.inject_text_utf8("microprocessor");
@@ -223,7 +223,7 @@ ctx.envelope_headroom_q32_32 = (1LL << 32);
     // Operator packet payload enforcement (byte-for-byte)
     // -----------------------------------------------------------------
     {
-        SubstrateManager sim(16);
+        SubstrateMicroprocessor sim(16);
         sim.projection_seed = 17;
         sim.configure_cosmic_expansion(1, 1);
         sim.inject_text_utf8("packet");

@@ -91,6 +91,21 @@ struct EwSpectralFieldAnchorState {
     EwIntentSummary intent_summary;
     EwMeasuredSummary measured_summary;
     EwResidualSummary temporal_residual;
+    EwPulseMeasuredSummary pulse_measured;
+    // Optional GPU-written sidecar for pulse-measured lane (future).
+    EwPulseMeasuredSummary pulse_measured_gpu_sidecar;
+    uint8_t pulse_measured_gpu_valid_u8 = 0;
+    uint8_t pad_pulse_measured0_u8 = 0;
+    uint16_t pad_pulse_measured1_u16 = 0;
+    // Pulse intent sidecar (control-plane) + bounded history window.
+    EwPulseIntentSummary pulse_intent;
+    EwPulseIntentSummary pulse_intent_ring[EW_PULSE_INTENT_RING_W];
+    uint32_t pulse_intent_ring_head_u32 = 0;
+    uint32_t pulse_intent_ring_count_u32 = 0;
+    // Bounded history window for pulse-measured summaries.
+    EwPulseMeasuredSummary pulse_measured_ring[EW_PULSE_MEASURED_RING_W];
+    uint32_t pulse_measured_ring_head_u32 = 0;
+    uint32_t pulse_measured_ring_count_u32 = 0;
 
     // Bounded trajectory/actuation slots (overwrite per tick).
     EwActuationPacket actuation_slots[EW_SPECTRAL_TRAJ_SLOTS];

@@ -15754,7 +15754,7 @@ Bundle generation: 2026-02-11T04:19:55Z
 
 This appendix replaces the prior bring-up stubs with a complete, copy/paste C++/CUDA implementation that runs headless on a single machine. It preserves the membrane rule (only dict-map artifacts cross the API boundary) and keeps the 9D manifold implicit (never exported).
 
-The implementation chooses the simplest "runs today" path: CUDA Runtime API linking (no PTX loader required for bring-up). The kernel entrypoints remain explicit and stable so you can swap to PTX loading later without changing the SubstrateManager API.
+The implementation chooses the simplest "runs today" path: CUDA Runtime API linking (no PTX loader required for bring-up). The kernel entrypoints remain explicit and stable so you can swap to PTX loading later without changing the SubstrateMicroprocessor API.
 
 ---
 
@@ -16650,7 +16650,7 @@ void nvml_unload(NvmlApi& api);
   - basis[24] delta_time_tensor_q63  = 0 => default q63_one/256; SHALL be calibrated at boot from measurement granularity and then frozen
 
 Boot calibration (authoritative source for delta_time_tensor_q63):
-- SubstrateManager SHALL calibrate delta_time_tensor_q63 ONCE at boot before copying AnchorDef bank to device memory.
+- SubstrateMicroprocessor SHALL calibrate delta_time_tensor_q63 ONCE at boot before copying AnchorDef bank to device memory.
 - Calibration reads only measurable envelope counts (no map exposure). The reference provider is NVML power telemetry (counts = mW).
 - Define an idle baseline to avoid baking driver- or board-specific offsets into the spacing:
   - Collect N_idle = 64 samples of power_mw with sleep_ms = 10 between samples.
@@ -17855,7 +17855,7 @@ PulsePacketV1 encode_text_to_pulse(
     p.amplitude_q63 = (q63_t)amp_u64;
 
     // Canonical: symbols -> 9D phase coordinates -> distributed superposition contributions.
-    // The semantic basis lives in the anchor constraint field (installed at SubstrateManager boot).
+    // The semantic basis lives in the anchor constraint field (installed at SubstrateMicroprocessor boot).
     uint64_t phase_u64 = 0ULL;
     uint64_t mix_u64 = decode_fabric_cf.rom_seed_u64[0] ^ seq_u64;
 
@@ -17961,7 +17961,7 @@ This section pins down exactly what we "extrapolate from the GPU," how text beco
 
 
 Boot calibration (authoritative source for delta_time_tensor_q63):
-- SubstrateManager SHALL calibrate delta_time_tensor_q63 ONCE at boot before copying AnchorDef bank to device memory.
+- SubstrateMicroprocessor SHALL calibrate delta_time_tensor_q63 ONCE at boot before copying AnchorDef bank to device memory.
 - Calibration reads only measurable envelope counts (no map exposure). The reference provider is NVML power telemetry (counts = mW).
 - Define an idle baseline to avoid baking driver- or board-specific offsets into the spacing:
 ```
@@ -18123,18 +18123,18 @@ static inline uint64_t ew_pack_cmb_seed_u64() {
     return (p & 0xffffULL) | ((a & 0xffffULL) << 16) | ((lo & 0xffffULL) << 32) | ((la & 0xffffULL) << 48);
 }
 
-SubstrateManager::SubstrateManager() = default;
+SubstrateMicroprocessor::SubstrateMicroprocessor() = default;
 
-SubstrateManager::~SubstrateManager() {
+SubstrateMicroprocessor::~SubstrateMicroprocessor() {
     free_device_();
 }
 
-const AnchorConstraintFieldV1& SubstrateManager::ingress_decode_fabric() const {
+const AnchorConstraintFieldV1& SubstrateMicroprocessor::ingress_decode_fabric() const {
     // Use anchor 0 as the ingress decode fabric.
     return anchors_def_h_.at(0).cf;
 }
 
-bool SubstrateManager::allocate_device_() {
+bool SubstrateMicroprocessor::allocate_device_() {
     if (anchor_count_u32_ == 0u) {
         return false;
     }
@@ -18152,7 +18152,7 @@ bool SubstrateManager::allocate_device_() {
     return true;
 }
 
-void SubstrateManager::free_device_() {
+void SubstrateMicroprocessor::free_device_() {
     if (anchors_def_d_) { cudaFree(anchors_def_d_); anchors_def_d_ = nullptr; }
     if (anchors_rt_d_) { cudaFree(anchors_rt_d_); anchors_rt_d_ = nullptr; }
     if (pulse_d_) { cudaFree(pulse_d_); pulse_d_ = nullptr; }
@@ -18161,7 +18161,7 @@ void SubstrateManager::free_device_() {
     if (artifacts_d_) { cudaFree(artifacts_d_); artifacts_d_ = nullptr; }
 }
 
-bool SubstrateManager::boot(const DeviceInfo& dev_info, uint32_t anchor_count_u32) {
+bool SubstrateMicroprocessor::boot(const DeviceInfo& dev_info, uint32_t anchor_count_u32) {
     (void)dev_info;
     free_device_();
 
@@ -18318,7 +18318,7 @@ bool SubstrateManager::boot(const DeviceInfo& dev_info, uint32_t anchor_count_u3
     return true;
 }
 
-bool SubstrateManager::tick(const PulsePacketV1& pulse) {
+bool SubstrateMicroprocessor::tick(const PulsePacketV1& pulse) {
     if (!anchors_def_d_ || !anchors_rt_d_ || !pulse_d_ || !reservoir_mass_q63_d_ || !radiation_mass_q63_d_ || !artifacts_d_) {
         return false;
     }
@@ -18472,10 +18472,10 @@ Bundle generation: 2026-02-11T04:19:55Z
 
 namespace ew {
 
-class SubstrateManager {
+class SubstrateMicroprocessor {
 public:
-    SubstrateManager();
-    ~SubstrateManager();
+    SubstrateMicroprocessor();
+    ~SubstrateMicroprocessor();
 
     // Bring-up: builds the anchor bank and allocates device buffers.
     bool boot(const DeviceInfo& dev_info, uint32_t anchor_count_u32);
@@ -19728,7 +19728,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    ew::SubstrateManager substrate;
+    ew::SubstrateMicroprocessor substrate;
     const uint32_t anchor_count_u32 = 256u; // byte-domain anchor bank
     if (!substrate.boot(dev, anchor_count_u32)) {
         fprintf(stderr, "Substrate boot failed\n");

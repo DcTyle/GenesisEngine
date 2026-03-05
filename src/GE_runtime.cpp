@@ -1,5 +1,7 @@
 #include "GE_runtime.hpp"
+#include "ew_eq_exec.h"
 #include "ew_kv_params.hpp"
+#include "ew_txn_file.hpp"
 
 #include "GE_experiment_templates.hpp"
 #include "GE_operator_registry.hpp"
@@ -27,6 +29,9 @@
 #include "GE_object_ancilla.hpp"
 #include "GE_planet_ancilla.hpp"
 #include "GE_pulse_trajectory_bound.hpp"
+#include "ew_actuation_op_pack.hpp"
+
+#include "GE_ai_regression_tests.hpp"
 
 #include "GE_fourier_fanout.hpp"
 
@@ -707,6 +712,9 @@ for (size_t i = 0; i < count; ++i) anchors.emplace_back((uint32_t)i);
     // Initialize deterministic AI policy table.
     ai_policy.init(projection_seed);
 
+    // Initialize canonical N-body integrator state.
+    genesis::ew_nbody_init_default(&nbody);
+
     // Load project settings (fail closed to defaults if missing, but report).
     {
         std::string err;
@@ -726,6 +734,17 @@ for (size_t i = 0; i < count; ++i) anchors.emplace_back((uint32_t)i);
         } else {
             emit_ui_line(std::string("INPUT_BINDINGS_LOADED ") + project_settings.input.bindings_path_utf8);
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Asset substrate init (project content library + AI vault mirrors)
+    // ------------------------------------------------------------------
+    {
+        std::string aerr;
+        const std::string root = "Draft Container/AssetSubstrate";
+        const std::string cache = "Draft Container/AssetSubstrate/_GlobalCache";
+        const bool ok = asset_substrate.init(root, cache, "content_index.gecontent", &aerr);
+        emit_ui_line(ok ? "ASSET_SUBSTRATE_INIT_OK" : (std::string("ASSET_SUBSTRATE_INIT_FAIL ") + aerr));
     }
 
     // Ensure camera anchor exists and is initialized from project settings.
@@ -814,6 +833,30 @@ for (size_t i = 0; i < count; ++i) anchors.emplace_back((uint32_t)i);
         anchors[id].collision_env_state.clear_for_tick(0);
     }
 
+
+
+    // ------------------------------------------------------------------
+    // AI config anchor (deterministic gates + budgets)
+    // ------------------------------------------------------------------
+    {
+        const uint64_t kAiCfgObjectId = 0x315F4746434941ULL; // 'AICFG_1' tag-ish
+        const uint32_t id = alloc_anchor_id();
+        ai_config_anchor_id_u32 = id;
+        anchors[id].kind_u32 = EW_ANCHOR_KIND_AI_CONFIG;
+        anchors[id].object_id_u64 = kAiCfgObjectId;
+        // Initialize canonical defaults.
+        EwAiConfigAnchorState& cfg = anchors[id].ai_config_state;
+        cfg.resonance_gate_q15 = 31457u; // ~0.96
+        cfg.metric_tol_num_u32 = 6u;
+        cfg.metric_tol_den_u32 = 100u;
+        cfg.max_metric_tasks_per_tick_u32 = 2u;
+        cfg.ephemeral_ttl_ticks_u64 = 21600ull;
+        cfg.ephemeral_gc_stride_ticks_u32 = 360u;
+        cfg.max_ephemeral_count_u32 = 256u;
+        // Budgets mirror current substrate ingest/crawler defaults.
+        cfg.crawl_budget_bytes_per_tick_u32 = ingest_max_bytes_per_tick_u32;
+        cfg.crawler_max_pulses_per_tick_u32 = crawler_max_pulses_per_tick_u32;
+    }
     // AnchorPack boot: embed selected process artifacts as carrier-encoded
     // anchors for substrate-native microprocessing.
     // ------------------------------------------------------------------
@@ -856,59 +899,29 @@ for (size_t i = 0; i < count; ++i) anchors.emplace_back((uint32_t)i);
 
     // ------------------------------------------------------------------
     // Curriculum stage required checkpoint masks (deterministic checklist).
-    // These masks gate crawler lane admission and stage advancement.
+    // These masks gate crawler heuristics (topic masks) and stage advancement (exact masks).
     // ------------------------------------------------------------------
-    auto kind_bit = [] (genesis::MetricKind k) -> uint64_t {
-        const uint32_t id = (uint32_t)k;
-        const uint32_t b = id & 63u;
-        return 1ULL << b;
-    };
-    for (uint32_t i = 0; i < GENESIS_CURRICULUM_STAGE_COUNT; ++i) {
+    for (uint32_t i = 0; i < genesis::GENESIS_CURRICULUM_STAGE_COUNT; ++i) {
         learning_stage_required_mask_u64[i] = 0ULL;
-        learning_stage_completed_mask_u64[i] = 0ULL;    }
-    // Stage 0: Language + Math foundations (parallel)
-    learning_stage_required_mask_u64[0] =
-        kind_bit(genesis::MetricKind::Lang_Dictionary_LexiconStats) |
-        kind_bit(genesis::MetricKind::Lang_Thesaurus_RelationStats) |
-        kind_bit(genesis::MetricKind::Lang_Encyclopedia_ConceptStats) |
-        kind_bit(genesis::MetricKind::Lang_SpeechCorpus_AlignmentStats) |
-        kind_bit(genesis::MetricKind::Math_Pemdas_PrecedenceStats) |
-        kind_bit(genesis::MetricKind::Math_Graph_1D_ProbeStats) |
-        kind_bit(genesis::MetricKind::Math_KhanAcademy_CoverageStats);
+        learning_stage_completed_mask_u64[i] = 0ULL;
+        learning_stage_required_mask128[i] = genesis::EwMask128{};
+    }
+    learning_metric_accepted_mask128 = genesis::EwMask128{};
 
-    // Stage 1: Physics & quantum physics
-    learning_stage_required_mask_u64[1] =
-        kind_bit(genesis::MetricKind::Qm_DoubleSlit_Fringes) |
-        kind_bit(genesis::MetricKind::Qm_ParticleInBox_Levels) |
-        kind_bit(genesis::MetricKind::Qm_HarmonicOsc_Spacing) |
-        kind_bit(genesis::MetricKind::Qm_Tunneling_Transmission);
+    const genesis::EwCurriculumStageDef* table = genesis::ew_curriculum_table();
+    for (uint32_t si = 0u; si < genesis::GENESIS_CURRICULUM_STAGE_COUNT; ++si) {
+        const genesis::EwCurriculumStageDef& d = table[si];
+        for (uint32_t j = 0u; j < d.required_count_u32 && j < 16u; ++j) {
+            const uint32_t kid = (uint32_t)d.required_kinds[j];
+            // Topic mask for crawler heuristics (64-bit).
+            learning_stage_required_mask_u64[si] |= (1ULL << (kid & 63u));
+            // Exact mask for correctness (128-bit).
+            genesis::ew_mask128_set_bit(&learning_stage_required_mask128[si], kid);
+        }
+    }
 
-    // Stage 2: Orbitals/Atoms/Bonds + Chemistry foundations
-    learning_stage_required_mask_u64[2] =
-        kind_bit(genesis::MetricKind::Atom_Orbital_EnergyRatios) |
-        kind_bit(genesis::MetricKind::Atom_Orbital_RadialNodes) |
-        kind_bit(genesis::MetricKind::Bond_Length_Equilibrium) |
-        kind_bit(genesis::MetricKind::Bond_Vibration_Frequency) |
-        kind_bit(genesis::MetricKind::Chem_ReactionRate_Temp) |
-        kind_bit(genesis::MetricKind::Chem_Equilibrium_Constant) |
-        kind_bit(genesis::MetricKind::Chem_Diffusion_Coefficient);
-
-    // Stage 3: Materials / physical science
-    learning_stage_required_mask_u64[3] =
-        kind_bit(genesis::MetricKind::Mat_Thermal_Conductivity) |
-        kind_bit(genesis::MetricKind::Mat_Electrical_Conductivity) |
-        kind_bit(genesis::MetricKind::Mat_StressStrain_Modulus) |
-        kind_bit(genesis::MetricKind::Mat_PhaseChange_Threshold);
-
-    // Stage 4: Cosmology / atmospheres
-    learning_stage_required_mask_u64[4] =
-        kind_bit(genesis::MetricKind::Cosmo_Orbit_Period) |
-        kind_bit(genesis::MetricKind::Cosmo_Radiation_Spectrum) |
-        kind_bit(genesis::MetricKind::Cosmo_Atmos_PressureProfile);
-
-    // Stage 5: Biology (deferred)
-    learning_stage_required_mask_u64[5] =
-        kind_bit(genesis::MetricKind::Bio_CellDiffusion_Osmosis);
+    // Initialize derived curriculum state so UI/smoke is meaningful on tick 0.
+    update_curriculum_derived_state();
 // -----------------------------------------------------------------------------
 
 }
@@ -958,6 +971,38 @@ uint32_t SubstrateManager::derived_crawler_chunk_stream_backlog_threshold_u32() 
     const uint32_t lim = derived_learning_backlog_limit_u32();
     const uint32_t thr = (lim < 8u) ? lim : (lim / 8u);
     return (thr == 0u) ? 1u : thr;
+}
+
+
+void SubstrateManager::domain_crawl_record_page_seen(const std::string& domain_ascii) {
+    // Deterministic, bounded per-domain counters for UI progress.
+    // Domain is expected to be ASCII-lowered by upstream policy parsing;
+    // we still lower it defensively here.
+    std::string dom = domain_ascii;
+    for (size_t i = 0; i < dom.size(); ++i) {
+        unsigned char c = (unsigned char)dom[i];
+        if (c >= (unsigned char)"A"[0] && c <= (unsigned char)"Z"[0]) dom[i] = (char)(c + 32u);
+    }
+
+    // Find existing.
+    for (uint32_t i = 0u; i < domain_crawl_stats_n_u32; ++i) {
+        if (domain_crawl_stats[i].domain_ascii == dom) {
+            if (domain_crawl_stats[i].pages_seen_u32 != 0xFFFFFFFFu) domain_crawl_stats[i].pages_seen_u32++;
+            return;
+        }
+    }
+
+    // Insert new if space.
+    if (domain_crawl_stats_n_u32 < DOMAIN_CRAWL_STATS_MAX_U32) {
+        EwDomainCrawlStat& s = domain_crawl_stats[domain_crawl_stats_n_u32++];
+        s.domain_ascii = dom;
+        s.pages_seen_u32 = 1u;
+        // Pull target from allowlist policy when present; fall back to conservative default.
+        uint32_t tgt = 100u;
+        const GE_CorpusDomainPolicy* pol = corpus_allowlist.find_by_domain_ascii(dom);
+        if (pol && pol->target_pages_u32 != 0u) tgt = pol->target_pages_u32;
+        s.pages_target_u32 = tgt;
+    }
 }
 
 uint32_t SubstrateManager::derived_pulse_fanout_max_u32(const EwCtx& ctx) const {
@@ -2538,7 +2583,535 @@ void SubstrateManager::observe_text_line(const std::string& utf8_line) {
 
 
 void SubstrateManager::ui_submit_user_text_line(const std::string& utf8_line) {
-    // Control commands (deterministic ASCII parsing)
+    // AI subsystem smoke test + deterministic config commands.
+    //  - /ai_smoke
+    //  - /ai_test
+    //  - /ai_stage
+    //  - /ai_lanes
+    //  - /ai_cfg <k=v ...> (emits AiConfigSet control packets)
+    if (utf8_line == "/ai_smoke" || utf8_line.rfind("/ai_smoke", 0) == 0 || utf8_line.rfind("ai_smoke:", 0) == 0) {
+        emit_ai_smoke_lines();
+        return;
+    }
+
+    // AI UI panel projection (text-driven; renderer can bind to these tags).
+    //  - /ai_ui show
+    //  - /ai_ui tab=crawler|experiments
+    //  - /ai_ui bell   (switch to experiments + clear unseen badge)
+    if (utf8_line.rfind("/ai_ui", 0) == 0 || utf8_line.rfind("ai_ui:", 0) == 0) {
+        std::vector<std::string> toks;
+        ew::ew_split_shell_ascii(utf8_line, toks);
+        bool show = true;
+        bool bell = false;
+        for (size_t i = 1; i < toks.size(); ++i) {
+            const std::string& t = toks[i];
+            if (t == "show") { show = true; }
+            else if (t == "bell") { bell = true; }
+            else {
+                std::string_view k_sv, v_sv;
+                if (ew::ew_split_kv_token_ascii(std::string_view(t), k_sv, v_sv)) {
+                    if (k_sv == "tab") {
+                        if (v_sv == "crawler") ai_ui_active_tab_u32 = 0u;
+                        else if (v_sv == "experiments") ai_ui_active_tab_u32 = 1u;
+                    }
+                }
+            }
+        }
+        if (bell) {
+            ai_ui_active_tab_u32 = 1u;
+            ai_ui_experiments_seen_cursor_u64 = vault_experiments_committed_u64;
+        } else if (ai_ui_active_tab_u32 == 1u) {
+            // Viewing experiments clears unseen badge.
+            ai_ui_experiments_seen_cursor_u64 = vault_experiments_committed_u64;
+        }
+        if (show) {
+            emit_ai_ui_panel_lines();
+        }
+        return;
+    }
+
+    // AI runtime toggles (replayable via control packets).
+    //  - /ai_enabled on|off
+    //  - /ai_learning on|off
+    //  - /ai_crawling on|off
+    auto emit_toggle_pkt = [&](EwControlPacketKind kind, bool on) {
+        EwControlPacket cp{};
+        cp.kind = kind;
+        cp.source_u16 = 1u;
+        cp.tick_u64 = canonical_tick_u64();
+        const uint8_t en = on ? 1u : 0u;
+        if (kind == EwControlPacketKind::AiSetEnabled) cp.payload.ai_set_enabled.enabled_u8 = en;
+        else if (kind == EwControlPacketKind::AiSetLearning) cp.payload.ai_set_learning.enabled_u8 = en;
+        else if (kind == EwControlPacketKind::AiSetCrawling) cp.payload.ai_set_crawling.enabled_u8 = en;
+        else if (kind == EwControlPacketKind::SimSetPlay) cp.payload.sim_set_play.enabled_u8 = en;
+        (void)control_packet_push(cp);
+    };
+    if (utf8_line.rfind("/ai_enabled", 0) == 0 || utf8_line.rfind("ai_enabled:", 0) == 0) {
+        std::vector<std::string> toks;
+        ew::ew_split_shell_ascii(utf8_line, toks);
+        const std::string op = (toks.size() >= 2u) ? toks[1] : std::string("status");
+        if (op == "on" || op == "enable") { emit_toggle_pkt(EwControlPacketKind::AiSetEnabled, true); emit_ui_line("AI_ENABLED:requested on"); }
+        else if (op == "off" || op == "disable") { emit_toggle_pkt(EwControlPacketKind::AiSetEnabled, false); emit_ui_line("AI_ENABLED:requested off"); }
+        else { emit_ui_line(std::string("AI_ENABLED:") + (ai_enabled_u32 ? "1" : "0")); }
+        return;
+    }
+    if (utf8_line.rfind("/ai_learning", 0) == 0 || utf8_line.rfind("ai_learning:", 0) == 0) {
+        std::vector<std::string> toks;
+        ew::ew_split_shell_ascii(utf8_line, toks);
+        const std::string op = (toks.size() >= 2u) ? toks[1] : std::string("status");
+        if (op == "on" || op == "enable") { emit_toggle_pkt(EwControlPacketKind::AiSetLearning, true); emit_ui_line("AI_LEARNING:requested on"); }
+        else if (op == "off" || op == "disable") { emit_toggle_pkt(EwControlPacketKind::AiSetLearning, false); emit_ui_line("AI_LEARNING:requested off"); }
+        else { emit_ui_line(std::string("AI_LEARNING:") + (ai_learning_enabled_u32 ? "1" : "0")); }
+        return;
+    }
+    if (utf8_line.rfind("/ai_crawling", 0) == 0 || utf8_line.rfind("ai_crawling:", 0) == 0) {
+        std::vector<std::string> toks;
+        ew::ew_split_shell_ascii(utf8_line, toks);
+        const std::string op = (toks.size() >= 2u) ? toks[1] : std::string("status");
+        if (op == "on" || op == "enable") { emit_toggle_pkt(EwControlPacketKind::AiSetCrawling, true); emit_ui_line("AI_CRAWLING:requested on"); }
+        else if (op == "off" || op == "disable") { emit_toggle_pkt(EwControlPacketKind::AiSetCrawling, false); emit_ui_line("AI_CRAWLING:requested off"); }
+        else { emit_ui_line(std::string("AI_CRAWLING:") + (ai_crawling_enabled_u32 ? "1" : "0")); }
+        return;
+    }
+
+    if (utf8_line == "/ai_test" || utf8_line.rfind("/ai_test", 0) == 0 || utf8_line.rfind("ai_test:", 0) == 0) {
+        std::string log;
+        const bool ok = ge_run_ai_determinism_selftests(this, log);
+        // Emit each line deterministically.
+        {
+            std::stringstream ss(log);
+            std::string line;
+            while (std::getline(ss, line)) {
+                if (!line.empty()) emit_ui_line(line);
+            }
+        }
+        if (!ok) {
+            emit_ui_line("AI_SELFTEST:FAIL_CLOSED");
+        }
+        return;
+    }
+
+    if (utf8_line == "/ai_stage" || utf8_line.rfind("/ai_stage", 0) == 0 || utf8_line.rfind("ai_stage:", 0) == 0) {
+        // Ensure derived fields are fresh for UI output.
+        update_curriculum_derived_state();
+        const uint32_t st = learning_curriculum_stage_u32;
+        emit_ui_line(std::string("AI_STAGE id=") + std::to_string(st) +
+                     " name=" + genesis::ew_curriculum_stage_name_ascii(st) +
+                     " missing=" + std::to_string(learning_stage_missing_count_u32) + "/" + std::to_string(learning_stage_required_count_u32) +
+                     " lane_max=" + std::to_string(learning_stage_lane_max_u32));
+
+        if (learning_stage_missing_n_u32 != 0u) {
+            std::string s = "AI_STAGE missing_kinds=";
+            for (uint32_t i = 0u; i < learning_stage_missing_n_u32; ++i) {
+                const genesis::MetricKind mk = (genesis::MetricKind)learning_stage_missing_ids_u32[i];
+                s += genesis::ew_metric_kind_name_ascii(mk);
+                if (i + 1u < learning_stage_missing_n_u32) s += ",";
+            }
+            emit_ui_line(s);
+        }
+        return;
+    }
+
+    if (utf8_line == "/ai_lanes" || utf8_line.rfind("/ai_lanes", 0) == 0 || utf8_line.rfind("ai_lanes:", 0) == 0) {
+        learning_automation.init_once(this);
+        learning_automation.emit_lane_status_lines(this);
+        return;
+    }
+
+    
+
+    // Structured AI event log toggle (deterministic, config-backed).
+    //  - /ai_log on|off|status
+    if (utf8_line.rfind("/ai_log", 0) == 0 || utf8_line.rfind("ai_log:", 0) == 0) {
+        std::vector<std::string> toks;
+        ew::ew_split_shell_ascii(utf8_line, toks);
+        std::string op = (toks.size() >= 2u) ? toks[1] : std::string("status");
+        if (op == "on" || op == "enable") {
+            EwControlPacket cp{};
+            cp.kind = EwControlPacketKind::AiConfigSet;
+            cp.source_u16 = 1u;
+            cp.payload.ai_cfg_set.field_u32 = EW_AI_CFG_FIELD_AI_EVENT_LOG_ENABLED_U32;
+            cp.payload.ai_cfg_set.value_u64 = 1ull;
+            control_packets.push_back(cp);
+            emit_ui_line("AI_LOG: enabled");
+        } else if (op == "off" || op == "disable") {
+            EwControlPacket cp{};
+            cp.kind = EwControlPacketKind::AiConfigSet;
+            cp.source_u16 = 1u;
+            cp.payload.ai_cfg_set.field_u32 = EW_AI_CFG_FIELD_AI_EVENT_LOG_ENABLED_U32;
+            cp.payload.ai_cfg_set.value_u64 = 0ull;
+            control_packets.push_back(cp);
+            emit_ui_line("AI_LOG: disabled");
+        } else {
+            const EwAiConfigAnchorState* cfg = ai_config_state();
+            const uint32_t en = cfg ? cfg->ai_event_log_enabled_u32 : 1u;
+            emit_ui_line(std::string("AI_LOG: ") + (en ? "enabled" : "disabled"));
+        }
+        return;
+    }
+
+if (utf8_line.rfind("/ai_cfg", 0) == 0 || utf8_line.rfind("ai_cfg:", 0) == 0) {
+        std::vector<std::string> toks;
+        ew::ew_split_shell_ascii(utf8_line, toks);
+        if (toks.size() <= 1u) {
+            emit_ai_smoke_lines();
+            return;
+        }
+        uint32_t set_count = 0u;
+        for (size_t i = 1; i < toks.size(); ++i) {
+            const std::string& t = toks[i];
+            if (t == "show" || t == "print") {
+                emit_ai_smoke_lines();
+                continue;
+            }
+            std::string_view k_sv, v_sv;
+            if (!ew::ew_split_kv_token_ascii(std::string_view(t), k_sv, v_sv)) continue;
+
+            uint32_t field_u32 = 0u;
+            if (k_sv == "resonance_q15") field_u32 = EW_AI_CFG_FIELD_RESONANCE_GATE_Q15;
+            else if (k_sv == "tol_num") field_u32 = EW_AI_CFG_FIELD_METRIC_TOL_NUM_U32;
+            else if (k_sv == "tol_den") field_u32 = EW_AI_CFG_FIELD_METRIC_TOL_DEN_U32;
+            else if (k_sv == "max_metric_tasks_per_tick") field_u32 = EW_AI_CFG_FIELD_MAX_METRIC_TASKS_PER_TICK_U32;
+            else if (k_sv == "ephemeral_ttl_ticks") field_u32 = EW_AI_CFG_FIELD_EPHEMERAL_TTL_TICKS_U64;
+            else if (k_sv == "ephemeral_gc_stride_ticks") field_u32 = EW_AI_CFG_FIELD_EPHEMERAL_GC_STRIDE_TICKS_U32;
+            else if (k_sv == "max_ephemeral_count") field_u32 = EW_AI_CFG_FIELD_MAX_EPHEMERAL_COUNT_U32;
+            else if (k_sv == "crawl_budget_bytes_per_tick") field_u32 = EW_AI_CFG_FIELD_CRAWL_BUDGET_BYTES_PER_TICK_U32;
+            else if (k_sv == "crawler_max_pulses_per_tick") field_u32 = EW_AI_CFG_FIELD_CRAWLER_MAX_PULSES_PER_TICK_U32;
+            else if (k_sv == "sim_synth_budget_work_units_per_tick") field_u32 = EW_AI_CFG_FIELD_SIM_SYNTH_BUDGET_WORK_UNITS_PER_TICK_U32;
+            else if (k_sv == "max_metric_claims_per_page") field_u32 = EW_AI_CFG_FIELD_MAX_METRIC_CLAIMS_PER_PAGE_U32;
+            else if (k_sv == "metric_claim_text_cap_bytes") field_u32 = EW_AI_CFG_FIELD_METRIC_CLAIM_TEXT_CAP_BYTES_U32;
+            else if (k_sv == "repo_reader_enabled") field_u32 = EW_AI_CFG_FIELD_REPO_READER_ENABLED_U32;
+            else if (k_sv == "repo_reader_files_per_tick") field_u32 = EW_AI_CFG_FIELD_REPO_READER_FILES_PER_TICK_U32;
+            else if (k_sv == "repo_reader_bytes_per_file") field_u32 = EW_AI_CFG_FIELD_REPO_READER_BYTES_PER_FILE_U32;
+            else if (k_sv == "ai_event_log" || k_sv == "ai_event_log_enabled") field_u32 = EW_AI_CFG_FIELD_AI_EVENT_LOG_ENABLED_U32;
+            else continue;
+
+            uint64_t u = 0ull;
+            if (!ew::ew_parse_u64_ascii(v_sv, u)) continue;
+
+            EwControlPacket cp{};
+            cp.kind = EwControlPacketKind::AiConfigSet;
+            cp.source_u16 = 1u;
+            cp.tick_u64 = canonical_tick_u64();
+            cp.payload.ai_config_set.field_u32 = field_u32;
+            cp.payload.ai_config_set.pad_u32 = 0u;
+            cp.payload.ai_config_set.value_s64 = (int64_t)u;
+            (void)control_packet_push(cp);
+            set_count += 1u;
+        }
+        emit_ui_line(std::string("AI_CFG_ENQUEUED count=") + std::to_string(set_count));
+        return;
+    }
+
+    
+
+// RepoReaderAdapter (self-reading) - read-only, opt-in, stage-gated.
+// Commands:
+//  - /repo_reader on|off   (emits AiConfigSet repo_reader_enabled)
+//  - /repo_reader scan     (rebuild deterministic file list from repo root)
+//  - /repo_reader status   (prints adapter status)
+if (utf8_line.rfind("/repo_reader", 0) == 0 || utf8_line.rfind("repo_reader:", 0) == 0) {
+    std::vector<std::string> toks;
+    ew::ew_split_shell_ascii(utf8_line, toks);
+    std::string op = (toks.size() >= 2u) ? toks[1] : std::string("status");
+    if (op == "on" || op == "enable") {
+        EwControlPacket cp{};
+        cp.kind = EwControlPacketKind::AiConfigSet;
+        cp.source_u16 = 1u;
+        cp.tick_u64 = canonical_tick_u64();
+        cp.payload.ai_config_set.field_u32 = EW_AI_CFG_FIELD_REPO_READER_ENABLED_U32;
+        cp.payload.ai_config_set.pad_u32 = 0u;
+        cp.payload.ai_config_set.value_s64 = 1;
+        (void)control_packet_push(cp);
+        emit_ui_line("REPO_READER enabled=1 (stage-gated; read-only)");
+        return;
+    } else if (op == "off" || op == "disable") {
+        EwControlPacket cp{};
+        cp.kind = EwControlPacketKind::AiConfigSet;
+        cp.source_u16 = 1u;
+        cp.tick_u64 = canonical_tick_u64();
+        cp.payload.ai_config_set.field_u32 = EW_AI_CFG_FIELD_REPO_READER_ENABLED_U32;
+        cp.payload.ai_config_set.pad_u32 = 0u;
+        cp.payload.ai_config_set.value_s64 = 0;
+        (void)control_packet_push(cp);
+        emit_ui_line("REPO_READER enabled=0");
+        return;
+    } else if (op == "scan") {
+        repo_reader.scan_repo_root();
+        emit_ui_line(std::string("REPO_READER ") + repo_reader.status_line());
+        return;
+    } else {
+        emit_ui_line(std::string("REPO_READER ") + repo_reader.status_line());
+        return;
+    }
+}
+
+    // Vault + AssetSubstrate exposure (read-only browsing + deterministic import handles).
+    // Commands:
+    //  - /vault_list [cat=metrics|allow|reson|speech|fail|all] [limit=N]
+    //  - /vault_show idx=N
+    //  - /vault_import idx=N  (writes an engine-native .geassetref handle into AssetSubstrate/Assets/AIImported)
+    //  - /content_list [limit=N] [part=AI|Assets|All]
+    //  - /content_reindex
+    if (utf8_line.rfind("/vault_list", 0) == 0 || utf8_line.rfind("vault_list:", 0) == 0) {
+        std::vector<std::string> toks;
+        ew::ew_split_shell_ascii(utf8_line, toks);
+        std::string cat = "all";
+        uint64_t limit_u64 = 20ull;
+        for (size_t i = 1; i < toks.size(); ++i) {
+            std::string_view k_sv, v_sv;
+            if (ew::ew_split_kv_token_ascii(std::string_view(toks[i]), k_sv, v_sv)) {
+                if (k_sv == "cat") cat = std::string(v_sv);
+                else if (k_sv == "limit") (void)ew::ew_parse_u64_ascii(v_sv, limit_u64);
+            }
+        }
+        uint32_t limit = (uint32_t)((limit_u64 > (uint64_t)UI_VAULT_LIST_CAP) ? (uint64_t)UI_VAULT_LIST_CAP : limit_u64);
+        if (limit == 0u) limit = 1u;
+
+        const std::string root = "Draft Container/AI_Vault";
+        const std::string canonical = root + "/canonical";
+        const std::string eph = root + "/_ephemeral";
+
+        std::vector<std::string> rels;
+        rels.reserve((size_t)limit);
+
+        auto add_dir = [&](const std::string& dir_utf8, const char* rel_prefix) {
+            std::error_code ec;
+            if (!std::filesystem::exists(dir_utf8, ec)) return;
+            ec.clear();
+            std::vector<std::string> names;
+            for (auto it = std::filesystem::directory_iterator(dir_utf8, ec);
+                 !ec && it != std::filesystem::directory_iterator();
+                 ++it) {
+                const auto& fp = it->path();
+                if (!it->is_regular_file()) continue;
+                const std::string ext = fp.extension().string();
+                if (ext != ".json" && ext != ".txt") continue;
+                names.push_back(fp.filename().string());
+            }
+            ec.clear();
+            std::sort(names.begin(), names.end());
+            for (const auto& n : names) {
+                if (rels.size() >= (size_t)limit) break;
+                rels.push_back(std::string(rel_prefix) + "/" + n);
+            }
+        };
+
+        if (cat == "metrics" || cat == "all") add_dir(canonical + "/experiments/metrics", "canonical/experiments/metrics");
+        if (cat == "allow"  || cat == "all") add_dir(canonical + "/corpus/allowlist_pages", "canonical/corpus/allowlist_pages");
+        if (cat == "reson"  || cat == "all") add_dir(canonical + "/corpus/resonant_pages", "canonical/corpus/resonant_pages");
+        if (cat == "speech" || cat == "all") add_dir(canonical + "/corpus/speech_boot", "canonical/corpus/speech_boot");
+        if (cat == "fail"   || cat == "all") add_dir(eph + "/experiments/metrics_failures", "_ephemeral/experiments/metrics_failures");
+
+        // Deterministic list snapshot for follow-up show/import.
+        ui_last_vault_list_paths_utf8 = rels;
+
+        emit_ui_line(std::string("VAULT_LIST cat=") + cat + " count=" + std::to_string((unsigned long long)rels.size()));
+        for (size_t i = 0; i < rels.size(); ++i) {
+            emit_ui_line(std::string("VAULT_ITEM idx=") + std::to_string((unsigned long long)i) + " rel=" + rels[i]);
+        }
+        return;
+    }
+
+    if (utf8_line.rfind("/vault_show", 0) == 0 || utf8_line.rfind("vault_show:", 0) == 0) {
+        std::vector<std::string> toks;
+        ew::ew_split_shell_ascii(utf8_line, toks);
+        uint64_t idx_u64 = 0ull;
+        bool has_idx = false;
+        for (size_t i = 1; i < toks.size(); ++i) {
+            std::string_view k_sv, v_sv;
+            if (ew::ew_split_kv_token_ascii(std::string_view(toks[i]), k_sv, v_sv)) {
+                if (k_sv == "idx") { has_idx = ew::ew_parse_u64_ascii(v_sv, idx_u64); }
+            }
+        }
+        if (!has_idx && toks.size() >= 2u) {
+            (void)ew::ew_parse_u64_ascii(std::string_view(toks[1]), idx_u64);
+            has_idx = true;
+        }
+        if (!has_idx || idx_u64 >= (uint64_t)ui_last_vault_list_paths_utf8.size()) {
+            emit_ui_line("VAULT_SHOW invalid_idx");
+            return;
+        }
+        const std::string rel = ui_last_vault_list_paths_utf8[(size_t)idx_u64];
+        const std::filesystem::path full = std::filesystem::path("Draft Container/AI_Vault") / std::filesystem::path(rel);
+
+        std::ifstream f(full, std::ios::binary);
+        if (!f.good()) {
+            emit_ui_line("VAULT_SHOW open_failed rel=" + rel);
+            return;
+        }
+        std::string s;
+        s.resize(2048);
+        f.read(&s[0], (std::streamsize)s.size());
+        const size_t got = (size_t)f.gcount();
+        s.resize(got);
+
+        auto find_field = [&](const char* key) -> std::string {
+            const std::string k = std::string("\"") + key + "\":";
+            const size_t p = s.find(k);
+            if (p == std::string::npos) return "";
+            size_t q = p + k.size();
+            while (q < s.size() && (s[q] == ' ')) q++;
+            // Capture until comma or brace.
+            size_t e = q;
+            while (e < s.size() && s[e] != ',' && s[e] != '}' && s[e] != '\n') e++;
+            return s.substr(q, e - q);
+        };
+        auto find_field_str = [&](const char* key) -> std::string {
+            const std::string k = std::string("\"") + key + "\":\"";
+            const size_t p = s.find(k);
+            if (p == std::string::npos) return "";
+            size_t q = p + k.size();
+            size_t e = s.find("\"", q);
+            if (e == std::string::npos) return "";
+            return s.substr(q, e - q);
+        };
+
+        emit_ui_line(std::string("VAULT_SHOW idx=") + std::to_string((unsigned long long)idx_u64) + " rel=" + rel + " bytes=" + std::to_string((unsigned long long)got));
+        // Try to extract a few well-known fields (best-effort; bounded).
+        const std::string kind = find_field("kind");
+        const std::string task_id = find_field("task_id");
+        const std::string accepted = find_field("accepted");
+        const std::string tick = find_field("completed_tick");
+        const std::string dom = find_field_str("domain_ascii");
+        const std::string url = find_field_str("url_ascii");
+        if (!kind.empty() || !task_id.empty()) {
+            emit_ui_line(std::string("VAULT_SHOW_METRIC kind=") + kind + " task_id=" + task_id + " accepted=" + accepted + " completed_tick=" + tick);
+        }
+        if (!dom.empty() || !url.empty()) {
+            emit_ui_line(std::string("VAULT_SHOW_PAGE domain=") + dom + " url=" + url);
+        }
+        return;
+    }
+
+    if (utf8_line.rfind("/vault_import", 0) == 0 || utf8_line.rfind("vault_import:", 0) == 0) {
+        std::vector<std::string> toks;
+        ew::ew_split_shell_ascii(utf8_line, toks);
+        uint64_t idx_u64 = 0ull;
+        bool has_idx = false;
+        for (size_t i = 1; i < toks.size(); ++i) {
+            std::string_view k_sv, v_sv;
+            if (ew::ew_split_kv_token_ascii(std::string_view(toks[i]), k_sv, v_sv)) {
+                if (k_sv == "idx") { has_idx = ew::ew_parse_u64_ascii(v_sv, idx_u64); }
+            }
+        }
+        if (!has_idx && toks.size() >= 2u) {
+            (void)ew::ew_parse_u64_ascii(std::string_view(toks[1]), idx_u64);
+            has_idx = true;
+        }
+        if (!has_idx || idx_u64 >= (uint64_t)ui_last_vault_list_paths_utf8.size()) {
+            emit_ui_line("VAULT_IMPORT invalid_idx");
+            return;
+        }
+
+        const std::string rel = ui_last_vault_list_paths_utf8[(size_t)idx_u64];
+        const std::string full_vault = (std::filesystem::path("Draft Container/AI_Vault") / std::filesystem::path(rel)).string();
+
+        std::string cat = "misc";
+        if (rel.find("canonical/experiments/metrics/") != std::string::npos) cat = "metrics";
+        else if (rel.find("canonical/corpus/allowlist_pages/") != std::string::npos) cat = "allowlist_pages";
+        else if (rel.find("canonical/corpus/resonant_pages/") != std::string::npos) cat = "resonant_pages";
+        else if (rel.find("canonical/corpus/speech_boot/") != std::string::npos) cat = "speech_boot";
+        else if (rel.find("_ephemeral/experiments/metrics_failures/") != std::string::npos) cat = "failures";
+
+        // Stable id for handle filename (not a security mechanism).
+        auto stable_u64 = [&](const std::string& s) -> uint64_t {
+            uint64_t x = 0x9E3779B97F4A7C15ULL;
+            for (unsigned char c : s) {
+                x ^= (uint64_t)c + 0x9E3779B97F4A7C15ULL + (x << 6) + (x >> 2);
+            }
+            return x;
+        };
+        const uint64_t oid = stable_u64(rel);
+
+        const std::filesystem::path dir = std::filesystem::path("Draft Container/AssetSubstrate/Assets/AIImported") / std::filesystem::path(cat);
+        std::error_code ec;
+        (void)std::filesystem::create_directories(dir, ec);
+        ec.clear();
+
+        char name_buf[256];
+        std::snprintf(name_buf, sizeof(name_buf),
+                      "vault_%s_k0_oid%llu.geassetref",
+                      cat.c_str(),
+                      (unsigned long long)oid);
+
+        const std::filesystem::path out_path = dir / name_buf;
+
+        // Replay-safe: if exists, treat as success.
+        if (std::filesystem::exists(out_path, ec) && !ec) {
+            emit_ui_line(std::string("VAULT_IMPORT_OK exists=1 path=") + out_path.string());
+        } else {
+            ec.clear();
+            const uint64_t tick_u64 = canonical_tick_u64();
+            char buf[1024];
+            std::snprintf(buf, sizeof(buf),
+                          "GEASSETREF ver=1\n"
+                          "ref_utf8=%s\n"
+                          "ref_kind=vault\n"
+                          "category=%s\n"
+                          "rel=%s\n"
+                          "import_tick_u64=%llu\n",
+                          full_vault.c_str(),
+                          cat.c_str(),
+                          rel.c_str(),
+                          (unsigned long long)tick_u64);
+            std::string err;
+            const bool ok = ew_txn_write_file_text(out_path, std::string(buf), tick_u64, &err);
+            emit_ui_line(ok ? (std::string("VAULT_IMPORT_OK exists=0 path=") + out_path.string())
+                            : (std::string("VAULT_IMPORT_FAIL ") + err));
+        }
+
+        // Reindex project substrate so Content Browser can pick it up deterministically.
+        {
+            std::string ierr;
+            const bool ok = asset_substrate.rebuild_project_index(&ierr);
+            emit_ui_line(ok ? "CONTENT_REINDEX_OK" : (std::string("CONTENT_REINDEX_FAIL ") + ierr));
+        }
+        return;
+    }
+
+    if (utf8_line.rfind("/content_reindex", 0) == 0 || utf8_line.rfind("content_reindex:", 0) == 0) {
+        std::string ierr;
+        const bool ok = asset_substrate.rebuild_project_index(&ierr);
+        emit_ui_line(ok ? "CONTENT_REINDEX_OK" : (std::string("CONTENT_REINDEX_FAIL ") + ierr));
+        return;
+    }
+
+    if (utf8_line.rfind("/content_list", 0) == 0 || utf8_line.rfind("content_list:", 0) == 0) {
+        std::vector<std::string> toks;
+        ew::ew_split_shell_ascii(utf8_line, toks);
+        std::string part = "all";
+        uint64_t limit_u64 = 50ull;
+        for (size_t i = 1; i < toks.size(); ++i) {
+            std::string_view k_sv, v_sv;
+            if (ew::ew_split_kv_token_ascii(std::string_view(toks[i]), k_sv, v_sv)) {
+                if (k_sv == "part") part = std::string(v_sv);
+                else if (k_sv == "limit") (void)ew::ew_parse_u64_ascii(v_sv, limit_u64);
+            }
+        }
+        const uint32_t limit = (uint32_t)((limit_u64 > 200ull) ? 200ull : limit_u64);
+
+        std::vector<genesis::GeAssetEntry> entries;
+        std::string err;
+        if (!asset_substrate.list_project_entries(entries, &err)) {
+            emit_ui_line(std::string("CONTENT_LIST_FAIL ") + err);
+            return;
+        }
+        emit_ui_line(std::string("CONTENT_LIST count=") + std::to_string((unsigned long long)entries.size()));
+        uint32_t shown = 0u;
+        for (const auto& e : entries) {
+            if (shown >= limit) break;
+            const std::string p = e.relpath_utf8;
+            const bool is_ai = (p.rfind("AI/", 0) == 0) || (p.rfind("AI\\", 0) == 0);
+            if (part == "ai" && !is_ai) continue;
+            if (part == "assets" && is_ai) continue;
+            emit_ui_line(std::string("CONTENT_ITEM rel=") + p + " label=" + e.label_utf8);
+            shown++;
+        }
+        return;
+    }
+
+// Control commands (deterministic ASCII parsing)
     //  - /crawl_live on consent=1
     //  - /crawl_live off
     //  - /crawl_seed url=http://example.com/
@@ -2739,6 +3312,246 @@ void SubstrateManager::ui_submit_user_text_line(const std::string& utf8_line) {
     (void)compile_and_submit_experiment_from_text(routed_line);
 }
 
+
+
+const EwAiConfigAnchorState* SubstrateManager::ai_config_state() const {
+    if (ai_config_anchor_id_u32 == 0u) return nullptr;
+    if (ai_config_anchor_id_u32 >= anchors.size()) return nullptr;
+    const Anchor& a = anchors[ai_config_anchor_id_u32];
+    if (a.kind_u32 != EW_ANCHOR_KIND_AI_CONFIG) return nullptr;
+    return &a.ai_config_state;
+}
+
+EwAiConfigAnchorState* SubstrateManager::ai_config_state_mut() {
+    if (ai_config_anchor_id_u32 == 0u) return nullptr;
+    if (ai_config_anchor_id_u32 >= anchors.size()) return nullptr;
+    Anchor& a = anchors[ai_config_anchor_id_u32];
+    if (a.kind_u32 != EW_ANCHOR_KIND_AI_CONFIG) return nullptr;
+    return &a.ai_config_state;
+}
+
+
+bool SubstrateManager::speech_boot_done() const {
+    // Speech gate: require the speech corpus checkpoint plus the SpeechBoot completion metrics.
+    genesis::EwMask128 need{};
+    genesis::ew_mask128_set_metric(&need, genesis::MetricKind::Lang_SpeechCorpus_AlignmentStats);
+    genesis::ew_mask128_set_metric(&need, genesis::MetricKind::Lang_SpeechBoot_VocabSize);
+    genesis::ew_mask128_set_metric(&need, genesis::MetricKind::Lang_SpeechBoot_SplitStability);
+    genesis::ew_mask128_set_metric(&need, genesis::MetricKind::Lang_SpeechBoot_IntentParsePass);
+
+    const genesis::EwMask128 have = genesis::ew_mask128_and(learning_metric_accepted_mask128, need);
+    return genesis::ew_mask128_eq(have, need);
+}
+
+void SubstrateManager::update_curriculum_derived_state() {
+    const uint32_t st = learning_curriculum_stage_u32;
+    learning_stage_lane_max_u32 = genesis::ew_curriculum_stage_allowlist_lane_max_u32(st);
+    learning_stage_required_count_u32 = genesis::ew_curriculum_stage_required_count_u32(st);
+
+    const genesis::EwMask128 req = genesis::ew_curriculum_stage_required_mask128(st);
+    const genesis::EwMask128 miss = genesis::ew_mask128_and_not(req, learning_metric_accepted_mask128);
+    learning_stage_missing_count_u32 = genesis::ew_mask128_popcount(miss);
+
+    // Also cache a bounded list of missing ids in stable order (table order).
+    for (uint32_t i = 0u; i < 8u; ++i) learning_stage_missing_ids_u32[i] = 0u;
+    learning_stage_missing_n_u32 = 0u;
+    const genesis::EwCurriculumStageDef* def = genesis::ew_curriculum_stage_def(st);
+    if (def) {
+        for (uint32_t i = 0u; i < def->required_count_u32 && i < 16u; ++i) {
+            const uint32_t kid = (uint32_t)def->required_kinds[i];
+            if (kid >= 128u) continue;
+            if (!genesis::ew_mask128_test_bit(learning_metric_accepted_mask128, kid)) {
+                if (learning_stage_missing_n_u32 < 8u) {
+                    learning_stage_missing_ids_u32[learning_stage_missing_n_u32++] = kid;
+                }
+            }
+        }
+    }
+}
+
+
+void SubstrateManager::emit_ai_smoke_lines() {
+    update_curriculum_derived_state();
+    const uint64_t tick_u64 = canonical_tick_u64();
+
+    const char* st_name = "IDLE";
+    if (ai_state_u32 == 1u) st_name = "SPEECH_BOOT";
+    else if (ai_state_u32 == 2u) st_name = "LEARNING";
+    else if (ai_state_u32 == 3u) st_name = "EXPLORING";
+    else if (ai_state_u32 == 4u) st_name = "SIM_SYNTH";
+    else if (ai_state_u32 == 5u) st_name = "VALIDATING";
+    else if (ai_state_u32 == 6u) st_name = "COMMIT";
+
+    emit_ui_line(std::string("AI_SMOKE tick=") + std::to_string((unsigned long long)tick_u64));
+
+    emit_ui_line(std::string("AI_SMOKE speech_done=") + (speech_boot_done() ? "1" : "0") +
+                 " vocab_written=" + (speech_vocab_written_u32 ? "1" : "0") +
+                 " vocab_n=" + std::to_string((unsigned long long)language_foundation.speechboot_vocab_count_u32()));
+
+    emit_ui_line(std::string("AI_SMOKE play=") + (sim_world_play_u32 ? "1" : "0") +
+                 " ai=" + (ai_enabled_u32 ? "1" : "0") +
+                 " learn=" + (ai_learning_enabled_u32 ? "1" : "0") +
+                 " crawl=" + (ai_crawling_enabled_u32 ? "1" : "0") +
+                 " state=" + st_name +
+                 " stage=" + std::to_string(learning_curriculum_stage_u32) +
+                 " stage_name=" + std::string(genesis::ew_curriculum_stage_name_ascii(learning_curriculum_stage_u32)) +
+                 " missing=" + std::to_string(learning_stage_missing_count_u32) + "/" + std::to_string(learning_stage_required_count_u32) +
+                 " lane_max=" + std::to_string(learning_stage_lane_max_u32));
+
+    if (learning_stage_missing_n_u32 != 0u) {
+        std::string miss = "AI_SMOKE missing_kinds=";
+        for (uint32_t i = 0u; i < learning_stage_missing_n_u32; ++i) {
+            const uint32_t kid = learning_stage_missing_ids_u32[i];
+            const genesis::MetricKind mk = (genesis::MetricKind)kid;
+            miss += genesis::ew_metric_kind_name_ascii(mk);
+            if (i + 1u < learning_stage_missing_n_u32) miss += ",";
+        }
+        emit_ui_line(miss);
+    }
+
+    emit_ui_line(std::string("AI_SMOKE vault exp=") + std::to_string((unsigned long long)vault_experiments_committed_u64) +
+                 " eph=" + std::to_string((unsigned long long)vault_experiments_ephemeral_u64) +
+                 " allow_pages=" + std::to_string((unsigned long long)vault_allowlist_pages_u64) +
+                 " reson_pages=" + std::to_string((unsigned long long)vault_resonant_pages_u64));
+
+    emit_ui_line(std::string("AI_SMOKE queues metric_pending=") + std::to_string(learning_gate.registry().pending_count_u32()) +
+                 " net_inflight=" + std::to_string((unsigned long long)external_api_inflight.size()) +
+                 " net_pending=" + std::to_string((unsigned long long)external_api_pending.size()));
+
+    if (const EwAiConfigAnchorState* cfg = ai_config_state()) {
+        emit_ui_line(std::string("AI_SMOKE cfg resonance_q15=") + std::to_string((unsigned)cfg->resonance_gate_q15) +
+                     " tol=" + std::to_string((unsigned)cfg->metric_tol_num_u32) + "/" + std::to_string((unsigned)cfg->metric_tol_den_u32) +
+                     " max_metric_tasks_per_tick=" + std::to_string((unsigned)cfg->max_metric_tasks_per_tick_u32) +
+                     " ttl_ticks=" + std::to_string((unsigned long long)cfg->ephemeral_ttl_ticks_u64) +
+                     " gc_stride=" + std::to_string((unsigned)cfg->ephemeral_gc_stride_ticks_u32) +
+                     " max_eph=" + std::to_string((unsigned)cfg->max_ephemeral_count_u32) +
+                     " crawl_budget_bytes=" + std::to_string((unsigned)cfg->crawl_budget_bytes_per_tick_u32) +
+                     " crawl_max_pulses=" + std::to_string((unsigned)cfg->crawler_max_pulses_per_tick_u32) +
+                     " sim_synth_budget_work_units=" + std::to_string((unsigned)cfg->sim_synth_budget_work_units_per_tick_u32) +
+                     " max_claims_per_page=" + std::to_string((unsigned)cfg->max_metric_claims_per_page_u32) +
+                     " claim_text_cap_bytes=" + std::to_string((unsigned)cfg->metric_claim_text_cap_bytes_u32) + " repo_reader_enabled=" + std::to_string((unsigned)cfg->repo_reader_enabled_u32) + " repo_reader_files_per_tick=" + std::to_string((unsigned)cfg->repo_reader_files_per_tick_u32) + " repo_reader_bytes_per_file=" + std::to_string((unsigned)cfg->repo_reader_bytes_per_file_u32) +
+                     " ai_event_log=" + std::to_string((unsigned)cfg->ai_event_log_enabled_u32));
+        emit_ui_line(std::string("AI_SMOKE ") + repo_reader.status_line());
+    } else {
+        emit_ui_line("AI_SMOKE cfg missing");
+    }
+}
+
+void SubstrateManager::emit_ai_ui_panel_lines() {
+    // Text-driven UI projection contract. A graphical viewport can bind to these
+    // tags without owning truth.
+    //
+    // Lines emitted (stable prefixes):
+    //  AI_PANEL header ...
+    //  AI_PANEL_BADGE n=<0..963>
+    //  AI_CRAWL_TOTAL seen=<u64> target=<u64> pct=<0..100>
+    //  AI_CRAWL domain=<ascii> seen=<u32> target=<u32> pct=<0..100>
+    //  AI_EXPERIMENT rel=<path>
+
+    const uint64_t unseen_u64 = (vault_experiments_committed_u64 > ai_ui_experiments_seen_cursor_u64)
+                                 ? (vault_experiments_committed_u64 - ai_ui_experiments_seen_cursor_u64)
+                                 : 0ull;
+    uint32_t badge = (unseen_u64 > 963ull) ? 963u : (uint32_t)unseen_u64;
+
+    emit_ui_line(std::string("AI_PANEL tab=") + (ai_ui_active_tab_u32 == 0u ? "crawler" : "experiments") +
+                 " play=" + (sim_world_play_u32 ? "1" : "0") +
+                 " ai=" + (ai_enabled_u32 ? "1" : "0") +
+                 " learn=" + (ai_learning_enabled_u32 ? "1" : "0") +
+                 " crawl=" + (ai_crawling_enabled_u32 ? "1" : "0"));
+
+    if (badge != 0u) {
+        emit_ui_line(std::string("AI_PANEL_BADGE n=") + std::to_string((unsigned)badge));
+    }
+
+    if (ai_ui_active_tab_u32 == 0u) {
+        // ------------------------------
+        // Crawler progress tab
+        // ------------------------------
+        uint64_t total_seen = 0ull;
+        uint64_t total_target = 0ull;
+        for (uint32_t i = 0u; i < domain_crawl_stats_n_u32; ++i) {
+            total_seen += (uint64_t)domain_crawl_stats[i].pages_seen_u32;
+            total_target += (uint64_t)((domain_crawl_stats[i].pages_target_u32 == 0u) ? 1u : domain_crawl_stats[i].pages_target_u32);
+        }
+        uint32_t pct = 0u;
+        if (total_target != 0ull) {
+            pct = (uint32_t)((total_seen * 100ull) / total_target);
+            if (pct > 100u) pct = 100u;
+        }
+        emit_ui_line(std::string("AI_CRAWL_TOTAL seen=") + std::to_string((unsigned long long)total_seen) +
+                     " target=" + std::to_string((unsigned long long)total_target) +
+                     " pct=" + std::to_string((unsigned)pct));
+
+        // Deterministic sorted domain list (lexicographic by domain).
+        uint32_t idx[DOMAIN_CRAWL_STATS_MAX_U32];
+        for (uint32_t i = 0u; i < domain_crawl_stats_n_u32; ++i) idx[i] = i;
+        for (uint32_t i = 0u; i + 1u < domain_crawl_stats_n_u32; ++i) {
+            uint32_t best = i;
+            for (uint32_t j = i + 1u; j < domain_crawl_stats_n_u32; ++j) {
+                const std::string& a = domain_crawl_stats[idx[j]].domain_ascii;
+                const std::string& b = domain_crawl_stats[idx[best]].domain_ascii;
+                if (a < b) best = j;
+            }
+            if (best != i) {
+                uint32_t tmp = idx[i];
+                idx[i] = idx[best];
+                idx[best] = tmp;
+            }
+        }
+
+        const uint32_t max_lines = 64u;
+        uint32_t shown = 0u;
+        for (uint32_t k = 0u; k < domain_crawl_stats_n_u32 && shown < max_lines; ++k) {
+            const EwDomainCrawlStat& s = domain_crawl_stats[idx[k]];
+            const uint32_t tgt = (s.pages_target_u32 == 0u) ? 1u : s.pages_target_u32;
+            uint32_t p = (uint32_t)(((uint64_t)s.pages_seen_u32 * 100ull) / (uint64_t)tgt);
+            if (p > 100u) p = 100u;
+            emit_ui_line(std::string("AI_CRAWL domain=") + s.domain_ascii +
+                         " seen=" + std::to_string((unsigned)s.pages_seen_u32) +
+                         " target=" + std::to_string((unsigned)tgt) +
+                         " pct=" + std::to_string((unsigned)p));
+            shown++;
+        }
+        if (domain_crawl_stats_n_u32 > max_lines) {
+            emit_ui_line(std::string("AI_CRAWL more=") + std::to_string((unsigned)(domain_crawl_stats_n_u32 - max_lines)));
+        }
+    } else {
+        // ------------------------------
+        // Experiments tab
+        // ------------------------------
+        // List committed experiments from the canonical experiments folder.
+        // Keep it bounded and deterministic.
+        std::vector<std::string> rels;
+        rels.reserve(256);
+        const std::string root = "Draft Container/AI_Vault";
+        const std::filesystem::path dir = std::filesystem::path(root) / "canonical/experiments/metrics";
+        std::error_code ec;
+        if (std::filesystem::exists(dir, ec) && !ec) {
+            ec.clear();
+            for (auto it = std::filesystem::directory_iterator(dir, ec); !ec && it != std::filesystem::directory_iterator(); ++it) {
+                const auto& p = it->path();
+                if (!it->is_regular_file(ec)) { ec.clear(); continue; }
+                rels.push_back(std::string("canonical/experiments/metrics/") + p.filename().string());
+                ec.clear();
+                if (rels.size() >= 512u) break;
+            }
+        }
+        std::sort(rels.begin(), rels.end());
+        const uint32_t n = (uint32_t)rels.size();
+        emit_ui_line(std::string("AI_EXPERIMENTS count=") + std::to_string((unsigned)n) +
+                     " committed=" + std::to_string((unsigned long long)vault_experiments_committed_u64) +
+                     " unseen=" + std::to_string((unsigned)badge));
+        const uint32_t show = (n > 32u) ? 32u : n;
+        for (uint32_t i = 0u; i < show; ++i) {
+            const std::string& rel = rels[n - show + i];
+            emit_ui_line(std::string("AI_EXPERIMENT rel=") + rel);
+        }
+        if (n > show) {
+            emit_ui_line(std::string("AI_EXPERIMENT more=") + std::to_string((unsigned)(n - show)));
+        }
+        // Note: opening an experiment file uses the existing /vault_show idx=<n> flow.
+    }
+}
 bool SubstrateManager::compile_and_submit_experiment_from_text(const std::string& utf8_line) {
     EigenWare::EwExperimentRequest req;
     if (!EigenWare::ew_parse_experiment_request(utf8_line, req)) return false;
@@ -2939,7 +3752,7 @@ bool SubstrateManager::sim_save_to_file(const std::string& name_ascii) {
     st.ancilla = ancilla;
     st.lanes = lanes;
     st.object_store = object_store;
-    st.nbody_state = nbody;
+    st.nbody_state = nbody_state;
     st.materials_calib_done = materials_calib_done;
     sim_snapshot = st;
     sim_snapshot_valid = true;
@@ -2963,7 +3776,7 @@ bool SubstrateManager::sim_save_to_file(const std::string& name_ascii) {
         return false;
     }
     const uint32_t magic = 0x47455349U; // 'GESI'
-    const uint32_t ver = 13u;
+    const uint32_t ver = 17u;
     out.write(reinterpret_cast<const char*>(&magic), sizeof(magic));
     out.write(reinterpret_cast<const char*>(&ver), sizeof(ver));
     if (!out.good()) return false;
@@ -3090,7 +3903,7 @@ bool SubstrateManager::sim_load_from_file(const std::string& name_ascii, bool pl
     uint32_t magic = 0, ver = 0;
     in.read(reinterpret_cast<char*>(&magic), sizeof(magic));
     in.read(reinterpret_cast<char*>(&ver), sizeof(ver));
-    if (!in.good() || magic != 0x47455349U || ver != 13u) {
+    if (!in.good() || magic != 0x47455349U || ver != 17u) {
         emit_ui_line("SIM_LOAD_BAD_HEADER");
         return false;
     }
@@ -3225,7 +4038,7 @@ if (!in.good()) return false;
     lanes = st.lanes;
     object_store = st.object_store;
     materials_calib_done = st.materials_calib_done;
-    nbody = st.nbody_state;
+    nbody_state = st.nbody_state;
     // Ensure topology vectors are sized.
     const uint32_t need = (uint32_t)anchors.size();
     if (redirect_to.size() < need) redirect_to.resize(need, 0u);
@@ -3359,6 +4172,24 @@ void SubstrateManager::emit_ui_line(const std::string& utf8_line) {
     }
 }
 
+
+void SubstrateManager::emit_ai_event_line(const char* event_name_ascii, const std::string& kv_ascii) {
+    const EwAiConfigAnchorState* cfg = ai_config_state();
+    if (cfg && cfg->ai_event_log_enabled_u32 == 0u) return;
+
+    // Single-line, deterministic.
+    std::string line = "AI_EVENT ";
+    line += (event_name_ascii ? event_name_ascii : "unknown");
+    line += " tick=";
+    line += std::to_string(canonical_tick_u64());
+    if (!kv_ascii.empty()) {
+        line += " ";
+        line += kv_ascii;
+    }
+    emit_ui_line(line);
+}
+
+
 bool SubstrateManager::ui_pop_output_text(std::string& out_utf8) {
     if (ui_out_q.empty()) return false;
     out_utf8 = ui_out_q.front();
@@ -3402,7 +4233,7 @@ bool SubstrateManager::export_object_bundle(uint64_t object_id_u64,
         return false;
     }
 
-    const std::string mesh_path = (std::filesystem::path(out_dir_utf8) / "mesh_shell.ewmesh").u8string();
+    const std::string mesh_path = (std::filesystem::path(out_dir_utf8) / "mesh_shell.ewmesh").string();
     if (!genesis::ewmesh_write_v1(mesh_path, shell)) {
         rep("EXPORT:write_mesh_failed");
         return false;
@@ -3416,7 +4247,7 @@ bool SubstrateManager::export_object_bundle(uint64_t object_id_u64,
         rep("EXPORT:missing_uv_atlas");
         return false;
     }
-    const std::string atlas_path = (std::filesystem::path(out_dir_utf8) / "uv_atlas.rgba8").u8string();
+    const std::string atlas_path = (std::filesystem::path(out_dir_utf8) / "uv_atlas.rgba8").string();
     {
         std::ofstream f(atlas_path, std::ios::binary);
         if (!f) { rep("EXPORT:write_uv_atlas_failed"); return false; }
@@ -3426,7 +4257,7 @@ bool SubstrateManager::export_object_bundle(uint64_t object_id_u64,
     // Also export a viewable diffuse texture derived from the UV atlas for universal formats.
     // Deterministic: uncompressed 32bpp TGA (BGRA) named uv_atlas.tga.
     const std::string atlas_tga_rel = "uv_atlas.tga";
-    const std::string atlas_tga_path = (std::filesystem::path(out_dir_utf8) / atlas_tga_rel).u8string();
+    const std::string atlas_tga_path = (std::filesystem::path(out_dir_utf8) / atlas_tga_rel).string();
     {
         // TGA header.
         uint8_t hdr[18];
@@ -3456,7 +4287,7 @@ bool SubstrateManager::export_object_bundle(uint64_t object_id_u64,
 
     // Universal export: write FBX using Assimp, using the shell mesh and atlas texture.
     // This makes exported assets portable while keeping the substrate-native UV atlas variables.
-    const std::string fbx_path = (std::filesystem::path(out_dir_utf8) / "mesh_shell.fbx").u8string();
+    const std::string fbx_path = (std::filesystem::path(out_dir_utf8) / "mesh_shell.fbx").string();
     {
         std::string repx;
         if (!genesis::assimp_export_ewmesh_v1_single_material(shell, fbx_path, "fbx", atlas_tga_rel, &repx)) {
@@ -3466,7 +4297,7 @@ bool SubstrateManager::export_object_bundle(uint64_t object_id_u64,
         }
         if (out_report_utf8) out_report_utf8->append(repx);
     }
-    const std::string atlas_meta_path = (std::filesystem::path(out_dir_utf8) / "uv_atlas.json").u8string();
+    const std::string atlas_meta_path = (std::filesystem::path(out_dir_utf8) / "uv_atlas.json").string();
     {
         std::ofstream f(atlas_meta_path, std::ios::binary);
         if (!f) { rep("EXPORT:write_uv_meta_failed"); return false; }
@@ -3485,7 +4316,7 @@ bool SubstrateManager::export_object_bundle(uint64_t object_id_u64,
 
     // Material animation: single keyframe (deterministic baseline).
     // When deformation clips are later recorded, this file extends to a sequence.
-    const std::string mat_anim_path = (std::filesystem::path(out_dir_utf8) / "material_anim.json").u8string();
+    const std::string mat_anim_path = (std::filesystem::path(out_dir_utf8) / "material_anim.json").string();
     {
         // Derive a stable emissive scalar from mean density.
         uint64_t sum = 0;
@@ -3502,7 +4333,7 @@ bool SubstrateManager::export_object_bundle(uint64_t object_id_u64,
         f << "}\n";
     }
 
-    const std::string manifest_path = (std::filesystem::path(out_dir_utf8) / "export_manifest.json").u8string();
+    const std::string manifest_path = (std::filesystem::path(out_dir_utf8) / "export_manifest.json").string();
     {
         std::ofstream f(manifest_path, std::ios::binary);
         if (!f) { rep("EXPORT:write_manifest_failed"); return false; }
@@ -4284,10 +5115,14 @@ bool SubstrateManager::language_bootstrap_from_dir(const std::string& root_dir_u
     auto enqueue_kind = [&](genesis::MetricKind k) {
         const genesis::MetricVector mv = language_foundation.metrics_for_kind(k);
         if (mv.dim_u32 == 0) return;
-        // Require non-zero evidence.
+        // For SpeechBoot gates, we enqueue even if the current state fails (so the failure is observable).
+        const bool is_speech_gate = (k == genesis::MetricKind::Lang_SpeechBoot_VocabSize) ||
+                                   (k == genesis::MetricKind::Lang_SpeechBoot_SplitStability) ||
+                                   (k == genesis::MetricKind::Lang_SpeechBoot_IntentParsePass);
+        // Require non-zero evidence for non-gate stats.
         bool any_nonzero = false;
         for (uint32_t i = 0; i < mv.dim_u32; ++i) if (mv.v_q32_32[i] != 0) { any_nonzero = true; break; }
-        if (!any_nonzero) return;
+        if (!any_nonzero && !is_speech_gate) return;
         genesis::MetricTask task = language_foundation.make_task_for_kind(k, src_id, src_anchor, ctx_anchor);
         learning_gate.registry().enqueue_task(task);
     };
@@ -4296,6 +5131,9 @@ bool SubstrateManager::language_bootstrap_from_dir(const std::string& root_dir_u
     enqueue_kind(genesis::MetricKind::Lang_Thesaurus_RelationStats);
     enqueue_kind(genesis::MetricKind::Lang_Encyclopedia_ConceptStats);
     enqueue_kind(genesis::MetricKind::Lang_SpeechCorpus_AlignmentStats);
+    enqueue_kind(genesis::MetricKind::Lang_SpeechBoot_VocabSize);
+    enqueue_kind(genesis::MetricKind::Lang_SpeechBoot_SplitStability);
+    enqueue_kind(genesis::MetricKind::Lang_SpeechBoot_IntentParsePass);
 
     if (ui_out_q.size() < UI_OUT_CAP) ui_out_q.push_back("LANG_BOOTSTRAP:CHECKPOINTS_ENQUEUED");
 
@@ -4321,9 +5159,10 @@ bool SubstrateManager::language_bootstrap_from_dir(const std::string& root_dir_u
             auto enqueue_mk = [&](genesis::MetricKind k) {
                 const genesis::MetricVector mv = math_foundation.metrics_for_kind(k);
                 if (mv.dim_u32 == 0) return;
+                const bool is_khan_gate = (k == genesis::MetricKind::Math_KhanAcademy_CoverageStats);
                 bool any_nonzero = false;
                 for (uint32_t i = 0; i < mv.dim_u32; ++i) if (mv.v_q32_32[i] != 0) { any_nonzero = true; break; }
-                if (!any_nonzero) return;
+                if (!any_nonzero && !is_khan_gate) return;
                 genesis::MetricTask task = math_foundation.make_task_for_kind(k, 0x4D4154485F425354ULL /*'MATH_BST'*/, 0u, 0u);
                 learning_gate.registry().enqueue_task(task);
             };
@@ -4361,6 +5200,22 @@ Basis9 SubstrateManager::projected_for(const Anchor& a) const {
 
 static inline uint32_t ew_read_u32_le(const uint8_t* p) {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+static inline void ge_wr_u32_le(uint8_t* b, uint32_t off, uint32_t v) {
+    b[off + 0u] = (uint8_t)(v & 0xFFu);
+    b[off + 1u] = (uint8_t)((v >> 8) & 0xFFu);
+    b[off + 2u] = (uint8_t)((v >> 16) & 0xFFu);
+    b[off + 3u] = (uint8_t)((v >> 24) & 0xFFu);
+}
+
+static inline void ge_wr_i32_le(uint8_t* b, uint32_t off, int32_t v) {
+    ge_wr_u32_le(b, off, (uint32_t)v);
+}
+
+static inline void ge_wr_u64_le(uint8_t* b, uint32_t off, uint64_t v) {
+    ge_wr_u32_le(b, off + 0u, (uint32_t)(v & 0xFFFFFFFFULL));
+    ge_wr_u32_le(b, off + 4u, (uint32_t)((v >> 32) & 0xFFFFFFFFULL));
 }
 
 static inline int64_t ew_read_i64_le(const uint8_t* p) {
@@ -5020,6 +5875,78 @@ static inline void ew_execute_operator_packets_v1(SubstrateManager* sm) {
             return;
         }
 
+
+
+        if (subop == 6u) {
+            // AI config apply: validate + mutate inside substrate.
+            if (sm->pending_ai_config_set.valid_u32 == 0u) return;
+            const auto req = sm->pending_ai_config_set;
+            sm->pending_ai_config_set.valid_u32 = 0u;
+
+            EwAiConfigAnchorState* cfg = sm->ai_config_state_mut();
+            if (!cfg) return;
+
+            auto clamp_u32 = [&](uint32_t v, uint32_t lo, uint32_t hi)->uint32_t {
+                if (v < lo) return lo;
+                if (v > hi) return hi;
+                return v;
+            };
+            auto clamp_u64 = [&](uint64_t v, uint64_t lo, uint64_t hi)->uint64_t {
+                if (v < lo) return lo;
+                if (v > hi) return hi;
+                return v;
+            };
+
+            const uint64_t u = (req.value_s64 < 0) ? 0ull : (uint64_t)req.value_s64;
+
+            if (req.field_u32 == EW_AI_CFG_FIELD_RESONANCE_GATE_Q15) {
+                const uint32_t q = clamp_u32((uint32_t)u, 0u, 32768u);
+                cfg->resonance_gate_q15 = (uint16_t)q;
+            } else if (req.field_u32 == EW_AI_CFG_FIELD_METRIC_TOL_NUM_U32) {
+                cfg->metric_tol_num_u32 = clamp_u32((uint32_t)u, 0u, 1000000u);
+            } else if (req.field_u32 == EW_AI_CFG_FIELD_METRIC_TOL_DEN_U32) {
+                const uint32_t den = clamp_u32((uint32_t)u, 1u, 1000000u);
+                cfg->metric_tol_den_u32 = den;
+            } else if (req.field_u32 == EW_AI_CFG_FIELD_MAX_METRIC_TASKS_PER_TICK_U32) {
+                cfg->max_metric_tasks_per_tick_u32 = clamp_u32((uint32_t)u, 1u, 64u);
+            } else if (req.field_u32 == EW_AI_CFG_FIELD_EPHEMERAL_TTL_TICKS_U64) {
+                // Bound TTL to a sane range: 0..~30 days at 360Hz.
+                const uint64_t hi = 360ull * 3600ull * 24ull * 30ull;
+                cfg->ephemeral_ttl_ticks_u64 = clamp_u64(u, 0ull, hi);
+            } else if (req.field_u32 == EW_AI_CFG_FIELD_EPHEMERAL_GC_STRIDE_TICKS_U32) {
+                cfg->ephemeral_gc_stride_ticks_u32 = clamp_u32((uint32_t)u, 1u, 360000u);
+            } else if (req.field_u32 == EW_AI_CFG_FIELD_MAX_EPHEMERAL_COUNT_U32) {
+                cfg->max_ephemeral_count_u32 = clamp_u32((uint32_t)u, 0u, 8192u);
+            } else if (req.field_u32 == EW_AI_CFG_FIELD_CRAWL_BUDGET_BYTES_PER_TICK_U32) {
+                cfg->crawl_budget_bytes_per_tick_u32 = clamp_u32((uint32_t)u, 4096u, 8u * 1024u * 1024u);
+            } else if (req.field_u32 == EW_AI_CFG_FIELD_CRAWLER_MAX_PULSES_PER_TICK_U32) {
+                cfg->crawler_max_pulses_per_tick_u32 = clamp_u32((uint32_t)u, 1u, 4096u);
+            } else if (req.field_u32 == EW_AI_CFG_FIELD_SIM_SYNTH_BUDGET_WORK_UNITS_PER_TICK_U32) {
+                cfg->sim_synth_budget_work_units_per_tick_u32 = clamp_u32((uint32_t)u, 0u, 100000000u);
+            } else if (req.field_u32 == EW_AI_CFG_FIELD_MAX_METRIC_CLAIMS_PER_PAGE_U32) {
+                cfg->max_metric_claims_per_page_u32 = clamp_u32((uint32_t)u, 0u, 64u);
+            } else if (req.field_u32 == EW_AI_CFG_FIELD_METRIC_CLAIM_TEXT_CAP_BYTES_U32) {
+                cfg->metric_claim_text_cap_bytes_u32 = clamp_u32((uint32_t)u, 256u, 131072u);
+} else if (req.field_u32 == EW_AI_CFG_FIELD_REPO_READER_ENABLED_U32) {
+    cfg->repo_reader_enabled_u32 = (uint32_t)req.value_u64;
+} else if (req.field_u32 == EW_AI_CFG_FIELD_REPO_READER_FILES_PER_TICK_U32) {
+    cfg->repo_reader_files_per_tick_u32 = (uint32_t)req.value_u64;
+} else if (req.field_u32 == EW_AI_CFG_FIELD_REPO_READER_BYTES_PER_FILE_U32) {
+    cfg->repo_reader_bytes_per_file_u32 = (uint32_t)req.value_u64;
+} else if (req.field_u32 == EW_AI_CFG_FIELD_AI_EVENT_LOG_ENABLED_U32) {
+    cfg->ai_event_log_enabled_u32 = (uint32_t)(req.value_u64 ? 1ull : 0ull);
+            } else {
+                return; // unknown field: ignore
+            }
+
+            // Mirror into the substrate single-source knobs.
+            sm->ingest_max_bytes_per_tick_u32 = cfg->crawl_budget_bytes_per_tick_u32;
+            sm->crawler_max_pulses_per_tick_u32 = cfg->crawler_max_pulses_per_tick_u32;
+
+            sm->emit_ui_line(std::string("AI_CFG_APPLIED field=") + std::to_string(req.field_u32) +
+                             " value=" + std::to_string((unsigned long long)u));
+            return;
+        }
         if (subop == 3u) {
             // Input mapping effects: raw OS/event codes -> anchor mutation.
             if (!cam_ptr) return;
@@ -5220,6 +6147,11 @@ static inline void ew_execute_operator_packets_v1(SubstrateManager* sm) {
 void SubstrateManager::tick() {
     const uint64_t prev_tick_u64 = canonical_tick;
 
+    // AI vault is runtime state. Initialize early so UI can show counts even
+    // before the first accepted metric commit.
+    ai_vault.init_once(this);
+    ai_vault.tick_gc(this);
+
     // ------------------------------------------------------------------
     // Compute-bus submission helper (carrier-coded payload marker)
     // ------------------------------------------------------------------
@@ -5239,27 +6171,25 @@ void SubstrateManager::tick() {
             return; // fail closed deterministically
         }
 
-        // Map to 4 freq components and collapse.
-        EwFrequencyComponentQ32_32 fc[4];
-        fc[0].f_hz_q32_32 = (int64_t)sc.f_code * (1LL<<16);
-        fc[0].A_q32_32 = (int64_t)sc.a_code * (1LL<<16);
-        fc[0].phi_turns_q32_32 = (int64_t)sc.v_code * (1LL<<16);
-        fc[0].count_u32 = 1;
-        fc[1].f_hz_q32_32 = (int64_t)sc.v_code * (1LL<<16);
-        fc[1].A_q32_32 = (int64_t)sc.i_code * (1LL<<16);
-        fc[1].phi_turns_q32_32 = (int64_t)sc.f_code * (1LL<<16);
-        fc[1].count_u32 = 1;
-        fc[2].f_hz_q32_32 = (int64_t)sc.i_code * (1LL<<16);
-        fc[2].A_q32_32 = (int64_t)sc.f_code * (1LL<<16);
-        fc[2].phi_turns_q32_32 = (int64_t)sc.a_code * (1LL<<16);
-        fc[2].count_u32 = 1;
-        fc[3].f_hz_q32_32 = (int64_t)sc.a_code * (1LL<<16);
-        fc[3].A_q32_32 = (int64_t)sc.v_code * (1LL<<16);
-        fc[3].phi_turns_q32_32 = (int64_t)sc.i_code * (1LL<<16);
-        fc[3].count_u32 = 1;
+        // Collapse SpiderCode4 into a deterministic carrier.
+        std::vector<EwFreqComponentQ32_32> comps;
+        comps.reserve(4);
+        auto push_comp = [&](int32_t f_code, int32_t a_code, int32_t phi_code) {
+            EwFreqComponentQ32_32 c;
+            c.f_turns_q32_32 = int64_t(f_code) << 16;
+            c.a_q32_32 = (int64_t(a_code) << 16);
+            c.phi_turns_q32_32 = int64_t(phi_code) << 16;
+            comps.push_back(c);
+        };
+        push_comp(sc.f_code, (int32_t)sc.a_code, (int32_t)sc.v_code);
+        push_comp((int32_t)sc.a_code, (int32_t)sc.v_code, (int32_t)sc.i_code);
+        push_comp((int32_t)sc.v_code, (int32_t)sc.i_code, sc.f_code);
+        push_comp((int32_t)sc.i_code, sc.f_code, (int32_t)sc.a_code);
 
         EwCarrierWaveQ32_32 carrier{};
-        ew_collapse_frequency_components_q32_32(fc, 4, &carrier);
+        if (!ew_collapse_frequency_components_q32_32(comps, carrier)) {
+            return; // fail closed deterministically
+        }
 
         uint8_t payload72[72];
         for (int i=0;i<72;++i) payload72[i]=0;
@@ -5290,7 +6220,7 @@ void SubstrateManager::tick() {
         boundary_scale_q32_32 = sim_snapshot.boundary_scale_q32_32;
         anchors = sim_snapshot.anchors;
         ancilla = sim_snapshot.ancilla;
-        nbody = sim_snapshot.nbody_state;
+        nbody_state = sim_snapshot.nbody_state;
         lanes = sim_snapshot.lanes;
         object_store = sim_snapshot.object_store;
         materials_calib_done = sim_snapshot.materials_calib_done;
@@ -5365,6 +6295,43 @@ void SubstrateManager::tick() {
                 pending_binding_set.mapped_u32 = p.payload.binding_set.mapped_u32;
                 pending_binding_set.scale_q16_16 = p.payload.binding_set.scale_q16_16;
                 submit_compute_bus(4u, canonical_tick);
+            } else if (p.kind == EwControlPacketKind::SimSetPlay) {
+                // World-play toggle: gates world evolution only.
+                sim_world_play_u32 = (p.payload.sim_set_play.enabled_u8 != 0u) ? 1u : 0u;
+                emit_ui_line(sim_world_play_u32 ? "SIM_PLAY:ON" : "SIM_PLAY:OFF");
+            } else if (p.kind == EwControlPacketKind::AiSetEnabled) {
+                ai_enabled_u32 = (p.payload.ai_set_enabled.enabled_u8 != 0u) ? 1u : 0u;
+                emit_ui_line(ai_enabled_u32 ? "AI:ON" : "AI:OFF");
+            } else if (p.kind == EwControlPacketKind::AiSetLearning) {
+                const uint32_t prev = ai_learning_enabled_u32;
+                ai_learning_enabled_u32 = (p.payload.ai_set_learning.enabled_u8 != 0u) ? 1u : 0u;
+                emit_ui_line(ai_learning_enabled_u32 ? "AI_LEARNING:ON" : "AI_LEARNING:OFF");
+
+                // Speech/vocabulary boot is required before any autonomous crawl.
+                if (ai_learning_enabled_u32 != 0u && prev == 0u) {
+                    if (!language_bootstrapped_u32) {
+                        (void)language_bootstrap_from_dir("GenesisEngineState");
+                        language_bootstrapped_u32 = true;
+                    }
+                }
+            } else if (p.kind == EwControlPacketKind::AiSetCrawling) {
+                ai_crawling_enabled_u32 = (p.payload.ai_set_crawling.enabled_u8 != 0u) ? 1u : 0u;
+                // Explicit UI toggle counts as consent for live crawling.
+                if (ai_crawling_enabled_u32 != 0u) {
+                    crawler_enable_live_u32 = 1u;
+                    crawler_live_consent_required_u32 = 0u;
+                } else {
+                    crawler_enable_live_u32 = 0u;
+                }
+                emit_ui_line(ai_crawling_enabled_u32 ? "AI_CRAWLING:ON" : "AI_CRAWLING:OFF");
+            } else if (p.kind == EwControlPacketKind::AiConfigSet) {
+                // Stage AI config change and apply via compute-bus (replayable + fingerprinted).
+                pending_ai_config_set.valid_u32 = 1u;
+                pending_ai_config_set.tick_u64 = canonical_tick;
+                pending_ai_config_set.source_u16 = p.source_u16;
+                pending_ai_config_set.field_u32 = p.payload.ai_config_set.field_u32;
+                pending_ai_config_set.value_s64 = p.payload.ai_config_set.value_s64;
+                submit_compute_bus(6u, canonical_tick);
             } else if (p.kind == EwControlPacketKind::InputBindingsReload) {
                 // Reload from file is a projection/I/O step, not computation.
                 input_bindings_loaded = false;
@@ -5395,7 +6362,7 @@ void SubstrateManager::tick() {
                 if (found < anchors.size()) {
                     Anchor& a = anchors[found];
                     for (int i = 0; i < 3; ++i) a.object_state.pos_q16_16[i] = p.payload.object_register.pos_q16_16[i];
-                    for (int i = 0; i < 4; ++i) a.object_state.rot_q16_16[i] = p.payload.object_register.rot_quat_q16_16[i];
+                    for (int i = 0; i < 4; ++i) a.object_state.rot_quat_q16_16[i] = p.payload.object_register.rot_quat_q16_16[i];
                 }
             } else if (p.kind == EwControlPacketKind::ObjectSetTransform) {
                 const uint64_t obj_id = p.payload.object_xform.object_id_u64;
@@ -5403,63 +6370,14 @@ void SubstrateManager::tick() {
                     if (anchors[ai].kind_u32 == EW_ANCHOR_KIND_OBJECT && anchors[ai].object_id_u64 == obj_id) {
                         Anchor& a = anchors[ai];
                         for (int i = 0; i < 3; ++i) a.object_state.pos_q16_16[i] = p.payload.object_xform.pos_q16_16[i];
-                        for (int i = 0; i < 4; ++i) a.object_state.rot_q16_16[i] = p.payload.object_xform.rot_quat_q16_16[i];
+                        for (int i = 0; i < 4; ++i) a.object_state.rot_quat_q16_16[i] = p.payload.object_xform.rot_quat_q16_16[i];
                         break;
                     }
                 }
-            } else if (p.kind == EwControlPacketKind::EditorSetSelection ||
-                       p.kind == EwControlPacketKind::EditorToggleSelection ||
-                       p.kind == EwControlPacketKind::EditorSetGizmo ||
-                       p.kind == EwControlPacketKind::EditorSetSnap ||
-                       p.kind == EwControlPacketKind::EditorSetAxisConstraint ||
-                       p.kind == EwControlPacketKind::EditorCommitTransformTxn ||
-                       p.kind == EwControlPacketKind::EditorUndo ||
-                       p.kind == EwControlPacketKind::EditorRedo) {
-                // Editor interaction contract lives in substrate as an editor anchor.
-                // This is authoritative for selection/gizmo/snap settings.
-                const uint64_t kEditorObjectId = 0x315F524F54494445ULL; // 'EDITOR_1' little-endian
-
-                uint32_t editor_anchor_id = 0u;
-                bool editor_anchor_found = false;
-                for (uint32_t i = 0u; i < (uint32_t)anchors.size(); ++i) {
-                    if (anchors[i].kind_u32 == EW_ANCHOR_KIND_EDITOR && anchors[i].object_id_u64 == kEditorObjectId) {
-                        editor_anchor_id = i;
-                        editor_anchor_found = true;
-                        break;
-                    }
-                }
-                if (!editor_anchor_found) {
-                    Anchor a(next_anchor_id_u32);
-                    a.kind_u32 = EW_ANCHOR_KIND_EDITOR;
-                    a.object_id_u64 = kEditorObjectId;
-                    // Payload already zeroed in constructor.
-                    anchors.push_back(a);
-                    next_anchor_id_u32 = (uint32_t)anchors.size();
-                    const uint32_t need = (uint32_t)anchors.size();
-                    if (redirect_to.size() < need) redirect_to.resize(need, 0u);
-                    if (split_child_a.size() < need) split_child_a.resize(need, 0u);
-                    if (split_child_b.size() < need) split_child_b.resize(need, 0u);
-                    editor_anchor_id = (uint32_t)anchors.size() - 1u;
-                }
-
-                if (editor_anchor_id < anchors.size()) {
-                    Anchor& ed = anchors[editor_anchor_id];
-                    if (ed.kind_u32 == EW_ANCHOR_KIND_EDITOR) {
-                        
-if (p.kind == EwControlPacketKind::EditorSetSelection) {
-    const uint64_t oid = p.payload.editor_set_selection.selected_object_id_u64;
-    ed.editor_state.selected_object_id_u64 = oid;
-    // Replace selection list with [oid] (or clear if oid==0).
-    ed.editor_state.selection_count_u32 = 0u;
-    for (uint32_t k = 0u; k < EW_EDITOR_MAX_SELECTION; ++k) ed.editor_state.selection_object_id_u64[k] = 0u;
-    if (oid != 0u) {
-        ed.editor_state.selection_object_id_u64[0] = oid;
-        ed.editor_state.selection_count_u32 = 1u;
-    }
-
-} else if (p.kind == EwControlPacketKind::PlanetRegister) {
+            } else if (p.kind == EwControlPacketKind::PlanetRegister) {
                 const uint64_t obj_id = p.payload.planet_register.object_id_u64;
                 const uint64_t parent_obj_id = p.payload.planet_register.parent_object_id_u64;
+
                 uint32_t found = 0u;
                 for (uint32_t ai = 1u; ai < (uint32_t)anchors.size(); ++ai) {
                     if (anchors[ai].kind_u32 == EW_ANCHOR_KIND_PLANET && anchors[ai].object_id_u64 == obj_id) {
@@ -5506,30 +6424,234 @@ if (p.kind == EwControlPacketKind::EditorSetSelection) {
                     ps.atmosphere_thickness_m_q16_16 = p.payload.planet_register.atmosphere_thickness_m_q16_16;
                     ps.emissive_q16_16 = p.payload.planet_register.emissive_q16_16;
                 }
+
+            } else if (p.kind == EwControlPacketKind::EditorSetSelection ||
+                       p.kind == EwControlPacketKind::EditorToggleSelection ||
+                       p.kind == EwControlPacketKind::EditorSetGizmo ||
+                       p.kind == EwControlPacketKind::EditorSetSnap ||
+                       p.kind == EwControlPacketKind::EditorSetAxisConstraint ||
+                       p.kind == EwControlPacketKind::EditorCommitTransformTxn ||
+                       p.kind == EwControlPacketKind::EditorUndo ||
+                       p.kind == EwControlPacketKind::EditorRedo) {
+                // Editor interaction contract lives in substrate as an editor anchor.
+                // This is authoritative for selection/gizmo/snap settings.
+                const uint64_t kEditorObjectId = 0x315F524F54494445ULL; // 'EDITOR_1' little-endian
+
+                uint32_t editor_anchor_id = 0u;
+                for (uint32_t i = 0u; i < (uint32_t)anchors.size(); ++i) {
+                    if (anchors[i].kind_u32 == EW_ANCHOR_KIND_EDITOR && anchors[i].object_id_u64 == kEditorObjectId) {
+                        editor_anchor_id = i;
+                        break;
+                    }
+                }
+                if (editor_anchor_id == 0u) {
+                    Anchor a(next_anchor_id_u32);
+                    a.kind_u32 = EW_ANCHOR_KIND_EDITOR;
+                    a.object_id_u64 = kEditorObjectId;
+                    anchors.push_back(a);
+                    next_anchor_id_u32 = (uint32_t)anchors.size();
+                    const uint32_t need = (uint32_t)anchors.size();
+                    if (redirect_to.size() < need) redirect_to.resize(need, 0u);
+                    if (split_child_a.size() < need) split_child_a.resize(need, 0u);
+                    if (split_child_b.size() < need) split_child_b.resize(need, 0u);
+                    editor_anchor_id = (uint32_t)anchors.size() - 1u;
+                }
+
+                if (editor_anchor_id < anchors.size()) {
+                    Anchor& ed = anchors[editor_anchor_id];
+                    if (ed.kind_u32 == EW_ANCHOR_KIND_EDITOR) {
+
+                        auto find_object_anchor = [&](uint64_t object_id_u64) -> uint32_t {
+                            for (uint32_t ai = 1u; ai < (uint32_t)anchors.size(); ++ai) {
+                                if (anchors[ai].kind_u32 == EW_ANCHOR_KIND_OBJECT && anchors[ai].object_id_u64 == object_id_u64) return ai;
+                            }
+                            return 0u;
+                        };
+
+                        auto apply_object_transform = [&](uint64_t object_id_u64,
+                                                          const int32_t pos_q16_16[3],
+                                                          const int32_t rot_q16_16[4]) {
+                            const uint32_t aid = find_object_anchor(object_id_u64);
+                            if (aid == 0u) return;
+                            Anchor& a = anchors[aid];
+                            for (int i = 0; i < 3; ++i) a.object_state.pos_q16_16[i] = pos_q16_16[i];
+                            for (int i = 0; i < 4; ++i) a.object_state.rot_quat_q16_16[i] = rot_q16_16[i];
+                        };
+
+                        auto push_txn = [&](EwEditorTransformTxn* stack, uint32_t& count_u32, const EwEditorTransformTxn& t) {
+                            if (count_u32 < EW_EDITOR_UNDO_DEPTH) {
+                                stack[count_u32++] = t;
+                            } else {
+                                // Drop oldest deterministically.
+                                for (uint32_t i = 1u; i < EW_EDITOR_UNDO_DEPTH; ++i) stack[i - 1u] = stack[i];
+                                stack[EW_EDITOR_UNDO_DEPTH - 1u] = t;
+                                count_u32 = EW_EDITOR_UNDO_DEPTH;
+                            }
+                        };
+
+                        if (p.kind == EwControlPacketKind::EditorSetSelection) {
+                            const uint64_t oid = p.payload.editor_set_selection.selected_object_id_u64;
+                            ed.editor_state.selected_object_id_u64 = oid;
+
+                            // Replace selection list with [oid] (or clear if oid==0).
+                            ed.editor_state.selection_count_u32 = 0u;
+                            for (uint32_t k = 0u; k < EW_EDITOR_MAX_SELECTION; ++k) ed.editor_state.selection_object_id_u64[k] = 0u;
+                            if (oid != 0u) {
+                                ed.editor_state.selection_object_id_u64[0] = oid;
+                                ed.editor_state.selection_count_u32 = 1u;
+                            }
+
+                        } else if (p.kind == EwControlPacketKind::EditorToggleSelection) {
+                            const uint64_t oid = p.payload.editor_toggle_selection.object_id_u64;
+                            if (oid == 0u) {
+                                // Clear selection deterministically.
+                                ed.editor_state.selected_object_id_u64 = 0u;
+                                ed.editor_state.selection_count_u32 = 0u;
+                                for (uint32_t k = 0u; k < EW_EDITOR_MAX_SELECTION; ++k) ed.editor_state.selection_object_id_u64[k] = 0u;
+                            } else {
+                                // If already selected, remove; else add to end (bounded).
+                                bool found = false;
+                                uint32_t at = 0u;
+                                for (uint32_t i = 0u; i < ed.editor_state.selection_count_u32; ++i) {
+                                    if (ed.editor_state.selection_object_id_u64[i] == oid) { found = true; at = i; break; }
+                                }
+                                if (found) {
+                                    for (uint32_t i = at + 1u; i < ed.editor_state.selection_count_u32; ++i) {
+                                        ed.editor_state.selection_object_id_u64[i - 1u] = ed.editor_state.selection_object_id_u64[i];
+                                    }
+                                    if (ed.editor_state.selection_count_u32 > 0u) ed.editor_state.selection_count_u32 -= 1u;
+                                    if (ed.editor_state.selection_count_u32 == 0u) ed.editor_state.selected_object_id_u64 = 0u;
+                                    else ed.editor_state.selected_object_id_u64 = ed.editor_state.selection_object_id_u64[ed.editor_state.selection_count_u32 - 1u];
+                                } else {
+                                    if (ed.editor_state.selection_count_u32 < EW_EDITOR_MAX_SELECTION) {
+                                        ed.editor_state.selection_object_id_u64[ed.editor_state.selection_count_u32++] = oid;
+                                    } else {
+                                        // Drop oldest deterministically.
+                                        for (uint32_t i = 1u; i < EW_EDITOR_MAX_SELECTION; ++i) ed.editor_state.selection_object_id_u64[i - 1u] = ed.editor_state.selection_object_id_u64[i];
+                                        ed.editor_state.selection_object_id_u64[EW_EDITOR_MAX_SELECTION - 1u] = oid;
+                                        ed.editor_state.selection_count_u32 = EW_EDITOR_MAX_SELECTION;
+                                    }
+                                    ed.editor_state.selected_object_id_u64 = oid;
+                                }
+                            }
+
+                        } else if (p.kind == EwControlPacketKind::EditorSetGizmo) {
+                            ed.editor_state.gizmo_mode_u8 = p.payload.editor_set_gizmo.gizmo_mode_u8;
+                            ed.editor_state.gizmo_space_u8 = p.payload.editor_set_gizmo.gizmo_space_u8;
+
+                        } else if (p.kind == EwControlPacketKind::EditorSetSnap) {
+                            ed.editor_state.snap_enabled_u8 = p.payload.editor_set_snap.snap_enabled_u8;
+                            ed.editor_state.grid_step_m_q16_16 = p.payload.editor_set_snap.grid_step_m_q16_16;
+                            ed.editor_state.angle_step_deg_q16_16 = p.payload.editor_set_snap.angle_step_deg_q16_16;
+
+                        } else if (p.kind == EwControlPacketKind::EditorSetAxisConstraint) {
+                            ed.editor_state.axis_constraint_u8 = p.payload.editor_set_axis_constraint.axis_constraint_u8;
+
+                        } else if (p.kind == EwControlPacketKind::EditorCommitTransformTxn) {
+                            EwEditorTransformTxn tx{};
+                            tx.object_id_u64 = p.payload.editor_commit_transform_txn.object_id_u64;
+                            for (int i = 0; i < 3; ++i) tx.before_pos_q16_16[i] = p.payload.editor_commit_transform_txn.before_pos_q16_16[i];
+                            for (int i = 0; i < 4; ++i) tx.before_rot_q16_16[i] = p.payload.editor_commit_transform_txn.before_rot_q16_16[i];
+                            for (int i = 0; i < 3; ++i) tx.after_pos_q16_16[i] = p.payload.editor_commit_transform_txn.after_pos_q16_16[i];
+                            for (int i = 0; i < 4; ++i) tx.after_rot_q16_16[i] = p.payload.editor_commit_transform_txn.after_rot_q16_16[i];
+
+                            push_txn(ed.editor_state.undo_stack, ed.editor_state.undo_count_u32, tx);
+                            ed.editor_state.redo_count_u32 = 0u; // clear redo on new commit
+
+                        } else if (p.kind == EwControlPacketKind::EditorUndo) {
+                            if (ed.editor_state.undo_count_u32 > 0u) {
+                                const uint32_t idx = ed.editor_state.undo_count_u32 - 1u;
+                                const EwEditorTransformTxn tx = ed.editor_state.undo_stack[idx];
+                                ed.editor_state.undo_count_u32 = idx;
+
+                                apply_object_transform(tx.object_id_u64, tx.before_pos_q16_16, tx.before_rot_q16_16);
+                                push_txn(ed.editor_state.redo_stack, ed.editor_state.redo_count_u32, tx);
+                            }
+
+                        } else if (p.kind == EwControlPacketKind::EditorRedo) {
+                            if (ed.editor_state.redo_count_u32 > 0u) {
+                                const uint32_t idx = ed.editor_state.redo_count_u32 - 1u;
+                                const EwEditorTransformTxn tx = ed.editor_state.redo_stack[idx];
+                                ed.editor_state.redo_count_u32 = idx;
+
+                                apply_object_transform(tx.object_id_u64, tx.after_pos_q16_16, tx.after_rot_q16_16);
+                                push_txn(ed.editor_state.undo_stack, ed.editor_state.undo_count_u32, tx);
+                            }
+                        }
+                    }
+                }
             }
         }
     }
 
+
+
     // Planet ancilla update (cosmological bodies). Must run inside substrate.
     // Canonical N-body update (celestial dynamics) projected into planet anchors.
-    genesis::ew_nbody_tick(this);
-
-    genesis::ew_tick_planet_ancilla(this);
-    // Optional live crawler: emits observations into crawler queue (http-only).
-    if (crawler_enable_live_u32 != 0u && crawler_live_consent_required_u32 == 0u) {
-        live_crawler.enabled = true;
-        live_crawler.consent_granted = true;
+    // World-play gates evolution; substrate microprocessor still ticks.
+    if (sim_world_play_u32 != 0u) {
+        genesis::ew_nbody_tick(this);
+        genesis::ew_tick_planet_ancilla(this);
     }
-    live_crawler.tick(this, domain_policies, &rate_limiter);
+    // Optional live crawler: emits observations into crawler queue (http-only).
+    // Crawling is explicitly gated by AI enable + crawl toggle, and hard-gated by SpeechBoot completion.
+    if (ai_enabled_u32 != 0u && ai_crawling_enabled_u32 != 0u) {
+        if (!speech_boot_done()) {
+            if ((canonical_tick_u64() % 360u) == 0u) emit_ui_line("CRAWL_BLOCKED:SPEECH_BOOT");
+        } else {
+// RepoReaderAdapter: deterministic self-reading corpus source (opt-in; stage-gated).
+const EwAiConfigAnchorState* cfg_repo = ai_config_state();
+if (cfg_repo != nullptr && cfg_repo->repo_reader_enabled_u32 != 0u) {
+    if (curriculum_stage_u32 < 1u) {
+        if ((canonical_tick_u64() % 360u) == 0u) emit_ui_line("REPO_READER_BLOCKED:STAGE");
+        repo_reader.enabled = false;
+    } else {
+        repo_reader.enabled = true;
+        repo_reader.tick(this, cfg_repo->repo_reader_files_per_tick_u32, cfg_repo->repo_reader_bytes_per_file_u32);
+    }
+} else {
+// RepoReaderAdapter can run without live crawling. If enabled, we tick the crawler
+// to process repo observations even when ai_crawling_enabled_u32 == 0.
+if (ai_enabled_u32 != 0u && ai_learning_enabled_u32 != 0u && ai_crawling_enabled_u32 == 0u) {
+    const EwAiConfigAnchorState* cfg_repo = ai_config_state();
+    if (cfg_repo != nullptr && cfg_repo->repo_reader_enabled_u32 != 0u) {
+        if (!speech_boot_done()) {
+            if ((canonical_tick_u64() % 360u) == 0u) emit_ui_line("REPO_READER_BLOCKED:SPEECH_BOOT");
+            repo_reader.enabled = false;
+        } else if (curriculum_stage_u32 < 1u) {
+            if ((canonical_tick_u64() % 360u) == 0u) emit_ui_line("REPO_READER_BLOCKED:STAGE");
+            repo_reader.enabled = false;
+        } else {
+            repo_reader.enabled = true;
+            repo_reader.tick(this, cfg_repo->repo_reader_files_per_tick_u32, cfg_repo->repo_reader_bytes_per_file_u32);
+            crawler.tick(this);
+        }
+    } else {
+        repo_reader.enabled = false;
+    }
+}
 
-    // Spec Section 5: crawler/encoder run inside the substrate and may
-    // admit pulses into the inbound queue under bounded budget.
-    crawler.tick(this);
+    repo_reader.enabled = false;
+}
 
-    // Stage-0 math foundations run in parallel with language. This loop
-    // generates measurable lattice-based experiments (graphs / precedence
-    // visualization) and updates math checkpoint metrics deterministically.
-    math_foundation.tick(this);
+        if (crawler_enable_live_u32 != 0u && crawler_live_consent_required_u32 == 0u) {
+            live_crawler.enabled = true;
+            live_crawler.consent_granted = true;
+        }
+        live_crawler.tick(this, domain_policies, &rate_limiter);
+
+        // Spec Section 5: crawler/encoder run inside the substrate and may
+        // admit pulses into the inbound queue under bounded budget.
+        crawler.tick(this);
+        }
+    }
+
+    // Stage-0 math foundations run in parallel with language when learning is enabled.
+    if (ai_enabled_u32 != 0u && ai_learning_enabled_u32 != 0u) {
+        // This loop generates measurable lattice-based experiments (graphs / precedence
+        // visualization) and updates math checkpoint metrics deterministically.
+        math_foundation.tick(this);
+    }
 
     // ------------------------------------------------------------------
     // Learning checkpoint gate (honesty gate)
@@ -5538,7 +6660,9 @@ if (p.kind == EwControlPacketKind::EditorSetSelection) {
     // window, without early-stopping at tolerance. Acceptance occurs only
     // at the end of the window if the best fit is within 6%.
     // ------------------------------------------------------------------
-    learning_gate.tick(this);
+    if (ai_enabled_u32 != 0u && ai_learning_enabled_u32 != 0u) {
+        learning_gate.tick(this);
+    }
 
     // ------------------------------------------------------------------
     // Global coherence update (deterministic)
@@ -5550,16 +6674,14 @@ if (p.kind == EwControlPacketKind::EditorSetSelection) {
     //  - experiment/metric acceptance stability (learning gate)
     // ------------------------------------------------------------------
     {
-        // Language coherence: fraction of required stage0 bits completed.
+        // Language coherence: fraction of required stage0 kinds accepted.
         uint16_t lang_q15 = 0;
-        const uint64_t need0 = learning_stage_required_mask_u64[0];
-        const uint64_t have0 = learning_stage_completed_mask_u64[0];
-        if (need0 != 0ULL) {
-            const uint32_t need_cnt = (uint32_t)__builtin_popcountll(need0);
-            const uint32_t have_cnt = (uint32_t)__builtin_popcountll(have0 & need0);
-            if (need_cnt > 0) {
-                lang_q15 = (uint16_t)((int32_t)32768 * (int32_t)have_cnt / (int32_t)need_cnt);
-            }
+        const genesis::EwMask128 need0 = learning_stage_required_mask128[0];
+        const genesis::EwMask128 have0 = genesis::ew_mask128_and(learning_metric_accepted_mask128, need0);
+        const uint32_t need_cnt = genesis::ew_mask128_popcount(need0);
+        const uint32_t have_cnt = genesis::ew_mask128_popcount(have0);
+        if (need_cnt > 0u) {
+            lang_q15 = (uint16_t)((int32_t)32768 * (int32_t)have_cnt / (int32_t)need_cnt);
         }
 
         // Physics coherence: a deterministic availability proxy.
@@ -5629,7 +6751,9 @@ if (p.kind == EwControlPacketKind::EditorSetSelection) {
 
     // Canonical object ancilla update (bounded fan-out) BEFORE physics evolution.
     // This is the only authority path for object registry/coupling updates.
-    genesis::EwObjectAncilla::tick_object_updates(this, 2u);
+    if (sim_world_play_u32 != 0u) {
+        genesis::EwObjectAncilla::tick_object_updates(this, 2u);
+    }
 
     // ------------------------------------------------------------------
     // Curriculum stage advancement (deterministic)
@@ -5646,6 +6770,9 @@ if (p.kind == EwControlPacketKind::EditorSetSelection) {
     //   stage5: Biology (deferred; unlocked after stage4)
     // ------------------------------------------------------------------
     {
+        if (ai_enabled_u32 == 0u || ai_learning_enabled_u32 == 0u) {
+            // Learning paused: do not advance curriculum or consume completed cursor.
+        } else {
         const auto& done = learning_gate.registry().completed();
         while (learning_completed_cursor_u32 < (uint32_t)done.size()) {
             const genesis::MetricTask& t = done[(size_t)learning_completed_cursor_u32++];
@@ -5655,8 +6782,11 @@ if (p.kind == EwControlPacketKind::EditorSetSelection) {
             // Phase-amplitude current: accepted measurable results reinforce region current.
             phase_current.on_activation(genesis::EwPhaseCurrent::footprint_from_metric(canonical_tick, (uint32_t)t.target.kind));
 
+            // Record accepted metric kinds into the exact accepted-mask.
+            genesis::ew_mask128_set_metric(&learning_metric_accepted_mask128, t.target.kind);
+
             // Map accepted metric kind -> curriculum stage bucket deterministically.
-            // Stage buckets align with GENESIS_CURRICULUM_STAGE_COUNT.
+            // Stage buckets align with genesis::GENESIS_CURRICULUM_STAGE_COUNT.
             uint32_t stage_bucket = 0xFFFFFFFFu;
             const uint32_t kid = (uint32_t)t.target.kind;
             if (kid >= 100u && kid < 110u) {
@@ -5671,13 +6801,14 @@ if (p.kind == EwControlPacketKind::EditorSetSelection) {
                 stage_bucket = 4u; // Cosmology/Atmos
             } else if (kid >= 60u && kid < 70u) {
                 stage_bucket = 5u; // Biology
+            } else if (kid >= 70u && kid < 80u) {
+                stage_bucket = 6u; // Game
             }
 
-            if (stage_bucket < GENESIS_CURRICULUM_STAGE_COUNT) {                // Mark the required checkpoint bit for this stage.
-                {
-                    const uint32_t b = ((uint32_t)t.target.kind) & 63u;
-                    learning_stage_completed_mask_u64[stage_bucket] |= (1ULL << b);
-                }
+            // Mark the crawler-topic completion mask for heuristics (u64, id&63).
+            if (stage_bucket < genesis::GENESIS_CURRICULUM_STAGE_COUNT) {
+                const uint32_t b = ((uint32_t)t.target.kind) & 63u;
+                learning_stage_completed_mask_u64[stage_bucket] |= (1ULL << b);
             }
 
             // Materials calibration gate: once we have accepted at least one
@@ -5695,14 +6826,18 @@ if (p.kind == EwControlPacketKind::EditorSetSelection) {
         }
 
         // Advance only forward, never backward.
-        if (learning_curriculum_stage_u32 < 5u) {
+        if ((learning_curriculum_stage_u32 + 1u) < genesis::GENESIS_CURRICULUM_STAGE_COUNT) {
             const uint32_t cur = learning_curriculum_stage_u32;
-            const uint64_t need_mask = learning_stage_required_mask_u64[cur];
-            const uint64_t have_mask = learning_stage_completed_mask_u64[cur];
-            if (need_mask != 0ULL && (have_mask & need_mask) == need_mask) {
+            const genesis::EwMask128 need = learning_stage_required_mask128[cur];
+            const genesis::EwMask128 have = genesis::ew_mask128_and(learning_metric_accepted_mask128, need);
+            if (!genesis::ew_mask128_eq(need, genesis::EwMask128{}) && genesis::ew_mask128_eq(have, need)) {
                 learning_curriculum_stage_u32 = cur + 1u;
                 if (ui_out_q.size() < UI_OUT_CAP) ui_out_q.push_back("CURRICULUM_STAGE_ADVANCE");
             }
+        }
+
+        // Derived visibility for UI/smoke is updated after any accept/advance.
+        update_curriculum_derived_state();
         }
     }
 
@@ -5710,7 +6845,51 @@ if (p.kind == EwControlPacketKind::EditorSetSelection) {
     // Learning automation (artifact-driven, event-based)
     // ------------------------------------------------------------------
     learning_automation.init_once(this);
-    learning_automation.tick(this);
+    if (ai_enabled_u32 != 0u && ai_learning_enabled_u32 != 0u) {
+        learning_automation.tick(this);
+    }
+
+    // ------------------------------------------------------------------
+    // Coarse AI state machine (UI/telemetry only; deterministic)
+    // ------------------------------------------------------------------
+    {
+        uint32_t st = 0u; // IDLE
+        if (ai_enabled_u32 == 0u) {
+            st = 0u;
+        } else if (ai_learning_enabled_u32 == 0u) {
+            st = 0u;
+        } else {
+            // Speech/vocabulary boot is the hard gate.
+            const bool speech_done = speech_boot_done();
+            if (!speech_done) {
+                st = 1u; // SPEECH_BOOT
+            } else {
+                // Validation takes precedence.
+                const uint32_t pending = learning_gate.registry().pending_count_u32();
+                if (pending != 0u) st = 5u; // VALIDATING
+                else {
+                    const bool crawl_busy = (ai_crawling_enabled_u32 != 0u) &&
+                        (!external_api_pending.empty() || !external_api_inflight.empty() || !external_api_ingest_inbox.empty());
+                    st = crawl_busy ? 3u : 2u; // EXPLORING vs LEARNING
+                }
+            }
+        }
+        ai_state_u32 = st;
+    }
+
+    // One-time SpeechBoot completion artifact: write the stable vocabulary into the vault.
+    if (speech_boot_done() && speech_vocab_written_u32 == 0u) {
+        if (language_foundation.has_speechboot_vocab()) {
+            const uint64_t t = canonical_tick_u64();
+            (void)ai_vault.commit_speechboot_vocab(this,
+                                               language_foundation.speechboot_vocab_words_ascii(),
+                                               language_foundation.speechboot_vocab_min_u32(),
+                                               t);
+            speech_vocab_written_u32 = 1u;
+            speech_vocab_written_tick_u64 = t;
+            emit_ui_line("SPEECH_BOOT:COMPLETE");
+        }
+    }
 
 
 // ------------------------------------------------------------------
@@ -6461,33 +7640,25 @@ if (have_in) {
         ge_camera_anchor_tick(*this, anchors[camera_anchor_id_u32], canonical_tick);
     }
 
-neural_ai.pre_tick(this);
+    if (ai_enabled_u32 != 0u) {
+        neural_ai.pre_tick(this);
+    }
 
 // ------------------------------------------------------------------
 // ------------------------------------------------------------------
 // Corpus crawl scheduling (button press consent; adapter executes network)
 // ------------------------------------------------------------------
 {
+    if (ai_enabled_u32 == 0u || ai_crawling_enabled_u32 == 0u) {
+        // Crawling disabled.
+    } else {
     bool any_active = false;
     for (uint32_t si = 0; si < EW_CRAWL_SESSION_MAX; ++si) { if (crawl_sessions[si].active) { any_active = true; break; } }
 
     if (any_active) {
         // Curriculum lane gate: enforce parallel-sequential stage ordering.
-        // Stage->lane map is monotonic and conservative:
-        //  stage0(Language): lanes 0-1
-        //  stage1(QM/Physics): lanes 0-3
-        //  stage2(Chem): lanes 0-4
-        //  stage3(Materials): lanes 0-5
-        //  stage4(Cosmology/Atmos): lanes 0-5
-        //  stage5(Biology): all lanes
-        switch (learning_curriculum_stage_u32) {
-            case 0u: crawl_allowlist_lane_max_u32 = 1u; break;
-            case 1u: crawl_allowlist_lane_max_u32 = 3u; break;
-            case 2u: crawl_allowlist_lane_max_u32 = 4u; break;
-            case 3u: crawl_allowlist_lane_max_u32 = 5u; break;
-            case 4u: crawl_allowlist_lane_max_u32 = 5u; break;
-            default: crawl_allowlist_lane_max_u32 = 0xFFFFFFFFu; break;
-        }
+        // Canonical lane cap is derived from the explicit curriculum stage table.
+        crawl_allowlist_lane_max_u32 = learning_stage_lane_max_u32;
 
         // Visualization/integration backlog gate: do not admit more external pages
         // when the learning gate has a high pending backlog.
@@ -6608,6 +7779,7 @@ neural_ai.pre_tick(this);
             if (ui_out_q.size() < UI_OUT_CAP) ui_out_q.push_back("CRAWL_COMPLETE");
         }
     }
+    }
 }
 
 
@@ -6617,7 +7789,7 @@ neural_ai.pre_tick(this);
     // ------------------------------------------------------------------
     // Commands are supplied via submit_ai_commands_fixed(). Decompression is
     // integer-only and stable across replays.
-    if (ai_commands_count_u32 > 0 && ai_total_weight_q63 > 0) {
+    if (ai_enabled_u32 != 0u && ai_commands_count_u32 > 0 && ai_total_weight_q63 > 0) {
         struct CmdIdx { EwAiCommand c; uint32_t idx; };
         CmdIdx tmp[EW_AI_COMMAND_MAX];
         uint32_t n = ai_commands_count_u32;
@@ -6673,6 +7845,129 @@ neural_ai.pre_tick(this);
                         if (p.size() >= 3 && p.substr(p.size()-3) == ".md") return (uint32_t)EW_ARTIFACT_MD;
                         return (uint32_t)EW_ARTIFACT_TEXT;
                     };
+
+// ------------------------------------------------------------------
+// Substrate math/ops bridge (control-plane -> hook inbox)
+// ------------------------------------------------------------------
+// Grammar (bounded, deterministic, integer-only):
+//   OP:ADD <x_int> <y_int> [k]
+//   OP:MUL <x_int> <y_int> [k]
+//   OP:CLAMP <x_int> <lo_int> <hi_int> [k]
+// Where values are interpreted as integers and encoded as Q16.16.
+// If k is omitted, 0xFFFF is used (broadcast to bins 0..7 in fanout).
+if (starts_with("OP:")) {
+    std::string rest = last_observation_text.substr(std::strlen("OP:"));
+    trim_left(rest);
+    if (rest.empty()) break;
+
+    auto take_tok = [&](std::string& s, std::string& out)->bool {
+        trim_left(s);
+        if (s.empty()) return false;
+        size_t p = 0;
+        while (p < s.size() && s[p] != ' ' && s[p] != '	') p++;
+        out = s.substr(0, p);
+        s = (p < s.size()) ? s.substr(p) : std::string();
+        trim_left(s);
+        return true;
+    };
+    auto parse_i64 = [&](const std::string& s, int64_t& out)->bool {
+        if (s.empty()) return false;
+        int sign = 1;
+        size_t i = 0;
+        if (s[0] == '-') { sign = -1; i = 1; }
+        if (i >= s.size()) return false;
+        int64_t v = 0;
+        bool any = false;
+        while (i < s.size()) {
+            char c = s[i];
+            if (c < '0' || c > '9') return false;
+            any = true;
+            v = v * 10 + (int64_t)(c - '0');
+            if (v > (1LL<<30)) break;
+            i++;
+        }
+        if (!any) return false;
+        out = (int64_t)sign * v;
+        return true;
+    };
+
+    std::string op_s;
+    if (!take_tok(rest, op_s)) break;
+    uint8_t op_tag_u8 = 0u;
+    if (op_s == "ADD") op_tag_u8 = (uint8_t)EW_ACT_OP_ADD;
+    else if (op_s == "MUL") op_tag_u8 = (uint8_t)EW_ACT_OP_MUL;
+    else if (op_s == "CLAMP") op_tag_u8 = (uint8_t)EW_ACT_OP_CLAMP;
+    else {
+        if (ui_out_q.size() < UI_OUT_CAP) ui_out_q.push_back("OP_BAD_OPCODE");
+        break;
+    }
+
+    std::string t0, t1, t2, tk;
+    if (!take_tok(rest, t0) || !take_tok(rest, t1)) {
+        if (ui_out_q.size() < UI_OUT_CAP) ui_out_q.push_back("OP_BAD_ARGS");
+        break;
+    }
+    int64_t v0 = 0, v1 = 0, v2 = 0;
+    if (!parse_i64(t0, v0) || !parse_i64(t1, v1)) {
+        if (ui_out_q.size() < UI_OUT_CAP) ui_out_q.push_back("OP_BAD_NUM");
+        break;
+    }
+    if (op_tag_u8 == (uint8_t)EW_ACT_OP_CLAMP) {
+        if (!take_tok(rest, t2) || !parse_i64(t2, v2)) {
+            if (ui_out_q.size() < UI_OUT_CAP) ui_out_q.push_back("OP_BAD_NUM");
+            break;
+        }
+    }
+
+    uint16_t k_u16 = 0xFFFFu;
+    if (!rest.empty()) {
+        if (take_tok(rest, tk)) {
+            int64_t kv = 0;
+            if (parse_i64(tk, kv) && kv >= 0 && kv <= 65535) k_u16 = (uint16_t)kv;
+        }
+    }
+
+    auto clamp_i32 = [&](int64_t x)->int32_t {
+        if (x > 32767) x = 32767;
+        if (x < -32768) x = -32768;
+        return (int32_t)(x << 16);
+    };
+    const int32_t a0 = clamp_i32(v0);
+    const int32_t a1 = clamp_i32(v1);
+    const int32_t a2 = clamp_i32(v2);
+
+    uint32_t dst_id = spectral_field_anchor_id_u32;
+    if (dst_id == 0u) {
+        for (uint32_t ii = 0u; ii < (uint32_t)anchors.size(); ++ii) {
+            if (anchors[ii].kind_u32 == EW_ANCHOR_KIND_SPECTRAL_FIELD) { dst_id = ii; break; }
+        }
+    }
+
+    if (dst_id != 0u && dst_id < anchors.size() && anchors[dst_id].kind_u32 == EW_ANCHOR_KIND_SPECTRAL_FIELD) {
+        EwSpectralFieldAnchorState& ss = anchors[dst_id].spectral_field_state;
+        if (ss.hook_inbox_count_u32 < EW_SPECTRAL_HOOK_INBOX_MAX) {
+            EwHookPacket hp{};
+            hp.dst_anchor_id_u32 = dst_id;
+            hp.hook_op_u8 = (uint8_t)EwCoherenceHookOp::HookEmitActuationOp;
+            hp.causal_tag_u8 = op_tag_u8;
+            hp.authority_q15 = 32767u;
+
+            uint64_t pack0 = ((uint64_t)(uint32_t)a1 << 32) | (uint64_t)(uint32_t)a0;
+            uint64_t pack1 = ((uint64_t)k_u16 << 48) | ((uint64_t)0u << 32) | (uint64_t)(uint32_t)a2;
+            std::memcpy(&hp.p0_q32_32, &pack0, sizeof(pack0));
+            std::memcpy(&hp.p1_q32_32, &pack1, sizeof(pack1));
+
+            ss.hook_inbox[ss.hook_inbox_count_u32++] = hp;
+            if (ui_out_q.size() < UI_OUT_CAP) ui_out_q.push_back("OP_ENQUEUED");
+        } else {
+            if (ui_out_q.size() < UI_OUT_CAP) ui_out_q.push_back("OP_HOOK_INBOX_FULL");
+        }
+    } else {
+        if (ui_out_q.size() < UI_OUT_CAP) ui_out_q.push_back("OP_NO_SPECTRAL_ANCHOR");
+    }
+    break;
+}
+
 
                     if (starts_with("QUERY:")) {
                         std::string q = last_observation_text.substr(std::strlen("QUERY:"));
@@ -7530,7 +8825,9 @@ if (lattice_gpu_) {
 
         // Object→world writeback (bounded, deterministic): apply object imprint
         // after density mask rebuild and before pulse injection.
-        apply_object_imprint_writeback_();
+        if (sim_world_play_u32 != 0u) {
+            apply_object_imprint_writeback_();
+        }
 
 
         struct TmpCmd {
@@ -7776,7 +9073,7 @@ if (ap && ap->object_id_u64 != 0u) {
                         for (uint32_t i = 0u; i < (uint32_t)anchors.size(); ++i) {
                             const Anchor& a = anchors[i];
                             if (a.kind_u32 != EW_ANCHOR_KIND_SPECTRAL_FIELD) continue;
-                            const int32_t* rc = a.spectral_state.region_center_q16_16;
+                            const int32_t* rc = a.spectral_field_state.region_center_q16_16;
                             const __int128 dx = (__int128)ox - (__int128)rc[0];
                             const __int128 dy = (__int128)oy - (__int128)rc[1];
                             const __int128 dz = (__int128)oz - (__int128)rc[2];
@@ -7803,7 +9100,7 @@ if (ap && ap->object_id_u64 != 0u) {
                     };
 
                     if (sp) {
-                        const EwSpectralFieldAnchorState& ss = sp->spectral_state;
+                        const EwSpectralFieldAnchorState& ss = sp->spectral_field_state;
 
                         // Budget clamp: derived probes must respect the spectral fanout budget
                         // and HOLD behavior (no probe spam during HOLD ticks).
@@ -7878,7 +9175,7 @@ if (ap && ap->object_id_u64 != 0u) {
                     if (vox) {
                         // Respect HOLD: if nearest spectral anchor is holding, suppress
                         // derived boundary probes to avoid misleading overlays.
-                        const bool hold = (sp && sp->spectral_state.hold_tick_u8 != 0u);
+                        const bool hold = (sp && sp->spectral_field_state.hold_tick_u8 != 0u);
                         if (hold) {
                             ed.boundary_viz_count_u32 = 0u;
                         } else {
@@ -7887,7 +9184,7 @@ if (ap && ap->object_id_u64 != 0u) {
                         // Budget clamp: boundary probes share the same fanout budget envelope.
                         uint32_t max_b = EW_EDITOR_BOUNDARY_VIZ_SAMPLES;
                         if (sp) {
-                            const uint32_t b = (sp->spectral_state.fanout_budget_u32 > 0u) ? sp->spectral_state.fanout_budget_u32 : 1u;
+                            const uint32_t b = (sp->spectral_field_state.fanout_budget_u32 > 0u) ? sp->spectral_field_state.fanout_budget_u32 : 1u;
                             const uint32_t cap = (b >= 8u) ? (b / 2u) : 4u;
                             if (cap < max_b) max_b = cap;
                         }
@@ -7896,7 +9193,7 @@ if (ap && ap->object_id_u64 != 0u) {
                         for (int iz = -2; iz < 2 && outb < EW_EDITOR_BOUNDARY_VIZ_SAMPLES; ++iz) {
                             for (int ix = -2; ix < 2 && outb < EW_EDITOR_BOUNDARY_VIZ_SAMPLES; ++ix) {
                                 if (outb >= max_b) break;
-                                int32_t p[3] = { sel_pos_q16_16[0] + ix*step, sel_pos_q16_16[1], sel_pos_q16_16[2] + iz*step };
+                                int32_t p[3] = { cx + ix*step, cy, cz + iz*step };
 
                                 // Map point to voxel index.
                                 const EwVoxelCouplingAnchorState& vs = vox->voxel_coupling_state;
@@ -8268,14 +9565,34 @@ if (ap && ap->object_id_u64 != 0u) {
 
     // Rebuild outbound pulses deterministically from committed state.
     outbound.clear();
+
+    // Amplitude is the number of represented objects in this tick window.
+    uint32_t represented_n_u32 = 0u;
+    for (size_t ii = 0; ii < anchors.size(); ++ii) {
+        const uint32_t k = anchors[ii].kind_u32;
+        if (k == EW_ANCHOR_KIND_OBJECT || k == EW_ANCHOR_KIND_PLANET) represented_n_u32++;
+    }
+    const uint16_t window_a_code = Anchor::encode_object_count(represented_n_u32, 4096u);
+
     for (size_t i = 0; i < anchors.size(); ++i) {
         const Anchor& a = anchors[i];
         Basis9 proj = projected_for(a);
-        const SpiderCode4 sc = a.spider_encode_9d_4(proj, weights_q10, denom_q);
-        const int32_t f_code = sc.f_code;
-        const uint16_t a_code = sc.a_code;
-        const uint16_t v_code = sc.v_code;
-        const uint16_t i_code = sc.i_code;
+        // Frequency remains derived from the 9D spider projection.
+        const int32_t f_code = a.spider_encode_9d(proj, weights_q10, denom_q);
+
+        // Corrected semantics:
+        //  - amplitude = represented object count for this window
+        //  - amperage = compute density proxy (work units)
+        //  - voltage  = vector budget (coherence proxy gated by amperage)
+        const uint16_t a_code = window_a_code;
+
+        const uint64_t nbors = (uint64_t)a.neighbors.size();
+        const uint64_t harm_bucket = 1u + (uint64_t)(a.harmonics_mean_q15 >> 10); // 1..32
+        uint64_t work_units = (1u + nbors) * harm_bucket;
+        if (a.kind_u32 == EW_ANCHOR_KIND_SPECTRAL_FIELD) work_units += 64u;
+        const uint16_t i_code = Anchor::encode_compute_density(work_units, 262144u);
+        const uint16_t v_code = Anchor::encode_vector_budget(a.harmonics_mean_q15, i_code);
+
         // Outbound pulses use the default profile and zero causal_tag.
         outbound.push_back({a.id, f_code, a_code, v_code, i_code, (uint8_t)EW_PROFILE_CORE_EVOLUTION, 0u, 0u, 0u, canonical_tick});
     }

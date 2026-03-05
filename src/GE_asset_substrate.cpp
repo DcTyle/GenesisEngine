@@ -84,7 +84,7 @@ bool GeAssetSubstrate::init(const std::string& project_root_utf8,
     return rebuild_project_index(out_err);
 }
 
-bool GeAssetSubstrate::save_into_root_(SubstrateManager* sm,
+bool GeAssetSubstrate::save_into_root_(SubstrateMicroprocessor* sm,
                                       const std::string& root_utf8,
                                       uint64_t object_id_u64,
                                       uint32_t kind_u32,
@@ -120,7 +120,7 @@ bool GeAssetSubstrate::save_into_root_(SubstrateManager* sm,
     return true;
 }
 
-bool GeAssetSubstrate::save_object_asset(SubstrateManager* sm,
+bool GeAssetSubstrate::save_object_asset(SubstrateMicroprocessor* sm,
                                         uint64_t object_id_u64,
                                         uint32_t kind_u32,
                                         GeAssetPartition partition,

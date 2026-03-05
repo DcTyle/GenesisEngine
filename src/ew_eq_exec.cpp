@@ -70,7 +70,7 @@ static inline uint32_t expected_payload_bytes_for_kind(uint32_t kind) {
     }
 }
 
-EwEqExecResult ew_eq_exec_packet(SubstrateManager* sm,
+EwEqExecResult ew_eq_exec_packet(SubstrateMicroprocessor* sm,
                                  uint32_t opcode_u32,
                                  const std::vector<uint64_t>& args_u64) {
     EwEqExecResult r;

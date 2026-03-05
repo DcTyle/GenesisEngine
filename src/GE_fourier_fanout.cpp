@@ -5,6 +5,7 @@
 #include "ew_cordic.hpp"
 
 #include <algorithm>
+#include <cstring>
 #include <vector>
 
 // -----------------------------------------------------------------------------
@@ -98,6 +99,16 @@ static inline int64_t ew_mul_q32_32(int64_t a_q32_32, int64_t b_q32_32) {
     return (int64_t)(p >> 32);
 }
 
+static inline int32_t ew_read_i32_le(const uint8_t* p) {
+    return (int32_t)((uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24));
+}
+
+static inline int32_t ew_sat_i32_from_i64(int64_t v) {
+    if (v > (int64_t)0x7FFFFFFFLL) return (int32_t)0x7FFFFFFF;
+    if (v < (int64_t)(-0x80000000LL)) return (int32_t)(-0x80000000LL);
+    return (int32_t)v;
+}
+
 static inline int64_t ew_clamp_i64(int64_t v, int64_t lo, int64_t hi) {
     if (v < lo) return lo;
     if (v > hi) return hi;
@@ -145,6 +156,19 @@ static inline bool ew_in_region_q16_16(const int32_t center_q16_16[3], int32_t r
     return d2 <= r2;
 }
 
+static inline uint64_t ew_u64_from_i64(int64_t v) {
+    // Bitcast helper (deterministic, no UB in practice on common compilers).
+    uint64_t u;
+    std::memcpy(&u, &v, sizeof(u));
+    return u;
+}
+
+static inline int64_t ew_i64_from_u64(uint64_t u) {
+    int64_t v;
+    std::memcpy(&v, &u, sizeof(v));
+    return v;
+}
+
 static void ew_apply_hooks(EwSpectralFieldAnchorState& ss) {
     if (ss.hook_inbox_count_u32 == 0u) return;
 
@@ -178,6 +202,18 @@ static void ew_apply_hooks(EwSpectralFieldAnchorState& ss) {
         } else if (op == EwCoherenceHookOp::HookFreezeTick) {
             // Freeze tick (HOLD) for this evolution.
             ss.hold_tick_u8 = 1u;
+        } else if (op == EwCoherenceHookOp::HookStartCalibration) {
+            // Start a short deterministic calibration micro-sequence.
+            int64_t ticks = (hp.p1_q32_32 >> 32);
+            if (ticks < 8) ticks = 8;
+            if (ticks > 512) ticks = 512;
+            ss.calibration_mode_u8 = 1u;
+            ss.calibration_profile_u8 = (uint8_t)(hp.causal_tag_u8);
+            ss.calibration_ticks_remaining_u32 = (uint32_t)ticks;
+            ss.cal_energy_sum_u64 = 0u;
+            ss.cal_leak_abs_sum_u64 = 0u;
+            ss.cal_count_u32 = 0u;
+            ss.hold_tick_u8 = 0u;
         } else if (op == EwCoherenceHookOp::HookAdjustLearning) {
             // p0 is signed adjustment in Q32.32. Map to delta Q15 conservatively.
             const int64_t d = hp.p0_q32_32;
@@ -235,6 +271,57 @@ static void ew_apply_hooks(EwSpectralFieldAnchorState& ss) {
                 ss.forcing_hat[k].re_q32_32 = 0;
                 ss.forcing_hat[k].im_q32_32 = 0;
             }
+        } else if (op == EwCoherenceHookOp::HookEmitActuationOp) {
+            // Bridge: install an explicit actuation packet (math/ops dialect) into the
+            // bounded per-tick trajectory slots. The hook packet is the control plane.
+            //
+            // Encoding (bit-packed into p0/p1):
+            //  - causal_tag_u8: EwActuationOpTag (ADD/MUL/CLAMP)
+            //  - p0: [hi32 | lo32] = (x, y) or (x, lo) depending on op
+            //  - p1: bits48..63 drive_k_u16, bits32..47 flags_u16 (reserved), low32 = hi (for CLAMP)
+            if (ss.actuation_count_u32 >= EW_SPECTRAL_TRAJ_SLOTS) continue;
+            const uint8_t op_tag_u8 = hp.causal_tag_u8;
+            const uint64_t pack0 = ew_u64_from_i64(hp.p0_q32_32);
+            const uint64_t pack1 = ew_u64_from_i64(hp.p1_q32_32);
+            const uint16_t drive_k_u16 = (uint16_t)((pack1 >> 48) & 0xFFFFu);
+            const uint8_t flags_u8 = (uint8_t)((pack1 >> 32) & 0xFFu);
+
+            EwActuationPacket& ap = ss.actuation_slots[ss.actuation_count_u32++];
+            ap.drive_k_u16 = drive_k_u16;
+            ap.op_tag_u8 = op_tag_u8;
+            ap.flags_u8 = flags_u8;
+            ap.delta_amp_q32_32 = 0;
+            ap.profile_id_u8 = 0;
+            ap.causal_tag_u8 = op_tag_u8;
+            ap.pad0 = 0;
+            ap.v_code_u16 = 0;
+            ap.i_code_u16 = 0;
+            ap.payload_len_u8 = 0;
+            for (uint32_t bi = 0u; bi < EW_ACTUATION_PAYLOAD_MAX; ++bi) ap.payload[bi] = 0u;
+
+            // Serialize operands as little-endian int32 Q16.16.
+            const int32_t a0 = (int32_t)(pack0 & 0xFFFFFFFFu);
+            const int32_t a1 = (int32_t)((pack0 >> 32) & 0xFFFFFFFFu);
+
+            auto write_i32_le = [&](uint32_t off, int32_t v) {
+                ap.payload[off + 0] = (uint8_t)(v & 0xFF);
+                ap.payload[off + 1] = (uint8_t)((v >> 8) & 0xFF);
+                ap.payload[off + 2] = (uint8_t)((v >> 16) & 0xFF);
+                ap.payload[off + 3] = (uint8_t)((v >> 24) & 0xFF);
+            };
+
+            if (op_tag_u8 == (uint8_t)EW_ACT_OP_CLAMP) {
+                const int32_t hi = (int32_t)(pack1 & 0xFFFFFFFFu);
+                write_i32_le(0u, a0);
+                write_i32_le(4u, a1);
+                write_i32_le(8u, hi);
+                ap.payload_len_u8 = 12u;
+            } else {
+                // ADD/MUL default: two operands.
+                write_i32_le(0u, a0);
+                write_i32_le(4u, a1);
+                ap.payload_len_u8 = 8u;
+            }
         }
     }
 
@@ -245,6 +332,37 @@ static void ew_clear_forcing(EwSpectralFieldAnchorState& ss) {
     for (uint32_t k = 0; k < EW_SPECTRAL_N; ++k) {
         ss.forcing_hat[k].re_q32_32 = 0;
         ss.forcing_hat[k].im_q32_32 = 0;
+    }
+}
+
+// Apply a bounded "operator product replaces operator" impulse derived from the
+// previous tick's temporal residual. This is the executable temporal-coupling
+// mechanism: mismatch drives a short corrective forcing pattern in carrier space.
+// No new state is allocated; everything is derived from existing summaries and
+// overwrite-in-place bins.
+static void ew_temporal_product_inject_forcing(EwSpectralFieldAnchorState& ss) {
+    if (ss.temporal_residual.residual_pending_u8 == 0u) return;
+
+    const int64_t r = ss.temporal_residual.residual_q32_32;
+    // Ignore tiny residuals to avoid chattering.
+    const uint64_t ar = ew_abs_i64_to_u64(r);
+    if (ar < (1ULL << 20)) return; // ~1e-4 in Q32.32
+
+    // Convert op_gain_q15 (~[0..1]) to Q32.32 gain.
+    const int64_t g_q32_32 = ((int64_t)ss.op_gain_q15) << 17; // Q32.32
+    // Step amplitude: -r * gain / 8 (conservative), clamped.
+    int64_t step = -ew_mul_q32_32(r, g_q32_32);
+    step >>= 3;
+    const int64_t cap = (1LL << 30);
+    if (step > cap) step = cap;
+    if (step < -cap) step = -cap;
+
+    // Inject into the first 8 bins with current band weights.
+    for (uint32_t k = 0u; k < 8u; ++k) {
+        const uint16_t bw = ss.op_band_w_q15[k];
+        const int64_t bw_q32_32 = ((int64_t)bw) << 17;
+        const int64_t amp = ew_mul_q32_32(step, bw_q32_32);
+        ss.forcing_hat[k].re_q32_32 += amp;
     }
 }
 
@@ -317,14 +435,15 @@ void ew_fourier_fanout_step(EwState& cand, const EwInputs& inputs, const EwCtx& 
         if (a.kind_u32 != EW_ANCHOR_KIND_SPECTRAL_FIELD) continue;
         EwSpectralFieldAnchorState& ss = a.spectral_field_state;
 
+        // Clear bounded actuation slots first so hooks can install per-tick
+        // actuation packets deterministically (overwrite-in-place semantics).
+        ss.actuation_count_u32 = 0u;
+
         // Consume hook packets addressed to this anchor.
         ew_apply_hooks(ss);
 
         // Clear forcing bins.
         ew_clear_forcing(ss);
-
-        // Clear bounded actuation slots.
-        ss.actuation_count_u32 = 0u;
 
         // Build explicit actuation-plane packets from pulses targeting this anchor.
         uint16_t last_v = 0, last_i = 0;
@@ -368,10 +487,10 @@ void ew_fourier_fanout_step(EwState& cand, const EwInputs& inputs, const EwCtx& 
         ss.intent_summary.last_i_code_u16 = last_i;
 
         // Apply actuation packets to forcing_hat.
-        for (uint32_t wi = 0u; wi < ss.actuation_count_u32; ++wi) {
-            const EwActuationPacket& ap = ss.actuation_slots[wi];
-            const uint32_t k = (uint32_t)(ap.drive_k_u16 & (EW_SPECTRAL_N - 1u));
-            int64_t amp = ap.delta_amp_q32_32;
+        // Note: op_tag can represent either a direct carrier impulse (EW_ACT_OP_DRIVE)
+        // or a minimal math/ops dialect encoded in payload (EW_ACT_OP_ADD/MUL/CLAMP).
+        auto inject_bin = [&](const EwActuationPacket& ap, uint32_t k, int64_t base_amp_q32_32) {
+            int64_t amp = base_amp_q32_32;
 
             // Apply learning coupling boost (absorption proxy).
             const int64_t learn_gain_q32_32 = ((int64_t)ss.learning_coupling_q15) << 16;
@@ -400,9 +519,73 @@ void ew_fourier_fanout_step(EwState& cand, const EwInputs& inputs, const EwCtx& 
 
             ss.forcing_hat[k].re_q32_32 += ew_mul_q32_32(amp, sc.cos_q32_32);
             ss.forcing_hat[k].im_q32_32 += ew_mul_q32_32(amp, sc.sin_q32_32);
+        };
+
+        // Optional derived-only math result latch (integer part) for UI inspection.
+        // Stored in ss.pad5_u16 (unused) to avoid any struct growth.
+        bool math_result_valid = false;
+        int32_t last_math_r_q16_16 = 0;
+
+        for (uint32_t wi = 0u; wi < ss.actuation_count_u32; ++wi) {
+            const EwActuationPacket& ap = ss.actuation_slots[wi];
+
+            // Compute the base amplitude impulse.
+            int64_t base_amp_q32_32 = ap.delta_amp_q32_32;
+            if (ap.op_tag_u8 == EW_ACT_OP_ADD || ap.op_tag_u8 == EW_ACT_OP_MUL || ap.op_tag_u8 == EW_ACT_OP_CLAMP) {
+                // Minimal, deterministic substrate math. Operands are signed Q16.16 in payload.
+                int32_t r_q16_16 = 0;
+                if ((ap.op_tag_u8 == EW_ACT_OP_ADD || ap.op_tag_u8 == EW_ACT_OP_MUL) && ap.payload_len_u8 >= 8u) {
+                    const int32_t x = ew_read_i32_le(&ap.payload[0]);
+                    const int32_t y = ew_read_i32_le(&ap.payload[4]);
+                    if (ap.op_tag_u8 == EW_ACT_OP_ADD) {
+                        r_q16_16 = ew_sat_i32_from_i64((int64_t)x + (int64_t)y);
+                    } else {
+                        // (x*y)>>16 keeps Q16.16.
+                        const int64_t p = (int64_t)x * (int64_t)y;
+                        r_q16_16 = ew_sat_i32_from_i64(p >> 16);
+                    }
+                } else if (ap.op_tag_u8 == EW_ACT_OP_CLAMP && ap.payload_len_u8 >= 12u) {
+                    const int32_t x = ew_read_i32_le(&ap.payload[0]);
+                    const int32_t lo = ew_read_i32_le(&ap.payload[4]);
+                    const int32_t hi = ew_read_i32_le(&ap.payload[8]);
+                    int32_t v = x;
+                    if (v < lo) v = lo;
+                    if (v > hi) v = hi;
+                    r_q16_16 = v;
+                }
+
+                // Latch last math result for derived-only inspection.
+                math_result_valid = true;
+                last_math_r_q16_16 = r_q16_16;
+
+                // Promote to Q32.32.
+                base_amp_q32_32 = ((int64_t)r_q16_16) << 16;
+            }
+
+            // drive_k_u16 == 0xFFFF means "broadcast to low band" (bins 0..7).
+            if (ap.drive_k_u16 == 0xFFFFu) {
+                for (uint32_t kk = 0u; kk < 8u; ++kk) {
+                    inject_bin(ap, kk, base_amp_q32_32);
+                }
+            } else {
+                const uint32_t k = (uint32_t)(ap.drive_k_u16 & (EW_SPECTRAL_N - 1u));
+                inject_bin(ap, k, base_amp_q32_32);
+            }
         }
 
-        // Intent summary: hash + magnitude proxy from forcing (first 8 bins).
+        // Derived-only result exposure: store integer part of the last math op result.
+        // This is purely a UI/debug channel and must not affect physics.
+        if (math_result_valid) {
+            const int16_t ri16 = (int16_t)(last_math_r_q16_16 >> 16);
+            ss.pad5_u16 = (uint16_t)ri16;
+        }
+
+        
+        // Temporal coupling: inject a bounded operator-product correction derived from
+        // the previous tick's residual before we summarize intent.
+        ew_temporal_product_inject_forcing(ss);
+
+// Intent summary: hash + magnitude proxy from forcing (first 8 bins).
         // This forms the actuation "intent" plane for temporal coupling.
         uint64_t intent_hash = 0xA17E5EEDULL ^ ((uint64_t)ss.twiddle_profile_u32 << 32) ^ (uint64_t)cand.tick_u64;
         uint64_t intent_acc_q15 = 0u;
@@ -422,6 +605,22 @@ void ew_fourier_fanout_step(EwState& cand, const EwInputs& inputs, const EwCtx& 
         }
         ss.intent_summary.intent_norm_q15 = intent_norm_q15;
         ss.temporal_residual.intent_hash_u64 = intent_hash;
+
+        // Pulse measurement sidecar (intent): hash the bounded actuation slots.
+        // This is the numeric control-plane fingerprint for the tick.
+        uint64_t pulse_intent_hash = 0x51F0D00DULL ^ ((uint64_t)ss.actuation_count_u32 << 48) ^ (uint64_t)cand.tick_u64;
+        for (uint32_t wi = 0u; wi < ss.actuation_count_u32 && wi < EW_SPECTRAL_TRAJ_SLOTS; ++wi) {
+            const EwActuationPacket& ap = ss.actuation_slots[wi];
+            pulse_intent_hash = ew_mix64(pulse_intent_hash ^ ((uint64_t)ap.drive_k_u16 << 32) ^ (uint64_t)ap.delta_amp_q32_32);
+            pulse_intent_hash = ew_mix64(pulse_intent_hash ^ ((uint64_t)ap.profile_id_u8 << 24) ^ ((uint64_t)ap.v_code_u16 << 8) ^ (uint64_t)ap.i_code_u16);
+        }
+        ss.pulse_measured.pulse_intent_hash_u64 = pulse_intent_hash;
+
+        // Pulse intent sidecar (control-plane).
+        ss.pulse_intent.pulse_intent_hash_u64 = pulse_intent_hash;
+        ss.pulse_intent.pulse_intent_norm_q15 = ss.intent_summary.intent_norm_q15;
+        ss.pulse_intent.last_v_code_u16 = ss.intent_summary.last_v_code_u16;
+        ss.pulse_intent.last_i_code_u16 = ss.intent_summary.last_i_code_u16;
 
         // Unified fanout work budget (materialized updates + coupling work).
         // This keeps coupling injection from dominating tick cost and ensures
@@ -558,6 +757,9 @@ void ew_fourier_fanout_step(EwState& cand, const EwInputs& inputs, const EwCtx& 
         }
         ss.temporal_residual.measured_hash_u64 = measured_hash;
 
+        // Pulse measurement sidecar (measured): reuse the measured low-bin hash.
+        ss.pulse_measured.pulse_measured_hash_u64 = measured_hash;
+
         // Temporal residual: discrepancy between intended forcing magnitude and measured energy peak.
         const int32_t r_q15 = (int32_t)e_peak - (int32_t)intent_norm_q15;
         const uint16_t rabs_q15 = (uint16_t)((r_q15 < 0) ? -r_q15 : r_q15);
@@ -569,6 +771,23 @@ void ew_fourier_fanout_step(EwState& cand, const EwInputs& inputs, const EwCtx& 
         } else {
             ss.temporal_residual.residual_pending_u8 = 0u;
         }
+
+        // Pulse measurement sidecar residual mirrors the temporal residual.
+        ss.pulse_measured.pulse_residual_q32_32 = ss.temporal_residual.residual_q32_32;
+        ss.pulse_measured.pulse_residual_norm_q15 = ss.temporal_residual.residual_norm_q15;
+        ss.pulse_measured.pulse_band_u8 = ss.temporal_residual.residual_band_u8;
+        ss.pulse_measured.pulse_pending_u8 = ss.temporal_residual.residual_pending_u8;
+
+        // Push pulse-measured summary into bounded history ring (overwrite-in-place).
+        const EwPulseMeasuredSummary* pm_sel = ew_select_pulse_measured_lane(&ss.pulse_measured, &ss.pulse_measured_gpu_sidecar, ss.pulse_measured_gpu_valid_u8);
+        ss.pulse_measured_ring[ss.pulse_measured_ring_head_u32] = pm_sel ? *pm_sel : ss.pulse_measured;
+        ss.pulse_measured_ring_head_u32 = (ss.pulse_measured_ring_head_u32 + 1u) % EW_PULSE_MEASURED_RING_W;
+        if (ss.pulse_measured_ring_count_u32 < EW_PULSE_MEASURED_RING_W) ss.pulse_measured_ring_count_u32++;
+
+        // Push pulse-intent summary into bounded history ring (overwrite-in-place).
+        ss.pulse_intent_ring[ss.pulse_intent_ring_head_u32] = ss.pulse_intent;
+        ss.pulse_intent_ring_head_u32 = (ss.pulse_intent_ring_head_u32 + 1u) % EW_PULSE_INTENT_RING_W;
+        if (ss.pulse_intent_ring_count_u32 < EW_PULSE_INTENT_RING_W) ss.pulse_intent_ring_count_u32++;
 
         // Leakage residual proxy: excess above noise floor.
         uint16_t leak_abs = 0;

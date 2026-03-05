@@ -11,7 +11,7 @@ static int fail(const char* msg) {
 
 int main() {
     // Deterministic golden run: fixed seed, fixed observation stream.
-    SubstrateManager sm(64);
+    SubstrateMicroprocessor sm(64);
     sm.set_projection_seed(1337);
 
     sm.crawler_enqueue_observation_utf8(1, 1, 1, 1, 1, "local", "test:1", "hello genesis");
@@ -24,7 +24,7 @@ int main() {
     // Confidence may vary with lane residuals; do not over-constrain here.
 
     std::vector<EwAiActionEvent> ev;
-    ev.resize(SubstrateManager::AI_ACTION_LOG_CAP);
+    ev.resize(SubstrateMicroprocessor::AI_ACTION_LOG_CAP);
     const uint32_t n = sm.ai_get_action_log(ev.data(), (uint32_t)ev.size());
     if (n == 0) return fail("no actions");
 

@@ -6,7 +6,7 @@
 
 static inline uint64_t mix_u64(uint64_t x) {
     // SplitMix64-style mixing (deterministic, fast). This is for fingerprints,
-    // not security.
+    // not identity.
     x += 0x9E3779B97F4A7C15ull;
     x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ull;
     x = (x ^ (x >> 27)) * 0x94D049BB133111EBull;
@@ -99,6 +99,11 @@ uint64_t ge_compute_state_fingerprint_9d(const SubstrateManager* sm) {
             fold(h, (uint64_t)ss.temporal_residual.measured_hash_u64);
             fold(h, (uint64_t)ss.temporal_residual.residual_q32_32);
             fold(h, (uint64_t)ss.temporal_residual.residual_norm_q15);
+            // Pulse measurement sidecar lane.
+            fold(h, (uint64_t)ss.pulse_measured.pulse_intent_hash_u64);
+            fold(h, (uint64_t)ss.pulse_measured.pulse_measured_hash_u64);
+            fold(h, (uint64_t)ss.pulse_measured.pulse_residual_q32_32);
+            fold(h, (uint64_t)ss.pulse_measured.pulse_residual_norm_q15);
             fold(h, (uint64_t)ss.intent_summary.intent_norm_q15);
             for (uint32_t kk = 0u; kk < 8u; ++kk) fold(h, (uint64_t)ss.intent_summary.band_mag_q15[kk]);
         }
@@ -109,6 +114,8 @@ uint64_t ge_compute_state_fingerprint_9d(const SubstrateManager* sm) {
             fold(h, (uint64_t)bs.phys_coherence_q15);
             fold(h, (uint64_t)bs.learning_coherence_q15);
             fold(h, (uint64_t)bs.temporal_coherence_q15);
+            fold(h, (uint64_t)bs.temporal_mismatch_q15);
+            fold(h, (uint64_t)bs.temporal_stability_q15);
             fold(h, (uint64_t)bs.hook_out_count_u32);
             // Sample a few ring entries deterministically.
             for (uint32_t b = 0u; b < EW_COHERENCE_BANDS; ++b) {
@@ -140,12 +147,20 @@ uint64_t ge_compute_state_fingerprint_9d(const SubstrateManager* sm) {
             fold(h, (uint64_t)vs.influx_q32_32);
             fold(h, (uint64_t)vs.influx_hash_u64);
             fold(h, (uint64_t)vs.learning_coupling_q15);
+            fold(h, (uint64_t)vs.op_gain_q15);
             fold(h, (uint64_t)vs.boundary_strength_mean_q15);
             fold(h, (uint64_t)vs.wall_dist_mean_q15);
             fold(h, (uint64_t)vs.permeability_mean_q15);
             fold(h, (uint64_t)vs.interface_strength_mean_q15);
             fold(h, (uint64_t)vs.boundary_axis_dom_u8);
             fold(h, (uint64_t)vs.boundary_anisotropy_q15);
+            // Voxel temporal coupling lanes.
+            fold(h, (uint64_t)vs.temporal_residual.intent_hash_u64);
+            fold(h, (uint64_t)vs.temporal_residual.measured_hash_u64);
+            fold(h, (uint64_t)vs.temporal_residual.residual_q32_32);
+            fold(h, (uint64_t)vs.temporal_residual.residual_norm_q15);
+            fold(h, (uint64_t)vs.pulse_measured.pulse_intent_hash_u64);
+            fold(h, (uint64_t)vs.pulse_measured.pulse_measured_hash_u64);
             fold(h, (uint64_t)vs.collision_constraints_count_u32);
             if (vs.collision_constraints_count_u32 != 0u) {
                 const uint32_t last = (vs.collision_constraints_head_u32 + EwVoxelCouplingAnchorState::EW_COLLISION_CONSTRAINT_RING_MAX - 1u) % EwVoxelCouplingAnchorState::EW_COLLISION_CONSTRAINT_RING_MAX;
@@ -177,10 +192,52 @@ uint64_t ge_compute_state_fingerprint_9d(const SubstrateManager* sm) {
     // Control inbox size (control surface activity).
     fold(h, (uint64_t)sm->control_inbox_count_u32);
 
+    // AI state + curriculum coverage (deterministic correctness guardrail).
+    fold(h, (uint64_t)sm->ai_enabled_u32);
+    fold(h, (uint64_t)sm->ai_learning_enabled_u32);
+    fold(h, (uint64_t)sm->ai_crawling_enabled_u32);
+    fold(h, (uint64_t)sm->ai_state_u32);
+    fold(h, (uint64_t)sm->learning_curriculum_stage_u32);
+
+    fold(h, (uint64_t)sm->learning_gate.registry().pending_count_u32());
+    fold(h, (uint64_t)sm->learning_gate.registry().completed_count_u32());
+
+    fold(h, (uint64_t)sm->learning_metric_accepted_mask128.lo_u64);
+    fold(h, (uint64_t)sm->learning_metric_accepted_mask128.hi_u64);
+
+    fold(h, (uint64_t)sm->vault_experiments_committed_u64);
+    fold(h, (uint64_t)sm->vault_experiments_ephemeral_u64);
+    fold(h, (uint64_t)sm->vault_allowlist_pages_u64);
+    fold(h, (uint64_t)sm->vault_resonant_pages_u64);
+    fold(h, (uint64_t)sm->vault_last_commit_key_u64);
+    fold(h, (uint64_t)sm->vault_last_commit_kind_u32);
+
+    fold(h, (uint64_t)sm->external_api_inflight.size());
+    fold(h, (uint64_t)sm->external_api_pending.size());
+
     // Render packet ticks.
     fold(h, sm->render_camera_packet_tick_u64);
     fold(h, sm->render_assist_packet_tick_u64);
     fold(h, sm->render_object_packets_tick_u64);
+
+    // AI config anchor coverage (gates + budgets).
+    if (const EwAiConfigAnchorState* cfg = sm->ai_config_state()) {
+        fold(h, (uint64_t)cfg->resonance_gate_q15);
+        fold(h, (uint64_t)cfg->metric_tol_num_u32);
+        fold(h, (uint64_t)cfg->metric_tol_den_u32);
+        fold(h, (uint64_t)cfg->max_metric_tasks_per_tick_u32);
+        fold(h, (uint64_t)cfg->ephemeral_ttl_ticks_u64);
+        fold(h, (uint64_t)cfg->ephemeral_gc_stride_ticks_u32);
+        fold(h, (uint64_t)cfg->max_ephemeral_count_u32);
+        fold(h, (uint64_t)cfg->crawl_budget_bytes_per_tick_u32);
+        fold(h, (uint64_t)cfg->crawler_max_pulses_per_tick_u32);
+        fold(h, (uint64_t)cfg->sim_synth_budget_work_units_per_tick_u32);
+        fold(h, (uint64_t)cfg->max_metric_claims_per_page_u32);
+        fold(h, (uint64_t)cfg->metric_claim_text_cap_bytes_u32);
+        fold(h, (uint64_t)cfg->repo_reader_enabled_u32);
+        fold(h, (uint64_t)cfg->repo_reader_files_per_tick_u32);
+        fold(h, (uint64_t)cfg->repo_reader_bytes_per_file_u32);
+    }
 
     return h;
 }

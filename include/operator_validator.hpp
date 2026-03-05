@@ -11,7 +11,7 @@
 // The validator is intentionally conservative:
 // - It checks that canonical operators are callable.
 // - It runs small deterministic computations with fixed inputs.
-// - It exercises a minimal "actuate" path via SubstrateManager tick.
+// - It exercises a minimal "actuate" path via SubstrateMicroprocessor tick.
 //
 // No external resources are accessed.
 

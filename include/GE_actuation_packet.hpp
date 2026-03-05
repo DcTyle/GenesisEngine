@@ -12,7 +12,17 @@ enum EwActuationOpTag : uint8_t {
     EW_ACT_OP_NONE = 0,
     EW_ACT_OP_DRIVE = 1,      // drive a carrier bin
     EW_ACT_OP_IMPULSE = 2,    // impulse-style delta
-    EW_ACT_OP_OBSERVE = 3     // emit/mark observation (reserved)
+    EW_ACT_OP_OBSERVE = 3,    // emit/mark observation (reserved)
+
+    // Minimal math/ops dialect (executed inside the substrate fanout loop).
+    // Operands are encoded in payload as little-endian signed int32 Q16.16.
+    //  - ADD: payload = x, y
+    //  - MUL: payload = x, y
+    //  - CLAMP: payload = x, lo, hi
+    // Result is re-expressed as a bounded carrier impulse.
+    EW_ACT_OP_ADD = 4,
+    EW_ACT_OP_MUL = 5,
+    EW_ACT_OP_CLAMP = 6
 };
 
 struct EwActuationPacket {

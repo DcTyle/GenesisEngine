@@ -19,6 +19,8 @@
 #include "GE_experiment_templates.hpp"
 #include "GE_neural_phase_ai.hpp"
 
+#include "GE_curriculum.hpp"
+
 #include "GE_camera_anchor.hpp"
 
 #include "GE_global_coherence.hpp"
@@ -30,6 +32,7 @@
 #include "GE_domain_policy.hpp"
 #include "GE_rate_limiter.hpp"
 #include "GE_live_crawler.hpp"
+#include "GE_repo_reader.hpp"
 
 #include "GE_project_settings.hpp"
 #include "GE_asset_substrate.hpp"
@@ -39,9 +42,11 @@
 #include "GE_nbody.hpp"
 #include "GE_state_fingerprint.hpp"
 
+#include "GE_curriculum.hpp"
 #include "GE_curriculum_manager.hpp"
 #include "GE_ai_policy.hpp"
 #include "GE_ai_anticipation.hpp"
+#include "GE_ai_vault.hpp"
 #include "ai_action_log.hpp"
 
 #include "inspector_fields.hpp"
@@ -432,6 +437,46 @@ public:
         // -----------------------------------------------------------------
         genesis::GeAssetSubstrate asset_substrate;
 
+        // -----------------------------------------------------------------
+        // AI Vault (runtime artifact store)
+        // -----------------------------------------------------------------
+        genesis::AiVault ai_vault;
+        // Cached counter for UI (updated by AiVault on init/commit).
+        uint64_t vault_experiments_committed_u64 = 0;
+        uint64_t vault_experiments_ephemeral_u64 = 0;
+        uint64_t vault_allowlist_pages_u64 = 0;
+        uint64_t vault_resonant_pages_u64 = 0;
+
+        // -----------------------------------------------------------------
+        // Domain crawl progress (for UI loading bars)
+        // - Deterministic counters only; no dynamic allocation.
+        // - Updated when crawler commits pages into the AI vault.
+        // -----------------------------------------------------------------
+        static constexpr uint32_t DOMAIN_CRAWL_STATS_MAX_U32 = 256u;
+        struct EwDomainCrawlStat {
+            std::string domain_ascii;
+            uint32_t pages_seen_u32 = 0u;
+            uint32_t pages_target_u32 = 100u;
+        };
+        EwDomainCrawlStat domain_crawl_stats[DOMAIN_CRAWL_STATS_MAX_U32];
+        uint32_t domain_crawl_stats_n_u32 = 0u;
+
+        // -------------------------------------------------------------
+        // AI UI panel state (projection-friendly; deterministic)
+        // -------------------------------------------------------------
+        // 0=crawler, 1=experiments
+        uint32_t ai_ui_active_tab_u32 = 0u;
+        // Unseen experiment cursor (committed experiments counter at last user view).
+        uint64_t ai_ui_experiments_seen_cursor_u64 = 0ull;
+
+        void domain_crawl_record_page_seen(const std::string& domain_ascii);
+
+
+        // Regression/visibility: last successful vault commit key + kind.
+        // kind_u32: 0=none,1=metric,2=metric_fail,3=allowlist_page,4=resonant_page,5=speech_vocab
+        uint64_t vault_last_commit_key_u64 = 0ull;
+        uint32_t vault_last_commit_kind_u32 = 0u;
+
     // -----------------------------------------------------------------
     // Camera sensor sample (world->camera sampling only)
     // The viewport submits these read-only samples to the substrate.
@@ -518,6 +563,14 @@ public:
         uint32_t field_u32 = 0;
         int64_t value_q32_32 = 0;
     } pending_settings_set;
+
+    struct EwPendingAiConfigSet {
+        uint32_t valid_u32 = 0;
+        uint64_t tick_u64 = 0;
+        uint16_t source_u16 = 0;
+        uint32_t field_u32 = 0;
+        int64_t value_s64 = 0;
+    } pending_ai_config_set;
 
     struct EwPendingInputEvent {
         uint32_t valid_u32 = 0;
@@ -682,6 +735,10 @@ public:
 
     // Blueprint C: Object store (immutable entries, referenced by anchors/lanes).
     EwObjectStore object_store;
+
+    // Canonical N-body state (authoritative, snapshot-included).
+    genesis::EwNBodyState nbody_state;
+
     EwLanePolicy lane_policy;
     std::vector<Pulse> outbound;
     std::vector<Pulse> inbound;
@@ -960,6 +1017,7 @@ public:
     GE_DomainPolicyTable domain_policies;
     GE_RateLimiter rate_limiter;
     GE_LiveCrawler live_crawler;
+    GE_RepoReader repo_reader;
 
     // Curriculum manager drives lane scheduling and stage advancement.
     GE_CurriculumManager curriculum;
@@ -1070,25 +1128,70 @@ uint32_t learning_curriculum_stage_u32 = 0u;
 // Deterministic stage advancement based on validated measurable checkpoints.
 // Cursor into MetricRegistry completed list so we only process each task once.
 uint32_t learning_completed_cursor_u32 = 0u;
-// Accepted metric counts by stage (0..3); biology stage unlock is terminal.
-// Curriculum stage advancement is driven by a deterministic checklist of
-// required measurable MetricKinds, not by a raw count. Each stage declares
-// a required bitmask over MetricKind IDs (see metric_kind_to_bit()) and the
-// learning gate sets bits on acceptance.
+// Curriculum advancement is driven by the explicit stage table in GE_curriculum.hpp.
 //
-// Stages: 0=QM, 1=Orbitals/Atoms/Bonds+Chem, 2=Materials, 3=Cosmology/Atmos,
-// 4=Biology (deferred; usually locked until environments are learned).
-static constexpr uint32_t GENESIS_CURRICULUM_STAGE_COUNT = 6;
+// NOTE: Two parallel representations are maintained:
+//  (A) topic masks (u64, id&63) for crawler topic heuristics (observed_topic_mask_u64)
+//  (B) exact masks (128b) for stage completion correctness (MetricKind id in [0,127])
 
-// Bitmasks of required / completed checkpoint kinds.
-uint64_t learning_stage_required_mask_u64[GENESIS_CURRICULUM_STAGE_COUNT] = {0,0,0,0,0};
-uint64_t learning_stage_completed_mask_u64[GENESIS_CURRICULUM_STAGE_COUNT] = {0,0,0,0,0};
+// (A) Crawler topic heuristic masks (NOT used for stage correctness).
+uint64_t learning_stage_required_mask_u64[genesis::GENESIS_CURRICULUM_STAGE_COUNT] = {0,0,0,0,0,0,0};
+uint64_t learning_stage_completed_mask_u64[genesis::GENESIS_CURRICULUM_STAGE_COUNT] = {0,0,0,0,0,0,0};
+
+// (B) Exact stage masks + global accepted-kind mask.
+genesis::EwMask128 learning_stage_required_mask128[genesis::GENESIS_CURRICULUM_STAGE_COUNT] = {};
+genesis::EwMask128 learning_metric_accepted_mask128 = {};
+
+// Derived curriculum visibility (deterministic, recomputed inside substrate tick).
+uint32_t learning_stage_required_count_u32 = 0u;
+uint32_t learning_stage_missing_count_u32 = 0u;
+uint32_t learning_stage_lane_max_u32 = 0u;
+uint32_t learning_stage_missing_ids_u32[8] = {0,0,0,0,0,0,0,0};
+uint32_t learning_stage_missing_n_u32 = 0u;
 
 // Legacy counter remains for telemetry only.
 
 // Visualization mode: headless disables continuous presentation but keeps
 // verification snapshots and metric validation alive.
 bool visualization_headless = false;
+
+    // -----------------------------------------------------------------
+    // World-play vs substrate-tick separation
+    // -----------------------------------------------------------------
+    // Substrate tick always advances (microprocessor lattice + AI). World-play
+    // gates *world* evolution (planet ancilla, object ancilla writeback, etc.).
+    // Default is paused (blank/static world on boot).
+    uint32_t sim_world_play_u32 = 0u;
+
+    // -----------------------------------------------------------------
+    // AI runtime toggles
+    // -----------------------------------------------------------------
+    // AI is booted by default, but learning/crawling are opt-in toggles.
+    uint32_t ai_enabled_u32 = 1u;
+    uint32_t ai_learning_enabled_u32 = 0u;
+    uint32_t ai_crawling_enabled_u32 = 0u;
+
+    // Canonical AI config anchor (gates + budgets).
+    uint32_t ai_config_anchor_id_u32 = 0u;
+
+    const EwAiConfigAnchorState* ai_config_state() const;
+    EwAiConfigAnchorState* ai_config_state_mut();
+
+    // Speech/vocabulary hard gate completion (deterministic).
+    bool speech_boot_done() const;
+
+    // Recompute derived curriculum visibility fields for UI/smoke output.
+    // Must be called from the substrate tick (deterministic ordering).
+    void update_curriculum_derived_state();
+
+    // Coarse AI state for UI/telemetry only (deterministic).
+    // 0=IDLE,1=SPEECH_BOOT,2=LEARNING,3=EXPLORING,4=SIM_SYNTH,5=VALIDATING,6=COMMIT
+    uint32_t ai_state_u32 = 0u;
+
+    // Internal one-time bootstrap flags (deterministic).
+    uint32_t language_bootstrapped_u32 = 0u;
+    uint32_t speech_vocab_written_u32 = 0u;
+    uint64_t speech_vocab_written_tick_u64 = 0ull;
 
     // -----------------------------------------------------------------
     // Simulation snapshot + loop/live injection
@@ -1130,6 +1233,10 @@ std::deque<std::string> ui_out_q;
     // Anchor indices flagged as UI_PARTITION (kept separate from sim/core intent).
     std::vector<uint32_t> ui_anchor_indices;
 
+    // Last vault listing presented to the UI (deterministic, bounded).
+    static constexpr uint32_t UI_VAULT_LIST_CAP = 128;
+    std::vector<std::string> ui_last_vault_list_paths_utf8;
+
     // Create a UI chat anchor (UI_PARTITION|CHAT_MESSAGE) from a line of text.
     uint32_t ui_create_chat_anchor_from_text(const std::string& utf8_line);
     // Create a UI-derived concept/training anchor from the latest chat seed.
@@ -1139,6 +1246,9 @@ std::deque<std::string> ui_out_q;
 
     // Emit one line to the UI output channel (deterministic, bounded).
     void emit_ui_line(const std::string& utf8_line);
+
+    // Emit one structured AI event line (single-line, deterministic). Controlled by ai_event_log_enabled.
+    void emit_ai_event_line(const char* event_name_ascii, const std::string& kv_ascii);
 
     // Allowlist update surface (UI command + config file). Deterministic validation.
     bool corpus_allowlist_update_from_user_text(const std::string& allowlist_md_utf8);
@@ -1215,6 +1325,30 @@ std::deque<std::string> ui_out_q;
     // without relying on a filesystem reader.
     std::string last_observation_text;
 
+    // -----------------------------------------------------------------
+    // OP console (control-plane -> HookEmitActuationOp)
+    // Bounded, deterministic history + optional UI overlay.
+    // This is runtime-only bookkeeping and must never feed authoritative state.
+    // -----------------------------------------------------------------
+    struct EwOpRecentEntry {
+        uint64_t submit_tick_u64 = 0;
+        uint32_t dst_anchor_id_u32 = 0;
+        uint16_t drive_k_u16 = 0xFFFFu;
+        uint8_t op_tag_u8 = 0;
+        uint8_t pad0_u8 = 0;
+        int32_t a0_q16_16 = 0;
+        int32_t a1_q16_16 = 0;
+        int32_t a2_q16_16 = 0;
+        int16_t result_i16 = 0;
+        uint16_t flags_u16 = 0;
+    };
+    static constexpr uint32_t EW_OP_RECENT_N = 8u;
+    EwOpRecentEntry op_recent[EW_OP_RECENT_N];
+    uint32_t op_recent_head_u32 = 0u;
+    uint32_t op_recent_count_u32 = 0u;
+    uint32_t op_overlay_enabled_u32 = 0u;
+
+
     // Last hydration receipt (observable). Hydration is a deterministic
     // projection step from inspector fields into functioning files.
     EwHydrationReceipt last_hydration_receipt;
@@ -1264,6 +1398,10 @@ std::deque<std::string> ui_out_q;
 // UI interaction (adapter-driven I/O; computation occurs in substrate)
 // -----------------------------------------------------------------
 void ui_submit_user_text_line(const std::string& utf8_line);
+// AI subsystem smoke test: emits a deterministic status summary into UI output.
+void emit_ai_smoke_lines();
+// AI UI panel projection lines (crawler progress + experiment list + notifications).
+void emit_ai_ui_panel_lines();
 // Pop one UI output message into out_utf8 (returns true if one was available).
 bool ui_pop_output_text(std::string& out_utf8);
 

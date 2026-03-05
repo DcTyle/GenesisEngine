@@ -45,7 +45,7 @@ struct CrawlerStats {
     EigenWare::EwId9 last_coord_id9;
 };
 
-class SubstrateManager;
+class SubstrateMicroprocessor;
 
 class CrawlerSubsystem {
 public:
@@ -69,7 +69,11 @@ public:
     // Called by the substrate tick. Deterministically consumes queued
     // observations, generates pulse candidates, and injects them into the
     // substrate's inbound pulse queue up to the per-tick crawler budget.
-    void tick(SubstrateManager* sm);
+    void tick(SubstrateMicroprocessor* sm);
+
+    // Deterministically drop all pending observations and reset counters.
+    // Used when the user disconnects all crawlers.
+    void reset();
 
     const CrawlerStats& stats() const { return stats_; }
 

@@ -33,7 +33,11 @@ struct EwCoherenceBusAnchorState {
     uint16_t learning_coherence_q15 = 0;
     // Temporal coupling activity proxy (Q15) from recent residuals.
     uint16_t temporal_coherence_q15 = 0;
-    uint16_t pad0_u16 = 0;
+    // Derived temporal mismatch and stability proxies (Q15).
+    // mismatch: |mean(measured_norm) - mean(intent_norm)| over bounded rings
+    // stability: 1 - normalized MAD (higher is more stable)
+    uint16_t temporal_mismatch_q15 = 0;
+    uint16_t temporal_stability_q15 = 0;
 
     // Per-band rings.
     EwCoherenceBusBandRing band[EW_COHERENCE_BANDS];

@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-class SubstrateManager;
+class SubstrateMicroprocessor;
 
 namespace genesis {
 
@@ -50,7 +50,7 @@ public:
 
     // Save a runtime object as a .geasset into the project substrate, and (optionally)
     // mirror it into the global cache for reuse.
-    bool save_object_asset(SubstrateManager* sm,
+    bool save_object_asset(SubstrateMicroprocessor* sm,
                            uint64_t object_id_u64,
                            uint32_t kind_u32,
                            GeAssetPartition partition,
@@ -78,7 +78,7 @@ private:
 
     bool write_index_file_(const std::string& root_utf8, const std::vector<GeAssetEntry>& entries, std::string* out_err) const;
     bool scan_entries_(const std::string& root_utf8, std::vector<GeAssetEntry>& out_entries, std::string* out_err) const;
-    bool save_into_root_(SubstrateManager* sm,
+    bool save_into_root_(SubstrateMicroprocessor* sm,
                          const std::string& root_utf8,
                          uint64_t object_id_u64,
                          uint32_t kind_u32,
