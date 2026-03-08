@@ -8,6 +8,9 @@
 #include <cstring>
 #include <vector>
 
+static inline uint64_t ew_mix64(uint64_t x);
+static inline int64_t ew_mul_q32_32(int64_t a_q32_32, int64_t b_q32_32);
+
 // -----------------------------------------------------------------------------
 // Derived probe helpers (read-only, for viewport/debug only)
 // -----------------------------------------------------------------------------
@@ -21,7 +24,7 @@ static inline int16_t ew_sat_i32_to_q15(int32_t v) {
 static inline int16_t ew_probe_field_internal_q1_15(const EwSpectralFieldAnchorState& s, const int32_t pos_q16_16[3]) {
     // Deterministic, bounded pseudo-evaluation of the spectral field at a position.
     // This is NOT a full IFFT; it is a lightweight probe using a fixed number of modes.
-    // theta is derived from dot(k, x) with a stable hash-based k.
+    // theta is derived from dot(k, x) with a stable mixed k.
     const uint64_t seed = (uint64_t)(uint32_t)pos_q16_16[0]
                         ^ (ew_mix64((uint64_t)(uint32_t)pos_q16_16[1]) << 1)
                         ^ (ew_mix64((uint64_t)(uint32_t)pos_q16_16[2]) << 2)
@@ -136,7 +139,7 @@ static inline uint64_t ew_abs_i64_to_u64(int64_t x) {
 
 static inline uint32_t ew_u32_min(uint32_t a, uint32_t b) { return (a < b) ? a : b; }
 
-static inline uint8_t ew_band_from_q15(uint16_t v_q15) {
+static inline uint8_t ew_band_from_q15_dup(uint16_t v_q15) {
     uint32_t x = (uint32_t)v_q15;
     uint8_t b = 0u;
     while (x > 0u && b + 1u < 8u) {
@@ -585,16 +588,14 @@ void ew_fourier_fanout_step(EwState& cand, const EwInputs& inputs, const EwCtx& 
         // the previous tick's residual before we summarize intent.
         ew_temporal_product_inject_forcing(ss);
 
-// Intent summary: hash + magnitude proxy from forcing (first 8 bins).
+        // Intent summary: vector identity + magnitude proxy from forcing (first 8 bins).
         // This forms the actuation "intent" plane for temporal coupling.
-        uint64_t intent_hash = 0xA17E5EEDULL ^ ((uint64_t)ss.twiddle_profile_u32 << 32) ^ (uint64_t)cand.tick_u64;
         uint64_t intent_acc_q15 = 0u;
         for (uint32_t kk = 0u; kk < 8u; ++kk) {
             const uint16_t ar = ew_q32_32_to_q15_sat(ss.forcing_hat[kk].re_q32_32);
             const uint16_t ai = ew_q32_32_to_q15_sat(ss.forcing_hat[kk].im_q32_32);
             const uint16_t m = (uint16_t)ew_u32_min((uint32_t)ar + (uint32_t)ai, 32767u);
             intent_acc_q15 += (uint64_t)m;
-            intent_hash = ew_mix64(intent_hash ^ ((uint64_t)m << (kk & 31u)) ^ ((uint64_t)kk * 0x9E3779B97F4A7C15ULL));
         }
         const uint16_t intent_norm_q15 = (uint16_t)ew_u32_min((uint32_t)(intent_acc_q15 / 8u), 32767u);
         for (uint32_t kk = 0u; kk < 8u; ++kk) {
@@ -604,20 +605,20 @@ void ew_fourier_fanout_step(EwState& cand, const EwInputs& inputs, const EwCtx& 
             ss.intent_summary.band_mag_q15[kk] = m;
         }
         ss.intent_summary.intent_norm_q15 = intent_norm_q15;
-        ss.temporal_residual.intent_hash_u64 = intent_hash;
+        const EwId9 intent_id9 = ew_temporal_intent_id9(a.id, ss.intent_summary);
+        ss.temporal_residual.intent_id9 = intent_id9;
 
-        // Pulse measurement sidecar (intent): hash the bounded actuation slots.
-        // This is the numeric control-plane fingerprint for the tick.
-        uint64_t pulse_intent_hash = 0x51F0D00DULL ^ ((uint64_t)ss.actuation_count_u32 << 48) ^ (uint64_t)cand.tick_u64;
-        for (uint32_t wi = 0u; wi < ss.actuation_count_u32 && wi < EW_SPECTRAL_TRAJ_SLOTS; ++wi) {
-            const EwActuationPacket& ap = ss.actuation_slots[wi];
-            pulse_intent_hash = ew_mix64(pulse_intent_hash ^ ((uint64_t)ap.drive_k_u16 << 32) ^ (uint64_t)ap.delta_amp_q32_32);
-            pulse_intent_hash = ew_mix64(pulse_intent_hash ^ ((uint64_t)ap.profile_id_u8 << 24) ^ ((uint64_t)ap.v_code_u16 << 8) ^ (uint64_t)ap.i_code_u16);
-        }
-        ss.pulse_measured.pulse_intent_hash_u64 = pulse_intent_hash;
+        // Pulse measurement sidecar (intent): bounded vector identity of the actuation slots.
+        // This is the canonical control-plane vector identity for the tick.
+        const EwId9 pulse_intent_id9 = ew_pulse_intent_id9_from_intent(
+            intent_id9,
+            ss.intent_summary.intent_norm_q15,
+            ss.intent_summary.last_v_code_u16,
+            ss.intent_summary.last_i_code_u16);
+        ss.pulse_measured.pulse_intent_id9 = pulse_intent_id9;
 
         // Pulse intent sidecar (control-plane).
-        ss.pulse_intent.pulse_intent_hash_u64 = pulse_intent_hash;
+        ss.pulse_intent.pulse_intent_id9 = pulse_intent_id9;
         ss.pulse_intent.pulse_intent_norm_q15 = ss.intent_summary.intent_norm_q15;
         ss.pulse_intent.last_v_code_u16 = ss.intent_summary.last_v_code_u16;
         ss.pulse_intent.last_i_code_u16 = ss.intent_summary.last_i_code_u16;
@@ -689,7 +690,7 @@ void ew_fourier_fanout_step(EwState& cand, const EwInputs& inputs, const EwCtx& 
 
         // Calibration forcing is injected after external pulses.
         if (ss.calibration_mode_u8 == 1u && ss.calibration_ticks_remaining_u32 > 0u) {
-            ew_calibration_inject_forcing(ss, cand.tick_u64);
+            ew_calibration_inject_forcing(ss, cand.canonical_tick);
         }
 
         // If frozen by hook, HOLD this tick: keep state stable and emit minimal leakage status.
@@ -747,18 +748,15 @@ void ew_fourier_fanout_step(EwState& cand, const EwInputs& inputs, const EwCtx& 
         ss.measured_summary.energy_mean_q15 = e_mean;
         ss.measured_summary.energy_peak_q15 = e_peak;
 
-        // Measured summary: hash of resulting low-frequency bins (first 8 bins).
-        uint64_t measured_hash = 0xC011A9EULL ^ ((uint64_t)ss.twiddle_profile_u32 << 32) ^ (uint64_t)cand.tick_u64;
-        for (uint32_t kk = 0u; kk < 8u; ++kk) {
-            const uint16_t ar = ew_q32_32_to_q15_sat(ss.phi_hat[kk].re_q32_32);
-            const uint16_t ai = ew_q32_32_to_q15_sat(ss.phi_hat[kk].im_q32_32);
-            const uint16_t m = (uint16_t)ew_u32_min((uint32_t)ar + (uint32_t)ai, 32767u);
-            measured_hash = ew_mix64(measured_hash ^ ((uint64_t)m << (kk & 31u)) ^ ((uint64_t)kk * 0xD1B54A32D192ED03ULL));
-        }
-        ss.temporal_residual.measured_hash_u64 = measured_hash;
+        // Measured summary: vector identity of the resulting low-frequency bins (first 8 bins).
+        const EwId9 measured_id9 = ew_temporal_measured_id9(a.id, ss.measured_summary, (uint32_t)ss.leakage_band_u8);
+        ss.temporal_residual.measured_id9 = measured_id9;
 
-        // Pulse measurement sidecar (measured): reuse the measured low-bin hash.
-        ss.pulse_measured.pulse_measured_hash_u64 = measured_hash;
+        // Pulse measurement sidecar (measured): bounded vector identity of the measured low-bin summary.
+        ss.pulse_measured.pulse_measured_id9 = ew_pulse_measured_id9_from_measured(
+            measured_id9,
+            (uint32_t)ss.pulse_measured.pulse_residual_norm_q15,
+            (uint32_t)ss.pulse_measured.pulse_band_u8);
 
         // Temporal residual: discrepancy between intended forcing magnitude and measured energy peak.
         const int32_t r_q15 = (int32_t)e_peak - (int32_t)intent_norm_q15;
@@ -777,6 +775,10 @@ void ew_fourier_fanout_step(EwState& cand, const EwInputs& inputs, const EwCtx& 
         ss.pulse_measured.pulse_residual_norm_q15 = ss.temporal_residual.residual_norm_q15;
         ss.pulse_measured.pulse_band_u8 = ss.temporal_residual.residual_band_u8;
         ss.pulse_measured.pulse_pending_u8 = ss.temporal_residual.residual_pending_u8;
+        ss.pulse_measured.pulse_measured_id9 = ew_pulse_measured_id9_from_measured(
+            measured_id9,
+            (uint32_t)ss.pulse_measured.pulse_residual_norm_q15,
+            (uint32_t)ss.pulse_measured.pulse_band_u8);
 
         // Push pulse-measured summary into bounded history ring (overwrite-in-place).
         const EwPulseMeasuredSummary* pm_sel = ew_select_pulse_measured_lane(&ss.pulse_measured, &ss.pulse_measured_gpu_sidecar, ss.pulse_measured_gpu_valid_u8);
@@ -807,7 +809,7 @@ void ew_fourier_fanout_step(EwState& cand, const EwInputs& inputs, const EwCtx& 
             const int64_t leak_q32_32 = (int64_t)(((__int128)leak_abs << 32) / 32767);
             ss.leakage_q32_32 = leak_q32_32;
             ss.leakage_band_u8 = ew_band_from_q15(leak_abs);
-            ss.leakage_hash_u64 = ew_mix64(((uint64_t)e_peak << 32) ^ (uint64_t)e_mean ^ (uint64_t)ai);
+            ss.leakage_id9 = ew_leakage_payload_id9(a.id, e_peak, e_mean, ai);
             ss.leakage_pending_u8 = 1u;
         } else {
             ss.leakage_pending_u8 = 0u;

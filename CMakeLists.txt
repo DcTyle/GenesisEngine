@@ -19,8 +19,9 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
+# GPU-only build policy: CUDA is mandatory for the runtime pipeline.
 # Default CUDA architectures: RTX 2060 (Turing) = 75. Override via -DCMAKE_CUDA_ARCHITECTURES=...
-if (EW_ENABLE_CUDA AND NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+if (NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
     set(CMAKE_CUDA_ARCHITECTURES 75)
 endif()
 
@@ -63,7 +64,8 @@ add_library(EigenWareCore
     src/GE_neural_phase_ai.cpp
     src/GE_ai_policy.cpp
     src/GE_ai_anticipation.cpp
-    src/GE_state_fingerprint.cpp
+    src/GE_state_signature.cpp
+    src/GE_hilbert_actuation.cpp
     src/GE_fft_fixed.cpp
     src/GE_collision_env.cpp
     src/GE_voxel_coupling.cpp
@@ -99,6 +101,7 @@ add_library(EigenWareCore
     src/GE_ai_regression_tests.cpp
     src/code_artifact_ops.cpp
     src/inspector_fields.cpp
+    src/coherence_graph.cpp
     src/anchor_pack.cpp
     src/ew_id9.cpp
     src/coherence_gate.cpp
@@ -118,7 +121,7 @@ add_library(EigenWareCore
     src/ancilla_ops.cpp
     src/substrate_alu.cpp
     src/substrate_harmonics.cpp
-    src/harmonic_fingerprint.cpp
+    src/harmonic_signature.cpp
     src/crawler_subsystem.cpp
     src/delta_profiles.cpp
     src/qubit_lanes.cpp
@@ -146,8 +149,11 @@ add_library(EigenWareCore
 
     src/ewmesh_voxelizer.cpp
 
-    # Genesis lattice (CPU reference implementation)
+    # Genesis lattice + GPU runtime path
     src/field_lattice_cpu.cpp
+    src/GE_planet_ancilla.cpp
+    src/crawler_encode_cuda.cpp
+    src/ew_txn_file.cpp
 
 )
 target_include_directories(EigenWareCore PUBLIC include)
@@ -188,51 +194,40 @@ endif()
 # Main executables are provided by vulkan_app as genesis_runtime and genesis_editor.
 
 option(EW_ENABLE_UI_PARTITION "Enable UI anchor partition + chat stream" ON)
-option(EW_ENABLE_CUDA "Enable CUDA evolution kernel (required for GPU-only pipeline)" ON)
-if (EW_ENABLE_CUDA)
-    enable_language(CUDA)
-    find_package(CUDAToolkit REQUIRED)
-    add_library(eigen_cuda
-        cuda/evolve_kernel.cu
-        cuda/field_lattice_kernels.cu
-        cuda/emergent_post_kernel.cu
-        cuda/carrier_bundle_kernels.cu
-        cuda/learning_gate_kernels.cu
-        cuda/crawler_encode_kernels.cu
-        cuda/GE_overlap_kernels.cu
-        cuda/GE_canonicalize_kernels.cu
-        cuda/GE_topk_select_kernels.cu
-        cuda/symbol_tokenize_kernels.cu
-        cuda/GE_phase_current_kernels.cu
-        cuda/GE_object_local_kernels.cu
+enable_language(CUDA)
+find_package(CUDAToolkit REQUIRED)
+add_library(eigen_cuda
+    cuda/evolve_kernel.cu
+    cuda/field_lattice_kernels.cu
+    cuda/emergent_post_kernel.cu
+    cuda/carrier_bundle_kernels.cu
+    cuda/learning_gate_kernels.cu
+    cuda/crawler_encode_kernels.cu
+    cuda/GE_overlap_kernels.cu
+    cuda/GE_canonicalize_kernels.cu
+    cuda/GE_topk_select_kernels.cu
+    cuda/symbol_tokenize_kernels.cu
+    cuda/GE_phase_current_kernels.cu
+    cuda/GE_object_local_kernels.cu
 )
-    target_link_libraries(eigen_cuda PRIVATE CUDA::cudart)
-    target_include_directories(eigen_cuda PRIVATE ${CUDAToolkit_INCLUDE_DIRS} ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(eigen_cuda PRIVATE CUDA::cudart)
+target_include_directories(eigen_cuda PRIVATE ${CUDAToolkit_INCLUDE_DIRS} ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 # Deterministic CUDA numerics: disable FMA reassociation and enforce precise div/sqrt.
 target_compile_options(eigen_cuda PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:--fmad=false --prec-div=true --prec-sqrt=true>
 )
-    target_compile_definitions(EigenWareCore PRIVATE EW_ENABLE_CUDA=1)
-    target_link_libraries(EigenWareCore PRIVATE eigen_cuda)
+target_compile_definitions(EigenWareCore PRIVATE EW_ENABLE_CUDA=1)
+target_link_libraries(EigenWareCore PRIVATE eigen_cuda)
 
-    # CUDA C++ wrappers (thin orchestration only; compute stays in kernels)
-    target_sources(EigenWareCore PRIVATE
-        src/crawler_encode_cuda.cpp
+# CUDA C++ wrappers (thin orchestration only; compute stays in kernels)
+target_sources(EigenWareCore PRIVATE
     src/symbol_tokenize_cuda.cpp
-        src/carrier_bundle_cuda.cpp
-        src/GE_canonicalize_cuda.cpp
-        src/GE_overlap_cuda.cpp
-        src/GE_topk_cuda.cpp
-    )
-else()
-    # CPU-only build: compiles and links without CUDA. GPU-resident corpus pipeline will return
-    # "not available" deterministically via existing EW_ENABLE_CUDA guards.
-    target_compile_definitions(EigenWareCore PRIVATE EW_ENABLE_CUDA=0)
-    target_sources(EigenWareCore PRIVATE
-        src/carrier_bundle_cuda.cpp
-    )
-endif()
+    src/carrier_bundle_cuda.cpp
+    src/GE_canonicalize_cuda.cpp
+    src/GE_overlap_cuda.cpp
+    src/GE_topk_cuda.cpp
+)
 
 # Vulkan app lives in its own subdirectory.
 if (EW_BUILD_VULKAN_APP)
@@ -247,7 +242,6 @@ target_link_libraries(test_determinism PRIVATE EigenWareCore)
 add_test(NAME deterministic COMMAND test_determinism)
 
 # Corpus pipeline regression tests (CUDA required).
-if (EW_ENABLE_CUDA)
 add_test(NAME ge_corpus_mvp
     COMMAND ge_regression_suite
         corpus_dir=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/Corpus
@@ -268,9 +262,6 @@ add_test(NAME ge_corpus_replay_identity
 set_tests_properties(ge_corpus_replay_identity PROPERTIES LABELS "CUDA;CORPUS")
 
 
-endif()
-
-if (EW_ENABLE_CUDA)
 add_executable(ew_contract_harness
     tests/contract_harness.cpp
 )
@@ -298,7 +289,6 @@ add_executable(test_contact_constraint
 )
 target_link_libraries(test_contact_constraint PRIVATE EigenWareCore)
 add_test(NAME contact_constraint COMMAND test_contact_constraint)
-endif()
 
 add_executable(ew_crawler_loop
     src/tools/crawler_loop_main.cpp
@@ -320,10 +310,10 @@ add_executable(ew_ai_headless_run EXCLUDE_FROM_ALL
 )
 target_link_libraries(ew_ai_headless_run PRIVATE EigenWareCore)
 
-add_executable(ew_hydrate_workspace EXCLUDE_FROM_ALL
-    src/tools/hydrate_workspace_main.cpp
+add_executable(ew_project_workspace EXCLUDE_FROM_ALL
+    src/tools/project_workspace_main.cpp
 )
-target_link_libraries(ew_hydrate_workspace PRIVATE EigenWareCore)
+target_link_libraries(ew_project_workspace PRIVATE EigenWareCore)
 
 add_executable(ew_synthesize_code EXCLUDE_FROM_ALL
     src/tools/synthesize_code_main.cpp
@@ -443,5 +433,3 @@ add_executable(ge_ai_determinism_test
     src/tools/ge_ai_determinism_test_main.cpp
 )
 target_link_libraries(ge_ai_determinism_test PRIVATE EigenWareCore)
-# txn file
-list(APPEND genesis_engine_src src/ew_txn_file.cpp)

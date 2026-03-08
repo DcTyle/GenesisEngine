@@ -76,7 +76,7 @@ public:
     uint64_t committed_allowlist_page_count_u64() const { return committed_allowlist_page_count_u64_; }
     uint64_t committed_resonant_page_count_u64() const { return committed_resonant_page_count_u64_; }
 
-    // Last deterministic commit key for regression fingerprinting/visibility.
+    // Last deterministic commit key for regression signature tracking/visibility.
     // kind_u32: 0=none,1=metric,2=metric_fail,3=allowlist_page,4=resonant_page,5=speech_vocab
     uint64_t last_commit_key_u64() const { return last_commit_key_u64_; }
     uint32_t last_commit_kind_u32() const { return last_commit_kind_u32_; }

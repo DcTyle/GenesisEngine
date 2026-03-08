@@ -32,7 +32,7 @@ static bool file_exists_on_disk_repo(const std::string& rel_path) {
     return true;
 }
 
-static bool include_resolution_ok(SubstrateMicroprocessor* sm, const std::string& rel_path, const std::string& payload) {
+static bool include_resolution_ok(SubstrateManager* sm, const std::string& rel_path, const std::string& payload) {
     if (!sm) return false;
     const std::string dir = dirname_from_rel_path(rel_path);
     size_t i = 0;
@@ -69,7 +69,7 @@ static bool include_resolution_ok(SubstrateMicroprocessor* sm, const std::string
     return true;
 }
 
-static bool cmake_sanity_ok(SubstrateMicroprocessor* sm, const std::string& rel_path, const std::string& payload) {
+static bool cmake_sanity_ok(SubstrateManager* sm, const std::string& rel_path, const std::string& payload) {
     (void)rel_path;
     if (!sm) return false;
     // Conservative: ensure referenced .cpp/.c/.hpp paths exist either in inspector or repo.
@@ -105,7 +105,7 @@ static bool cmake_sanity_ok(SubstrateMicroprocessor* sm, const std::string& rel_
     return true;
 }
 
-static int score_candidate(SubstrateMicroprocessor* sm,
+static int score_candidate(SubstrateManager* sm,
                            const std::string& rel_path,
                            uint32_t kind_u32,
                            const std::string& base_payload,
@@ -154,6 +154,16 @@ static bool find_unique_anchor_line(const std::string& payload, const std::strin
     };
     if (second(a1) || second(a2) || second(a3)) return false;
     out_pos = found;
+    return true;
+}
+
+
+static bool find_unique_exact_substr(const std::string& payload, const std::string& needle, size_t& out_pos) {
+    if (needle.empty()) return false;
+    const size_t p = payload.find(needle);
+    if (p == std::string::npos) return false;
+    if (payload.find(needle, p + needle.size()) != std::string::npos) return false;
+    out_pos = p;
     return true;
 }
 
@@ -211,6 +221,34 @@ static std::string apply_patch_or_empty(const std::string& base_payload, const E
         return out;
     }
 
+    if (spec.mode_u16 == EW_PATCH_REPLACE_EXACT || spec.mode_u16 == EW_PATCH_DELETE_EXACT ||
+        spec.mode_u16 == EW_PATCH_INSERT_BEFORE_EXACT || spec.mode_u16 == EW_PATCH_INSERT_AFTER_EXACT) {
+        size_t pos = std::string::npos;
+        if (!find_unique_exact_substr(out, spec.anchor_a, pos)) return out;
+        if (spec.mode_u16 == EW_PATCH_REPLACE_EXACT) {
+            out.replace(pos, spec.anchor_a.size(), spec.text);
+            ok = true;
+            return out;
+        }
+        if (spec.mode_u16 == EW_PATCH_DELETE_EXACT) {
+            out.erase(pos, spec.anchor_a.size());
+            ok = true;
+            return out;
+        }
+        std::string insert = spec.text;
+        if ((spec.mode_u16 == EW_PATCH_INSERT_BEFORE_EXACT || spec.mode_u16 == EW_PATCH_INSERT_AFTER_EXACT) &&
+            !insert.empty() && insert.back() != '\n' && !spec.anchor_a.empty() && spec.anchor_a.front() != '\n') {
+            insert.push_back('\n');
+        }
+        if (spec.mode_u16 == EW_PATCH_INSERT_BEFORE_EXACT) {
+            out.insert(pos, insert);
+        } else {
+            out.insert(pos + spec.anchor_a.size(), insert);
+        }
+        ok = true;
+        return out;
+    }
+
     return out;
 }
 
@@ -259,7 +297,7 @@ static uint64_t coord_fold9_from_text(const std::string& s) {
     return acc;
 }
 
-static void upsert_artifact(SubstrateMicroprocessor* sm,
+static void upsert_artifact(SubstrateManager* sm,
                             const std::string& rel_path,
                             uint32_t kind_u32,
                             const std::string& payload,
@@ -299,8 +337,69 @@ static void upsert_artifact(SubstrateMicroprocessor* sm,
     sm->ai_log_event(ev);
 }
 
+
+static bool ew_patch_expected_region_present_(const std::string& payload, const EwPatchSpec& spec, size_t* out_a, size_t* out_b) {
+    if (out_a) *out_a = std::string::npos;
+    if (out_b) *out_b = std::string::npos;
+    if (spec.mode_u16 == EW_PATCH_APPEND_EOF) return true;
+    if (spec.mode_u16 == EW_PATCH_INSERT_AFTER_ANCHOR) {
+        size_t a = std::string::npos;
+        if (!find_unique_anchor_line(payload, spec.anchor_a, a)) return false;
+        if (out_a) *out_a = a;
+        return true;
+    }
+    if (spec.mode_u16 == EW_PATCH_REPLACE_BETWEEN_ANCHORS || spec.mode_u16 == EW_PATCH_DELETE_BETWEEN_ANCHORS) {
+        size_t a = std::string::npos, b = std::string::npos;
+        if (!find_unique_anchor_line(payload, spec.anchor_a, a)) return false;
+        if (!find_unique_anchor_line(payload, spec.anchor_b, b)) return false;
+        if (out_a) *out_a = a;
+        if (out_b) *out_b = b;
+        return b > a;
+    }
+    if (spec.mode_u16 == EW_PATCH_REPLACE_EXACT || spec.mode_u16 == EW_PATCH_DELETE_EXACT ||
+        spec.mode_u16 == EW_PATCH_INSERT_BEFORE_EXACT || spec.mode_u16 == EW_PATCH_INSERT_AFTER_EXACT) {
+        size_t a = std::string::npos;
+        if (!find_unique_exact_substr(payload, spec.anchor_a, a)) return false;
+        if (out_a) *out_a = a;
+        return true;
+    }
+    return false;
+}
+
+static std::string ew_patch_span_utf8_(const EwPatchSpec& spec,
+                                       uint16_t bind_mode_u16,
+                                       size_t bind_a,
+                                       size_t bind_b,
+                                       bool expected_region_present) {
+    if (bind_mode_u16 == (uint16_t)SubstrateManager::EW_AI_PATCH_BIND_FILE) return "eof";
+    if (!expected_region_present) {
+        if (!spec.anchor_b.empty()) return std::string("missing:") + spec.anchor_a + ".." + spec.anchor_b;
+        if (!spec.anchor_a.empty()) return std::string("missing:") + spec.anchor_a;
+        return "missing:unresolved";
+    }
+    if (bind_mode_u16 == (uint16_t)SubstrateManager::EW_AI_PATCH_BIND_ANCHOR) {
+        if (bind_b != std::string::npos && bind_b > bind_a) return std::to_string((unsigned long long)bind_a) + ".." + std::to_string((unsigned long long)bind_b);
+        return std::to_string((unsigned long long)bind_a) + "..line";
+    }
+    if (bind_mode_u16 == (uint16_t)SubstrateManager::EW_AI_PATCH_BIND_EXACT) {
+        return std::to_string((unsigned long long)bind_a) + ".." + std::to_string((unsigned long long)(bind_a + spec.anchor_a.size()));
+    }
+    return "unresolved";
+}
+
+static uint16_t ew_patch_bind_mode_from_spec_(const EwPatchSpec& spec) {
+    if (spec.mode_u16 == EW_PATCH_APPEND_EOF) return (uint16_t)SubstrateManager::EW_AI_PATCH_BIND_FILE;
+    if (spec.mode_u16 == EW_PATCH_INSERT_AFTER_ANCHOR || spec.mode_u16 == EW_PATCH_REPLACE_BETWEEN_ANCHORS || spec.mode_u16 == EW_PATCH_DELETE_BETWEEN_ANCHORS) {
+        return (uint16_t)SubstrateManager::EW_AI_PATCH_BIND_ANCHOR;
+    }
+    if (spec.mode_u16 == EW_PATCH_REPLACE_EXACT || spec.mode_u16 == EW_PATCH_DELETE_EXACT || spec.mode_u16 == EW_PATCH_INSERT_BEFORE_EXACT || spec.mode_u16 == EW_PATCH_INSERT_AFTER_EXACT) {
+        return (uint16_t)SubstrateManager::EW_AI_PATCH_BIND_EXACT;
+    }
+    return (uint16_t)SubstrateManager::EW_AI_PATCH_BIND_NONE;
+}
+
 bool code_apply_patch_coherence_gated(
-    SubstrateMicroprocessor* sm,
+    SubstrateManager* sm,
     const std::string& rel_path,
     uint32_t kind_u32,
     const EwPatchSpec& spec,
@@ -308,9 +407,76 @@ bool code_apply_patch_coherence_gated(
 ) {
     if (!sm) return false;
 
+    const bool auto_session_started = (sm->patch_workflow_state.valid_u32 == 0u);
+    if (auto_session_started) {
+        (void)sm->ai_patch_begin_session(std::string("patch ") + rel_path, rel_path, rel_path, spec.mode_u16);
+    }
+    const uint16_t bind_mode_u16 = ew_patch_bind_mode_from_spec_(spec);
+    SubstrateManager::EwAiPatchPlanItem plan_items[3];
+    plan_items[0].sequence_u8 = 1u;
+    plan_items[0].patch_mode_u16 = spec.mode_u16;
+    plan_items[0].bind_mode_u16 = bind_mode_u16;
+    plan_items[0].rel_path_utf8 = rel_path;
+    plan_items[0].anchor_a_utf8 = spec.anchor_a;
+    plan_items[0].anchor_b_utf8 = spec.anchor_b;
+    plan_items[0].task_summary_utf8 = "bind explicit direct target";
+    plan_items[0].rationale_utf8 = "direct PATCH command supplied canonical target information";
+    plan_items[0].validation_step_utf8 = "confirm specified anchor/span is present before apply";
+    plan_items[0].completion_criteria_utf8 = "binding mode is explicit and inspectable";
+    plan_items[1].sequence_u8 = 2u;
+    plan_items[1].dependency_index_u8 = 0u;
+    plan_items[1].patch_mode_u16 = spec.mode_u16;
+    plan_items[1].bind_mode_u16 = bind_mode_u16;
+    plan_items[1].rel_path_utf8 = rel_path;
+    plan_items[1].anchor_a_utf8 = spec.anchor_a;
+    plan_items[1].anchor_b_utf8 = spec.anchor_b;
+    plan_items[1].task_summary_utf8 = "apply bounded direct patch";
+    plan_items[1].rationale_utf8 = "reuse canonical patch operator without alternate edit paths";
+    plan_items[1].validation_step_utf8 = "run coherence gate and file-kind sanity checks";
+    plan_items[1].completion_criteria_utf8 = "textual apply succeeds";
+    plan_items[2].sequence_u8 = 3u;
+    plan_items[2].dependency_index_u8 = 1u;
+    plan_items[2].patch_mode_u16 = spec.mode_u16;
+    plan_items[2].bind_mode_u16 = bind_mode_u16;
+    plan_items[2].rel_path_utf8 = rel_path;
+    plan_items[2].anchor_a_utf8 = spec.anchor_a;
+    plan_items[2].anchor_b_utf8 = spec.anchor_b;
+    plan_items[2].task_summary_utf8 = "record target validation";
+    plan_items[2].rationale_utf8 = "close workflow state with per-target validation";
+    plan_items[2].validation_step_utf8 = "check integrity, drift, and retry viability";
+    plan_items[2].completion_criteria_utf8 = "target validation stored in canonical workflow state";
+    sm->ai_patch_set_plan(plan_items, 3u, "preview direct patch then apply if target is stable");
+    std::string bind_reason_utf8;
+    if (bind_mode_u16 == (uint16_t)SubstrateManager::EW_AI_PATCH_BIND_ANCHOR) {
+        bind_reason_utf8 = std::string("explicit anchor-bounded target from direct patch command anchorA=") + spec.anchor_a +
+                           (spec.anchor_b.empty() ? std::string() : std::string(" anchorB=") + spec.anchor_b);
+    } else if (bind_mode_u16 == (uint16_t)SubstrateManager::EW_AI_PATCH_BIND_EXACT) {
+        bind_reason_utf8 = std::string("explicit exact-text bounded target from direct patch command needle=") + spec.anchor_a;
+    } else if (bind_mode_u16 == (uint16_t)SubstrateManager::EW_AI_PATCH_BIND_FILE) {
+        bind_reason_utf8 = "explicit file-level placement from direct patch command";
+    } else {
+        bind_reason_utf8 = "direct patch command did not resolve a canonical bind mode";
+    }
+    sm->ai_patch_note_binding_report(bind_reason_utf8,
+                                     std::string(),
+                                     (bind_mode_u16 == (uint16_t)SubstrateManager::EW_AI_PATCH_BIND_ANCHOR) ? std::string("direct_anchor_explicit") :
+                                     (bind_mode_u16 == (uint16_t)SubstrateManager::EW_AI_PATCH_BIND_EXACT) ? std::string("direct_exact_explicit") :
+                                     (bind_mode_u16 == (uint16_t)SubstrateManager::EW_AI_PATCH_BIND_FILE) ? std::string("direct_file_explicit") : std::string("unresolved"),
+                                     0u,
+                                     false,
+                                     bind_mode_u16,
+                                     rel_path);
+    size_t bind_a = std::string::npos;
+    size_t bind_b = std::string::npos;
+
     const EwInspectorArtifact* prev = sm->inspector_fields.find_by_path(rel_path);
     const std::string base_payload = prev ? prev->payload : std::string();
     const uint16_t base_coh = prev ? prev->coherence_q15 : 0;
+    const bool expected_region_present = ew_patch_expected_region_present_(base_payload, spec, &bind_a, &bind_b);
+    sm->ai_patch_note_preview_result("apply_requested", rel_path, rel_path, spec.mode_u16, bind_mode_u16,
+                                     expected_region_present || spec.mode_u16 == EW_PATCH_APPEND_EOF,
+                                     expected_region_present || spec.mode_u16 == EW_PATCH_APPEND_EOF,
+                                     expected_region_present || spec.mode_u16 == EW_PATCH_APPEND_EOF ? std::string() : std::string("target anchors or exact span not found before apply"));
 
     // Candidate generation: fixed N=3, deterministic variants.
     static constexpr int N = 3;
@@ -371,9 +537,35 @@ bool code_apply_patch_coherence_gated(
         }
     }
     if (best < 0) {
-        // Route into dark excitation: deterministic small increment.
         const uint64_t inc = (uint64_t)(((__int128)INT64_MAX) / 2048);
         sm->dark_mass_q63_u64 += inc;
+        SubstrateManager::EwAiPatchTargetValidation rec{};
+        rec.session_id_u64 = sm->patch_workflow_state.session_id_u64;
+        rec.tick_u64 = sm->canonical_tick;
+        rec.patch_mode_u16 = spec.mode_u16;
+        rec.bind_mode_u16 = bind_mode_u16;
+        rec.binding_success_u8 = expected_region_present ? 1u : 0u;
+        rec.textual_apply_success_u8 = 0u;
+        rec.target_integrity_ok_u8 = 0u;
+        rec.expected_region_present_u8 = expected_region_present ? 1u : 0u;
+        rec.precondition_match_u8 = expected_region_present ? 1u : 0u;
+        rec.postcondition_check_u8 = 0u;
+        rec.conflict_detected_u8 = 1u;
+        rec.retry_viable_u8 = 1u;
+        rec.used_fallback_text_surgery_u8 = (bind_mode_u16 == (uint16_t)SubstrateManager::EW_AI_PATCH_BIND_EXACT) ? 1u : 0u;
+        rec.residual_ambiguity_u8 = expected_region_present ? 0u : 1u;
+        rec.rel_path_utf8 = rel_path;
+        rec.anchor_a_utf8 = spec.anchor_a;
+        rec.anchor_b_utf8 = spec.anchor_b;
+        rec.target_span_utf8 = ew_patch_span_utf8_(spec, bind_mode_u16, bind_a, bind_b, expected_region_present);
+        rec.apply_outcome_utf8 = "candidate_generation_failed";
+        rec.residual_note_utf8 = expected_region_present ? "candidate set collapsed before commit-ready apply" : "precondition target span not found";
+        rec.follow_up_action_utf8 = expected_region_present ? "refine patch text or patch mode" : "repair canonical binding before retry";
+        rec.summary_utf8 = "candidate_generation_failed";
+        sm->ai_patch_note_target_validation(rec, "candidate_generation_failed", rec.follow_up_action_utf8);
+        if (auto_session_started) {
+            sm->ai_patch_finish_session(false, "not_applied", "candidate_generation_failed", "retry_required", rec.follow_up_action_utf8);
+        }
         return false;
     }
 
@@ -382,28 +574,84 @@ bool code_apply_patch_coherence_gated(
     if (!cands[best].commit || (uint16_t)(cands[best].coh - base_coh) < delta_min_q15) {
         const uint64_t inc = (uint64_t)(((__int128)INT64_MAX) / 1024);
         sm->dark_mass_q63_u64 += inc;
+        SubstrateManager::EwAiPatchTargetValidation rec{};
+        rec.session_id_u64 = sm->patch_workflow_state.session_id_u64;
+        rec.tick_u64 = sm->canonical_tick;
+        rec.patch_mode_u16 = spec.mode_u16;
+        rec.bind_mode_u16 = bind_mode_u16;
+        rec.binding_success_u8 = expected_region_present ? 1u : 0u;
+        rec.textual_apply_success_u8 = 1u;
+        rec.target_integrity_ok_u8 = 0u;
+        rec.expected_region_present_u8 = expected_region_present ? 1u : 0u;
+        rec.precondition_match_u8 = expected_region_present ? 1u : 0u;
+        rec.postcondition_check_u8 = 0u;
+        rec.conflict_detected_u8 = 1u;
+        rec.retry_viable_u8 = 1u;
+        rec.used_fallback_text_surgery_u8 = (bind_mode_u16 == (uint16_t)SubstrateManager::EW_AI_PATCH_BIND_EXACT) ? 1u : 0u;
+        rec.residual_ambiguity_u8 = (!expected_region_present || !cands[best].commit) ? 1u : 0u;
+        rec.rel_path_utf8 = rel_path;
+        rec.anchor_a_utf8 = spec.anchor_a;
+        rec.anchor_b_utf8 = spec.anchor_b;
+        rec.target_span_utf8 = ew_patch_span_utf8_(spec, bind_mode_u16, bind_a, bind_b, expected_region_present);
+        rec.apply_outcome_utf8 = !cands[best].commit ? "coherence_gate_rejected" : "delta_below_threshold";
+        rec.residual_note_utf8 = !cands[best].commit ? "candidate payload failed commit-ready postcondition" : "coherence delta below threshold after bounded patch";
+        rec.follow_up_action_utf8 = !cands[best].commit ? "raise coherence or repair artifact integrity before retry" : "reduce patch drift and retry with tighter span";
+        rec.summary_utf8 = !cands[best].commit ? "coherence_gate_rejected" : "delta_below_threshold";
+        sm->ai_patch_note_target_validation(rec, rec.summary_utf8, rec.follow_up_action_utf8);
+        if (auto_session_started) {
+            sm->ai_patch_finish_session(false, "apply_failed", rec.summary_utf8, "retry_required", rec.follow_up_action_utf8);
+        }
         return false;
     }
 
+    const bool integrity_ok = ((kind_u32 != (uint32_t)EW_ARTIFACT_CPP && kind_u32 != (uint32_t)EW_ARTIFACT_HPP) || include_resolution_ok(sm, rel_path, cands[best].payload)) &&
+                              (kind_u32 != (uint32_t)EW_ARTIFACT_CMAKE || cmake_sanity_ok(sm, rel_path, cands[best].payload));
     upsert_artifact(sm, rel_path, kind_u32, cands[best].payload, producer_operator_id_u32);
+    SubstrateManager::EwAiPatchTargetValidation rec{};
+    rec.session_id_u64 = sm->patch_workflow_state.session_id_u64;
+    rec.tick_u64 = sm->canonical_tick;
+    rec.patch_mode_u16 = spec.mode_u16;
+    rec.bind_mode_u16 = bind_mode_u16;
+    rec.binding_success_u8 = expected_region_present ? 1u : 0u;
+    rec.textual_apply_success_u8 = 1u;
+    rec.target_integrity_ok_u8 = integrity_ok ? 1u : 0u;
+    rec.expected_region_present_u8 = expected_region_present ? 1u : 0u;
+    rec.precondition_match_u8 = expected_region_present ? 1u : 0u;
+    rec.postcondition_check_u8 = integrity_ok ? 1u : 0u;
+    rec.conflict_detected_u8 = 0u;
+    rec.retry_viable_u8 = integrity_ok ? 0u : 1u;
+    rec.used_fallback_text_surgery_u8 = (bind_mode_u16 == (uint16_t)SubstrateManager::EW_AI_PATCH_BIND_EXACT) ? 1u : 0u;
+    rec.residual_ambiguity_u8 = integrity_ok ? 0u : 1u;
+    rec.rel_path_utf8 = rel_path;
+    rec.anchor_a_utf8 = spec.anchor_a;
+    rec.anchor_b_utf8 = spec.anchor_b;
+    rec.target_span_utf8 = ew_patch_span_utf8_(spec, bind_mode_u16, bind_a, bind_b, expected_region_present);
+    rec.apply_outcome_utf8 = integrity_ok ? "apply_ok" : "apply_ok_integrity_warning";
+    rec.residual_note_utf8 = integrity_ok ? std::string() : "postcondition integrity checks require review";
+    rec.follow_up_action_utf8 = integrity_ok ? "none" : "inspect target integrity before next patch";
+    rec.summary_utf8 = integrity_ok ? "validated_apply_success" : "apply_success_with_integrity_warning";
+    sm->ai_patch_note_target_validation(rec, rec.summary_utf8, rec.follow_up_action_utf8);
+    if (auto_session_started) {
+        sm->ai_patch_finish_session(true, "apply_ok", rec.summary_utf8, "completed", integrity_ok ? std::string() : rec.follow_up_action_utf8);
+    }
     return true;
 }
 
-void code_emit_hydration_hint(SubstrateMicroprocessor* sm, const std::string& root_dir_rel) {
+void code_emit_apply_target_hint(SubstrateManager* sm, const std::string& root_dir_rel) {
     if (!sm) return;
-    const std::string rel_path = "Draft Container/AI/hydration_hint.txt";
-    const std::string payload = "HYDRATE_ROOT=" + root_dir_rel + "\n";
+    const std::string rel_path = "AI/apply_target_hint.txt";
+    const std::string payload = "APPLY_TARGET_ROOT=" + root_dir_rel + "\n";
     upsert_artifact(sm, rel_path, (uint32_t)EW_ARTIFACT_TEXT, payload, 0xE180u);
 }
 
-void code_emit_minimal_cpp_module(SubstrateMicroprocessor* sm, const std::string& module_name_utf8) {
+void code_emit_minimal_cpp_module(SubstrateManager* sm, const std::string& module_name_utf8) {
     if (!sm) return;
     const std::string name = sanitize_module_name(module_name_utf8);
 
-    const std::string base_dir = "Draft Container/Generated/";
+    const std::string base_dir = "Generated/";
     const std::string hpp_path = base_dir + name + ".hpp";
     const std::string cpp_path = base_dir + name + ".cpp";
-    const std::string cmake_path = "Draft Container/Generated/CMakeLists.txt";
+    const std::string cmake_path = "Generated/CMakeLists.txt";
 
     const std::string hpp =
         "#pragma once\n"

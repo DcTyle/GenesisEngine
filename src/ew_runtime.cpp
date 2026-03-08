@@ -4,7 +4,7 @@
 #include "GE_control_packets.hpp"
 #include "GE_camera_anchor.hpp"
 
-void ew_runtime_submit_pulsepacket(SubstrateMicroprocessor* sm, const PulsePacketV1* p) {
+void ew_runtime_submit_pulsepacket(SubstrateManager* sm, const PulsePacketV1* p) {
     if (!sm || !p) return;
     if (ew_pulsepacketv1_validate(p) != EW_INGRESS_OK) return;
 
@@ -36,23 +36,23 @@ void ew_runtime_submit_pulsepacket(SubstrateMicroprocessor* sm, const PulsePacke
     sm->enqueue_inbound_pulse(pp);
 }
 
-void ew_runtime_submit_external_api_response(SubstrateMicroprocessor* sm, const EwExternalApiResponse& resp) {
+void ew_runtime_submit_external_api_response(SubstrateManager* sm, const EwExternalApiResponse& resp) {
     if (!sm) return;
     sm->submit_external_api_response(resp);
 }
 
-bool ew_runtime_pop_external_api_request(SubstrateMicroprocessor* sm, EwExternalApiRequest* out_req) {
+bool ew_runtime_pop_external_api_request(SubstrateManager* sm, EwExternalApiRequest* out_req) {
     if (!sm || !out_req) return false;
     return sm->pop_external_api_request(*out_req);
 }
 
 
-bool ew_runtime_language_bootstrap(SubstrateMicroprocessor* sm, const char* root_dir_utf8) {
+bool ew_runtime_language_bootstrap(SubstrateManager* sm, const char* root_dir_utf8) {
     if (!sm || !root_dir_utf8) return false;
     return sm->language_bootstrap_from_dir(std::string(root_dir_utf8));
 }
 
-std::vector<EwVizPoint> ew_runtime_project_points(const SubstrateMicroprocessor* sm, uint32_t max_points_u32) {
+std::vector<EwVizPoint> ew_runtime_project_points(const SubstrateManager* sm, uint32_t max_points_u32) {
     if (!sm) return {};
     std::vector<EwVizPoint> pts;
     pts.reserve((max_points_u32 == 0u) ? 0u : max_points_u32);
@@ -61,12 +61,12 @@ std::vector<EwVizPoint> ew_runtime_project_points(const SubstrateMicroprocessor*
     return pts;
 }
 
-bool ew_runtime_submit_control_packet(SubstrateMicroprocessor* sm, const EwControlPacket* p) {
+bool ew_runtime_submit_control_packet(SubstrateManager* sm, const EwControlPacket* p) {
     if (!sm || !p) return false;
     return sm->control_packet_push(*p);
 }
 
-bool ew_runtime_get_render_camera_packet(const SubstrateMicroprocessor* sm, EwRenderCameraPacket* out) {
+bool ew_runtime_get_render_camera_packet(const SubstrateManager* sm, EwRenderCameraPacket* out) {
     if (!sm || !out) return false;
     // Renderer consumes the projected packet computed inside the substrate tick.
     // Fail closed if not yet projected.
@@ -75,3 +75,16 @@ bool ew_runtime_get_render_camera_packet(const SubstrateMicroprocessor* sm, EwRe
     return true;
 }
 
+
+
+bool ew_runtime_get_render_assist_packet(const SubstrateManager* sm, EwRenderAssistPacket* out) {
+    if (!sm || !out) return false;
+    if (sm->render_assist_packet_tick_u64 == 0u) return false;
+    *out = sm->render_assist_packet;
+    return true;
+}
+
+bool ew_runtime_get_render_xr_eye_packet(const SubstrateManager* sm, uint32_t eye_index_u32, EwRenderXrEyePacket* out) {
+    if (!sm || !out) return false;
+    return sm->get_render_xr_eye_packet(eye_index_u32, out);
+}

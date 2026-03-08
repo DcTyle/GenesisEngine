@@ -211,29 +211,29 @@ static inline uint32_t ensure_planet_anchor(SubstrateManager* sm, uint64_t objec
 void ew_nbody_tick(SubstrateManager* sm) {
     if (!sm) return;
 
-    if (sm->nbody.enabled_u32 == 0u) return;
+    if (sm->nbody_state.enabled_u32 == 0u) return;
 
-    if (sm->nbody.initialized_u32 == 0u) {
+    if (sm->nbody_state.initialized_u32 == 0u) {
         EwNBodyState tmp;
         ew_nbody_init_default(&tmp);
         // Keep enabled state from existing (allows disabling via future settings).
-        tmp.enabled_u32 = sm->nbody.enabled_u32;
-        sm->nbody = tmp;
+        tmp.enabled_u32 = sm->nbody_state.enabled_u32;
+        sm->nbody_state = tmp;
 
         // Resolve anchors deterministically.
-        for (uint32_t i = 0; i < sm->nbody.body_count_u32 && i < EwNBodyState::MAX_BODIES; ++i) {
-            EwNBodyBody& b = sm->nbody.bodies[i];
+        for (uint32_t i = 0; i < sm->nbody_state.body_count_u32 && i < EwNBodyState::MAX_BODIES; ++i) {
+            EwNBodyBody& b = sm->nbody_state.bodies[i];
             b.planet_anchor_id_u32 = ensure_planet_anchor(sm, b.object_id_u64);
         }
-        sm->nbody.initialized_u32 = 1u;
+        sm->nbody_state.initialized_u32 = 1u;
     }
 
     // One step per canonical tick (dt controlled in Q32.32).
-    velocity_verlet_step(&sm->nbody);
+    velocity_verlet_step(&sm->nbody_state);
 
     // Project bodies into planet anchors (authoritative state).
-    for (uint32_t i = 0; i < sm->nbody.body_count_u32 && i < EwNBodyState::MAX_BODIES; ++i) {
-        const EwNBodyBody& b = sm->nbody.bodies[i];
+    for (uint32_t i = 0; i < sm->nbody_state.body_count_u32 && i < EwNBodyState::MAX_BODIES; ++i) {
+        const EwNBodyBody& b = sm->nbody_state.bodies[i];
         const uint32_t aid = b.planet_anchor_id_u32;
         if (aid == 0u || aid >= sm->anchors.size()) continue;
         Anchor& a = sm->anchors[aid];

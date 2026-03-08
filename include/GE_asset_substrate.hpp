@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-class SubstrateMicroprocessor;
+class SubstrateManager;
 
 namespace genesis {
 
@@ -26,7 +26,7 @@ enum class GeAssetPartition : uint32_t {
     Character = 4,
     Foliage = 5,
     Assets = 6,
-    Ai = 7,
+    Vault = 7,
 };
 
 struct GeAssetEntry {
@@ -35,6 +35,11 @@ struct GeAssetEntry {
     std::string label_utf8;
     uint64_t object_id_u64 = 0;
     uint32_t kind_u32 = 0;
+};
+
+struct GeCoherenceHit {
+    std::string rel_path_utf8;
+    uint32_t score_u32 = 0u;
 };
 
 class GeAssetSubstrate {
@@ -50,7 +55,7 @@ public:
 
     // Save a runtime object as a .geasset into the project substrate, and (optionally)
     // mirror it into the global cache for reuse.
-    bool save_object_asset(SubstrateMicroprocessor* sm,
+    bool save_object_asset(SubstrateManager* sm,
                            uint64_t object_id_u64,
                            uint32_t kind_u32,
                            GeAssetPartition partition,
@@ -73,12 +78,13 @@ private:
 
     static const char* partition_dirname(GeAssetPartition p);
     static void ensure_default_tree_(const std::string& root_utf8);
+    static void ensure_partition_schema_(const std::string& root_utf8, GeAssetPartition partition);
     static std::string join_path_(const std::string& a, const std::string& b);
     static std::string sanitize_filename_ascii_(const std::string& in_utf8);
 
     bool write_index_file_(const std::string& root_utf8, const std::vector<GeAssetEntry>& entries, std::string* out_err) const;
     bool scan_entries_(const std::string& root_utf8, std::vector<GeAssetEntry>& out_entries, std::string* out_err) const;
-    bool save_into_root_(SubstrateMicroprocessor* sm,
+    bool save_into_root_(SubstrateManager* sm,
                          const std::string& root_utf8,
                          uint64_t object_id_u64,
                          uint32_t kind_u32,

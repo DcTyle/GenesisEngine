@@ -1,0 +1,5 @@
+In file included from /tmp/gev49/vulkan_app/src/GE_app.cpp:1:
+vulkan_app/include/GE_app.hpp:4:10: fatal error: windows.h: No such file or directory
+    4 | #include <windows.h>
+      |          ^~~~~~~~~~~
+compilation terminated.

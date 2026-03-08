@@ -1,0 +1,21 @@
+# Deterministic input bindings (raw_id -> mapped_action -> scale_q16_16)
+# Mapped actions (EwMappedInputAction):
+# 1 MoveForward, 2 MoveBackward, 3 MoveLeft, 4 MoveRight, 5 MoveUp, 6 MoveDown,
+# 7 ZoomIn, 8 ZoomOut, 10 LookYaw, 11 LookPitch
+
+# Common WASD (ASCII codes)
+action 87 1 65536   # W
+action 83 2 65536   # S
+action 65 3 65536   # A
+action 68 4 65536   # D
+
+action 69 5 65536   # E up
+action 81 6 65536   # Q down
+
+# Mouse delta axes (viewport adapter codes)
+axis 4096 10 65536  # 0x1000 MouseDeltaX -> yaw
+axis 4097 11 65536  # 0x1001 MouseDeltaY -> pitch
+
+# Wheel as axis (positive/negative). You may map it to zoom in/out with scale.
+axis 4098 7 65536   # 0x1002 wheel -> ZoomIn (positive)
+# axis 4098 8 65536 # 0x1002 wheel -> ZoomOut (negative) (handled via scale)

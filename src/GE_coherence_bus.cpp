@@ -7,15 +7,6 @@
 #include <algorithm>
 #include <vector>
 
-static inline uint64_t ew_mix_u64_local(uint64_t x) {
-    x ^= x >> 33;
-    x *= 0xff51afd7ed558ccdULL;
-    x ^= x >> 33;
-    x *= 0xc4ceb9fe1a85ec53ULL;
-    x ^= x >> 33;
-    return x;
-}
-
 static inline uint8_t ew_coherence_band_from_abs_q32_32(int64_t v_q32_32) {
     // Map |v| to a small log2-ish band in [0..EW_COHERENCE_BANDS-1].
     uint64_t a = (uint64_t)((v_q32_32 < 0) ? -v_q32_32 : v_q32_32);
@@ -43,21 +34,21 @@ void ew_coherence_bus_step(EwState& cand, const EwCtx& ctx) {
     // Collect leakage packets from all spectral anchors.
     struct TmpLeak {
         EwLeakagePublishPacket p;
-        uint64_t key;
+        EwId9 key_id9{};
     };
     std::vector<TmpLeak> tmp;
     tmp.reserve(64);
 
     struct TmpInflux {
         EwInfluxPublishPacket p;
-        uint64_t key;
+        EwId9 key_id9{};
     };
     std::vector<TmpInflux> tmp_in;
     tmp_in.reserve(64);
 
     struct TmpTemporal {
         EwTemporalResidualPublishPacket p;
-        uint64_t key;
+        EwId9 key_id9{};
     };
     std::vector<TmpTemporal> tmp_tr;
     tmp_tr.reserve(64);
@@ -74,12 +65,10 @@ void ew_coherence_bus_step(EwState& cand, const EwCtx& ctx) {
             lp.coherence_band_u8 = ss.leakage_band_u8;
             lp.suggested_action_u8 = (uint8_t)EwCoherenceSuggestedAction::AdjustViscosity;
             lp.leakage_q32_32 = ss.leakage_q32_32;
-            lp.payload_hash_u64 = ss.leakage_hash_u64;
+            lp.payload_id9 = ss.leakage_id9;
             lp.v_code_u16 = ss.intent_summary.last_v_code_u16;
             lp.i_code_u16 = ss.intent_summary.last_i_code_u16;
-
-            const uint64_t key = ((uint64_t)lp.coherence_band_u8 << 56) ^ ew_mix_u64_local(lp.payload_hash_u64) ^ ((uint64_t)lp.src_anchor_id_u32 << 1);
-            tmp.push_back({lp, key});
+            tmp.push_back({lp, lp.payload_id9});
 
             // Consume the pending flag (one-shot publish).
             ss.leakage_pending_u8 = 0u;
@@ -91,14 +80,12 @@ void ew_coherence_bus_step(EwState& cand, const EwCtx& ctx) {
             tp.coherence_band_u8 = ss.temporal_residual.residual_band_u8;
             tp.suggested_action_u8 = (uint8_t)EwCoherenceSuggestedAction::OperatorReplace;
             tp.residual_norm_q15 = ss.temporal_residual.residual_norm_q15;
-            tp.intent_hash_u64 = ss.temporal_residual.intent_hash_u64;
-            tp.measured_hash_u64 = ss.temporal_residual.measured_hash_u64;
+            tp.intent_id9 = ss.temporal_residual.intent_id9;
+            tp.measured_id9 = ss.temporal_residual.measured_id9;
             tp.residual_q32_32 = ss.temporal_residual.residual_q32_32;
             tp.v_code_u16 = ss.intent_summary.last_v_code_u16;
             tp.i_code_u16 = ss.intent_summary.last_i_code_u16;
-
-            const uint64_t key = ((uint64_t)tp.coherence_band_u8 << 56) ^ ew_mix_u64_local(tp.intent_hash_u64) ^ (ew_mix_u64_local(tp.measured_hash_u64) << 1) ^ ((uint64_t)tp.src_anchor_id_u32 << 1);
-            tmp_tr.push_back({tp, key});
+            tmp_tr.push_back({tp, tp.intent_id9});
             ss.temporal_residual.residual_pending_u8 = 0u;
         }
     }
@@ -118,14 +105,12 @@ void ew_coherence_bus_step(EwState& cand, const EwCtx& ctx) {
             tp.coherence_band_u8 = vs.temporal_residual.residual_band_u8;
             tp.suggested_action_u8 = (uint8_t)EwCoherenceSuggestedAction::OperatorReplace;
             tp.residual_norm_q15 = vs.temporal_residual.residual_norm_q15;
-            tp.intent_hash_u64 = vs.temporal_residual.intent_hash_u64;
-            tp.measured_hash_u64 = vs.temporal_residual.measured_hash_u64;
+            tp.intent_id9 = vs.temporal_residual.intent_id9;
+            tp.measured_id9 = vs.temporal_residual.measured_id9;
             tp.residual_q32_32 = vs.temporal_residual.residual_q32_32;
             tp.v_code_u16 = a.last_v_code;
             tp.i_code_u16 = a.last_i_code;
-
-            const uint64_t key = ((uint64_t)tp.coherence_band_u8 << 56) ^ ew_mix_u64_local(tp.intent_hash_u64) ^ (ew_mix_u64_local(tp.measured_hash_u64) << 1) ^ ((uint64_t)tp.src_anchor_id_u32 << 1);
-            tmp_tr.push_back({tp, key});
+            tmp_tr.push_back({tp, tp.intent_id9});
             vs.temporal_residual.residual_pending_u8 = 0u;
         }
 
@@ -136,12 +121,10 @@ void ew_coherence_bus_step(EwState& cand, const EwCtx& ctx) {
         ip.coherence_band_u8 = vs.influx_band_u8;
         ip.suggested_action_u8 = (uint8_t)EwCoherenceSuggestedAction::AdjustLearning;
         ip.influx_q32_32 = vs.influx_q32_32;
-        ip.payload_hash_u64 = vs.influx_hash_u64;
+        ip.payload_id9 = vs.influx_id9;
         ip.v_code_u16 = a.last_v_code;
         ip.i_code_u16 = a.last_i_code;
-
-        const uint64_t key = ((uint64_t)ip.coherence_band_u8 << 56) ^ ew_mix_u64_local(ip.payload_hash_u64) ^ ((uint64_t)ip.src_anchor_id_u32 << 1);
-        tmp_in.push_back({ip, key});
+        tmp_in.push_back({ip, ip.payload_id9});
 
         vs.influx_pending_u8 = 0u;
     }
@@ -149,24 +132,24 @@ void ew_coherence_bus_step(EwState& cand, const EwCtx& ctx) {
     // Stable sort for determinism.
     std::stable_sort(tmp.begin(), tmp.end(), [](const TmpLeak& a, const TmpLeak& b) {
         if (a.p.coherence_band_u8 != b.p.coherence_band_u8) return a.p.coherence_band_u8 < b.p.coherence_band_u8;
-        if (a.key != b.key) return a.key < b.key;
+        if (a.key_id9 != b.key_id9) return a.key_id9 < b.key_id9;
         if (a.p.src_anchor_id_u32 != b.p.src_anchor_id_u32) return a.p.src_anchor_id_u32 < b.p.src_anchor_id_u32;
-        return a.p.payload_hash_u64 < b.p.payload_hash_u64;
+        return a.p.payload_id9 < b.p.payload_id9;
     });
 
     std::stable_sort(tmp_in.begin(), tmp_in.end(), [](const TmpInflux& a, const TmpInflux& b) {
         if (a.p.coherence_band_u8 != b.p.coherence_band_u8) return a.p.coherence_band_u8 < b.p.coherence_band_u8;
-        if (a.key != b.key) return a.key < b.key;
+        if (a.key_id9 != b.key_id9) return a.key_id9 < b.key_id9;
         if (a.p.src_anchor_id_u32 != b.p.src_anchor_id_u32) return a.p.src_anchor_id_u32 < b.p.src_anchor_id_u32;
-        return a.p.payload_hash_u64 < b.p.payload_hash_u64;
+        return a.p.payload_id9 < b.p.payload_id9;
     });
 
     std::stable_sort(tmp_tr.begin(), tmp_tr.end(), [](const TmpTemporal& a, const TmpTemporal& b) {
         if (a.p.coherence_band_u8 != b.p.coherence_band_u8) return a.p.coherence_band_u8 < b.p.coherence_band_u8;
-        if (a.key != b.key) return a.key < b.key;
+        if (a.key_id9 != b.key_id9) return a.key_id9 < b.key_id9;
         if (a.p.src_anchor_id_u32 != b.p.src_anchor_id_u32) return a.p.src_anchor_id_u32 < b.p.src_anchor_id_u32;
-        if (a.p.intent_hash_u64 != b.p.intent_hash_u64) return a.p.intent_hash_u64 < b.p.intent_hash_u64;
-        return a.p.measured_hash_u64 < b.p.measured_hash_u64;
+        if (a.p.intent_id9 != b.p.intent_id9) return a.p.intent_id9 < b.p.intent_id9;
+        return a.p.measured_id9 < b.p.measured_id9;
     });
 
 
@@ -185,11 +168,11 @@ void ew_coherence_bus_step(EwState& cand, const EwCtx& ctx) {
 
     for (size_t i = 0; i < tmp.size(); ++i) {
         EwLeakagePublishPacket lp = tmp[i].p;
-        // Reduce duplicates: merge consecutive identical (band + hash).
+        // Reduce duplicates: merge consecutive identical (band + payload_id9).
         while (i + 1 < tmp.size()) {
             const EwLeakagePublishPacket& nx = tmp[i + 1].p;
             if (nx.coherence_band_u8 != lp.coherence_band_u8) break;
-            if (nx.payload_hash_u64 != lp.payload_hash_u64) break;
+            if (nx.payload_id9 != lp.payload_id9) break;
             // Deterministic reduction: sum leakage.
             lp.leakage_q32_32 += nx.leakage_q32_32;
             ++i;
@@ -260,7 +243,7 @@ void ew_coherence_bus_step(EwState& cand, const EwCtx& ctx) {
         while (i + 1 < tmp_in.size()) {
             const EwInfluxPublishPacket& nx = tmp_in[i + 1].p;
             if (nx.coherence_band_u8 != ip.coherence_band_u8) break;
-            if (nx.payload_hash_u64 != ip.payload_hash_u64) break;
+            if (nx.payload_id9 != ip.payload_id9) break;
             ip.influx_q32_32 += nx.influx_q32_32;
             ++i;
         }
@@ -326,8 +309,8 @@ void ew_coherence_bus_step(EwState& cand, const EwCtx& ctx) {
         while (i + 1 < tmp_tr.size()) {
             const EwTemporalResidualPublishPacket& nx = tmp_tr[i + 1].p;
             if (nx.coherence_band_u8 != tp.coherence_band_u8) break;
-            if (nx.intent_hash_u64 != tp.intent_hash_u64) break;
-            if (nx.measured_hash_u64 != tp.measured_hash_u64) break;
+            if (nx.intent_id9 != tp.intent_id9) break;
+            if (nx.measured_id9 != tp.measured_id9) break;
             // Deterministic reduction: max residual_norm, sum residual_q32_32.
             if (nx.residual_norm_q15 > tp.residual_norm_q15) tp.residual_norm_q15 = nx.residual_norm_q15;
             tp.residual_q32_32 += nx.residual_q32_32;

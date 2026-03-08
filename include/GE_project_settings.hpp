@@ -11,6 +11,8 @@ struct PsRendering {
     // gain_q16_16 scales harmonic_mean into a [0..1] dominance factor.
     int32_t dnoise_gain_q16_16 = (int32_t)(1.0f * 65536.0f);
     int32_t dnoise_bias_q16_16 = 0;
+    int32_t screen_proxy_scale_q16_16 = (int32_t)(1.0f * 65536.0f);
+    int32_t lod_boost_max_q16_16 = (int32_t)(0.35f * 65536.0f);
 };
 
 struct PsPhysics {
@@ -31,11 +33,16 @@ struct PsCamera {
     int32_t move_step_m_q16_16 = (int32_t)(25 * 65536 / 100); // 0.25m
     int32_t look_sens_rad_per_unit_q16_16 = (int32_t)(0.002f * 65536.0f);
     int32_t zoom_step_m_q16_16 = (int32_t)(10 * 65536 / 100); // 0.10m
+    int32_t focus_band_m_q16_16 = (int32_t)(0.75f * 65536.0f);
+    int32_t near_boost_min_m_q16_16 = (int32_t)(0.0762f * 65536.0f);
+    int32_t near_boost_max_m_q16_16 = (int32_t)(0.3048f * 65536.0f);
+    int32_t near_m_q16_16 = (int32_t)(0.1f * 65536.0f);
+    int32_t far_m_q16_16 = (int32_t)(1000.0f * 65536.0f);
 };
 
 struct PsInput {
     // Input bindings file path (relative).
-    std::string bindings_path_utf8 = "Draft Container/ProjectSettings/input_bindings.ewcfg";
+    std::string bindings_path_utf8 = "ProjectSettings/input_bindings.ewcfg";
 };
 
 struct PsAiSubstrate {
@@ -53,12 +60,12 @@ struct PsPackaging {
 
 struct PsAssets {
     // Root folder for the per-project asset substrate (relative or absolute).
-    // Default stays inside Draft Container to preserve deterministic behavior.
-    std::string project_asset_substrate_root_utf8 = "Draft Container/AssetSubstrate";
+    // Default stays repo-local under GenesisEngine/ to preserve deterministic behavior.
+    std::string project_asset_substrate_root_utf8 = "AssetSubstrate";
 
     // Root folder for the user cache that can be reused across projects.
     // Default is still repo-local; deployment can override via settings.
-    std::string global_asset_cache_root_utf8 = "Draft Container/AssetLibraryCache";
+    std::string global_asset_cache_root_utf8 = "AssetLibraryCache";
 
     // Deterministic content index file name written inside each root.
     std::string content_index_filename_utf8 = "content_index.gecontent";

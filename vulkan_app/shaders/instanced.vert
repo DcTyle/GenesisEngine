@@ -4,6 +4,7 @@ layout(push_constant) uniform Push {
     mat4 proj;
     vec3 sunPosCam;
     float pointSize;
+    vec4 debug; // x: resonance_only(0/1), y: spectrum_band, z: spectrum_phase, w: reserved
 } pc;
 
 struct Inst {

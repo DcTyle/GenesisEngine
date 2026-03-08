@@ -585,11 +585,11 @@ void ew_voxel_coupling_step(uint64_t canonical_tick_u64,
 
         vs.intent_summary.band_mag_q15[0] = vs.boundary_strength_mean_q15;
         vs.intent_summary.band_mag_q15[1] = vs.permeability_mean_q15;
-        vs.intent_summary.band_mag_q15[2] = (uint16_t)ew_u32_min((uint32_t)vs.interface_strength_mean_q15, 32767u);
-        vs.intent_summary.band_mag_q15[3] = (uint16_t)ew_u32_min(vs.particle_count_u32 * 512u, 32767u);
+        vs.intent_summary.band_mag_q15[2] = (uint16_t)(((uint32_t)vs.interface_strength_mean_q15 < 32767u) ? (uint32_t)vs.interface_strength_mean_q15 : 32767u);
+        vs.intent_summary.band_mag_q15[3] = (uint16_t)(((vs.particle_count_u32 * 512u) < 32767u) ? (vs.particle_count_u32 * 512u) : 32767u);
         uint32_t intent_acc = 0u;
         for (uint32_t kk = 0u; kk < 4u; ++kk) intent_acc += vs.intent_summary.band_mag_q15[kk];
-        vs.intent_summary.intent_norm_q15 = (uint16_t)ew_u32_min(intent_acc / 4u, 32767u);
+        vs.intent_summary.intent_norm_q15 = (uint16_t)(((intent_acc / 4u) < 32767u) ? (intent_acc / 4u) : 32767u);
         vs.intent_summary.last_v_code_u16 = a.last_v_code;
         vs.intent_summary.last_i_code_u16 = a.last_i_code;
 
@@ -598,22 +598,10 @@ void ew_voxel_coupling_step(uint64_t canonical_tick_u64,
         vs.measured_summary.energy_peak_q15 = vs.boundary_strength_mean_q15;
         const uint16_t influx_abs_q15 = clamp_q15_u16((uint32_t)(abs_u >> 17));
         vs.measured_summary.leakage_abs_q15 = influx_abs_q15;
-
-        // Hashes: deterministic FNV-like mixing.
-        uint64_t ih = 1469598103934665603ull;
-        ih ^= (uint64_t)a.id; ih *= 1099511628211ull;
-        ih ^= (uint64_t)vs.intent_summary.intent_norm_q15; ih *= 1099511628211ull;
-        ih ^= (uint64_t)vs.intent_summary.band_mag_q15[0]; ih *= 1099511628211ull;
-        ih ^= (uint64_t)vs.intent_summary.band_mag_q15[1]; ih *= 1099511628211ull;
-
-        uint64_t mh = 1469598103934665603ull;
-        mh ^= (uint64_t)a.id; mh *= 1099511628211ull;
-        mh ^= (uint64_t)vs.measured_summary.energy_mean_q15; mh *= 1099511628211ull;
-        mh ^= (uint64_t)vs.measured_summary.leakage_abs_q15; mh *= 1099511628211ull;
-        mh ^= (uint64_t)vs.influx_band_u8; mh *= 1099511628211ull;
-
-        vs.temporal_residual.intent_hash_u64 = ih;
-        vs.temporal_residual.measured_hash_u64 = mh;
+        const EwId9 intent_id9 = ew_temporal_intent_id9(a.id, vs.intent_summary);
+        const EwId9 measured_id9 = ew_temporal_measured_id9(a.id, vs.measured_summary, (uint32_t)vs.influx_band_u8);
+        vs.temporal_residual.intent_id9 = intent_id9;
+        vs.temporal_residual.measured_id9 = measured_id9;
 
         // Residual: discrepancy between intended boundary coupling and observed influx magnitude.
         const int32_t rq15 = (int32_t)vs.measured_summary.leakage_abs_q15 - (int32_t)vs.intent_summary.intent_norm_q15;
@@ -624,15 +612,16 @@ void ew_voxel_coupling_step(uint64_t canonical_tick_u64,
         // Gate publish: only when residual is significant.
         vs.temporal_residual.residual_pending_u8 = (rabs > 64u) ? 1u : 0u;
 
-        // Pulse measurement sidecar: intent/measured hashes and residual mirror.
-        vs.pulse_measured.pulse_intent_hash_u64 = ih ^ 0xC011D3ULL;
+        // Pulse measurement sidecar: intent/measured vector IDs and residual mirror.
+        const EwId9 pulse_intent_id9 = ew_pulse_intent_id9_from_intent(intent_id9, vs.intent_summary.intent_norm_q15, vs.intent_summary.last_v_code_u16, vs.intent_summary.last_i_code_u16);
+        vs.pulse_measured.pulse_intent_id9 = pulse_intent_id9;
 
         // Pulse intent sidecar (control-plane).
-        vs.pulse_intent.pulse_intent_hash_u64 = ih ^ 0xC011D3ULL;
+        vs.pulse_intent.pulse_intent_id9 = pulse_intent_id9;
         vs.pulse_intent.pulse_intent_norm_q15 = vs.intent_summary.intent_norm_q15;
         vs.pulse_intent.last_v_code_u16 = vs.intent_summary.last_v_code_u16;
         vs.pulse_intent.last_i_code_u16 = vs.intent_summary.last_i_code_u16;
-        vs.pulse_measured.pulse_measured_hash_u64 = mh ^ 0x5EEDu;
+        vs.pulse_measured.pulse_measured_id9 = ew_pulse_measured_id9_from_measured(measured_id9, rabs, (uint32_t)vs.temporal_residual.residual_band_u8);
         vs.pulse_measured.pulse_residual_q32_32 = vs.temporal_residual.residual_q32_32;
         vs.pulse_measured.pulse_residual_norm_q15 = rabs;
         vs.pulse_measured.pulse_band_u8 = vs.temporal_residual.residual_band_u8;
@@ -648,14 +637,7 @@ void ew_voxel_coupling_step(uint64_t canonical_tick_u64,
         vs.pulse_intent_ring[vs.pulse_intent_ring_head_u32] = vs.pulse_intent;
         vs.pulse_intent_ring_head_u32 = (vs.pulse_intent_ring_head_u32 + 1u) % EW_PULSE_INTENT_RING_W;
         if (vs.pulse_intent_ring_count_u32 < EW_PULSE_INTENT_RING_W) vs.pulse_intent_ring_count_u32++;
-
-        // Deterministic hash of motivating slice.
-        uint64_t h = 1469598103934665603ull;
-        h ^= (uint64_t)(a.id); h *= 1099511628211ull;
-        h ^= (uint64_t)(vs.particle_count_u32); h *= 1099511628211ull;
-        h ^= (uint64_t)(vs.influx_band_u8); h *= 1099511628211ull;
-        h ^= (uint64_t)(vs.learning_coupling_q15); h *= 1099511628211ull;
-        vs.influx_hash_u64 = h;
+        vs.influx_id9 = ew_influx_payload_id9(a.id, vs.particle_count_u32, (uint32_t)vs.influx_band_u8, (uint32_t)vs.learning_coupling_q15);
 
         if (vs.influx_pending_u8) {
             EwInfluxPublishPacket p;
@@ -663,7 +645,7 @@ void ew_voxel_coupling_step(uint64_t canonical_tick_u64,
             p.coherence_band_u8 = vs.influx_band_u8;
             p.suggested_action_u8 = (uint8_t)EwCoherenceSuggestedAction::AdjustLearning;
             p.influx_q32_32 = vs.influx_q32_32;
-            p.payload_hash_u64 = vs.influx_hash_u64;
+            p.payload_id9 = vs.influx_id9;
             p.v_code_u16 = a.last_v_code;
             p.i_code_u16 = a.last_i_code;
             out_influx.push_back(p);

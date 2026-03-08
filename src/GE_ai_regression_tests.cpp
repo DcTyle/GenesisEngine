@@ -77,7 +77,7 @@ static bool ge_test_metric_task_build_determinism(std::string& out) {
     return ok;
 }
 
-static bool ge_test_two_run_fingerprint_determinism(std::string& out, SubstrateManager* sm_outer) {
+static bool ge_test_two_run_signature_determinism(std::string& out, SubstrateManager* sm_outer) {
     // Create two identical headless substrate managers and run identical inputs.
     // This catches scheduler nondeterminism and key/GC drift.
     const uint64_t seed = 1337ull;
@@ -107,18 +107,18 @@ static bool ge_test_two_run_fingerprint_determinism(std::string& out, SubstrateM
     }
 
     bool ok = true;
-    ok &= ge_expect_eq_u64(out, "two_run.final_fingerprint", a.state_fingerprint_u64, b.state_fingerprint_u64);
+    ok &= ge_expect_eq_u64(out, "two_run.final_signature", a.state_signature_u64, b.state_signature_u64);
     ok &= ge_expect_eq_u32(out, "two_run.stage", a.learning_curriculum_stage_u32, b.learning_curriculum_stage_u32);
     ok &= ge_expect_eq_u32(out, "two_run.pending", a.learning_gate.registry().pending_count_u32(), b.learning_gate.registry().pending_count_u32());
     ok &= ge_expect_eq_u64(out, "two_run.vault_last_key", a.vault_last_commit_key_u64, b.vault_last_commit_key_u64);
     ok &= ge_expect_eq_u32(out, "two_run.vault_last_kind", a.vault_last_commit_kind_u32, b.vault_last_commit_kind_u32);
 
-    // Also compare against the live runtime instance fingerprint if provided.
+    // Also compare against the live runtime instance signature if provided.
     if (sm_outer) {
         ok &= ge_expect_eq_u32(out, "selftest.sm_present", 1u, 1u);
     }
 
-    if (ok) ge_append_line(out, "OK two_run_fingerprint_determinism");
+    if (ok) ge_append_line(out, "OK two_run_signature_determinism");
     return ok;
 }
 
@@ -129,7 +129,7 @@ bool ge_run_ai_determinism_selftests(SubstrateManager* sm, std::string& out_log_
     bool ok = true;
     ok &= ge_test_metric_claim_determinism(out_log_utf8);
     ok &= ge_test_metric_task_build_determinism(out_log_utf8);
-    ok &= ge_test_two_run_fingerprint_determinism(out_log_utf8, sm);
+    ok &= ge_test_two_run_signature_determinism(out_log_utf8, sm);
 
     ge_append_line(out_log_utf8, ok ? "AI_SELFTEST:OK" : "AI_SELFTEST:FAIL");
     return ok;

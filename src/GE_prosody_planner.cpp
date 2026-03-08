@@ -122,10 +122,9 @@ std::vector<VoiceProsodyControl> ge_voice_plan_prosody(
     const std::string& text_utf8)
 {
     const auto pause_kinds = ge_pause_kinds_from_text_and_phones(text_utf8, phones);
-    return ge_voice_plan_prosody_with_pause_meta(phones, cfg, pause_kinds, text_utf8);
+    std::vector<uint8_t> pause_strength(phones.size(), 0u);
+    return ge_voice_plan_prosody_with_pause_meta(phones, cfg, pause_kinds, pause_strength, text_utf8);
 }
-
-} // namespace genesis
 
 std::vector<VoiceProsodyControl> ge_voice_plan_prosody_with_pause_kinds(
     const std::vector<PhonemeSpan>& phones,
@@ -139,3 +138,5 @@ std::vector<VoiceProsodyControl> ge_voice_plan_prosody_with_pause_kinds(
     }
     return ge_voice_plan_prosody_with_pause_meta(phones, cfg, pause_kinds, strength, text_utf8);
 }
+
+} // namespace genesis

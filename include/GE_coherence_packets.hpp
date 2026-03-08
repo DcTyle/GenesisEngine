@@ -1,8 +1,9 @@
 #pragma once
 
 #include <cstdint>
+#include "ew_id9.hpp"
 
-// Coherence bus packets are tiny, hashable, and deterministic.
+// Coherence bus packets are tiny, vector-addressable, and deterministic.
 // They are NOT network packets; they are substrate-internal routing artifacts.
 
 enum class EwCoherenceSuggestedAction : uint8_t {
@@ -39,7 +40,7 @@ struct EwLeakagePublishPacket {
 
     // Signed residual in Q32.32.
     int64_t leakage_q32_32 = 0;
-    uint64_t payload_hash_u64 = 0;
+    EwId9 payload_id9{};
 
     // Carrier authority (observables).
     uint16_t v_code_u16 = 0;
@@ -70,7 +71,7 @@ struct EwInfluxPublishPacket {
 
     // Signed influx residual in Q32.32.
     int64_t influx_q32_32 = 0;
-    uint64_t payload_hash_u64 = 0;
+    EwId9 payload_id9{};
 
     // Carrier authority (observables).
     uint16_t v_code_u16 = 0;
@@ -87,9 +88,9 @@ struct EwTemporalResidualPublishPacket {
     uint8_t suggested_action_u8 = 0;
     uint16_t residual_norm_q15 = 0;
 
-    // Hashes of intent and measured summaries to keep routing deterministic.
-    uint64_t intent_hash_u64 = 0;
-    uint64_t measured_hash_u64 = 0;
+    // Canonical vector identities of intent and measured summaries for deterministic routing.
+    EwId9 intent_id9{};
+    EwId9 measured_id9{};
 
     // Signed residual proxy in Q32.32 (optional but useful).
     int64_t residual_q32_32 = 0;

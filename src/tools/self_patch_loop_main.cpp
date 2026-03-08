@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -133,11 +134,12 @@ static bool read_lines(const fs::path& p, std::vector<std::string>& out_lines) {
         norm.reserve(toks.size() * 2);
         norm.push_back(toks[0]);
         for (size_t ti = 1; ti < toks.size(); ++ti) {
-            std::string k, v;
-            if (!toks[ti].empty() && toks[ti][0] != '-' && ew::ew_split_kv_token_ascii(toks[ti], k, v)) {
-                const std::string nk = ew::ew_cli_normalize_key_ascii(k);
+            std::string_view k, v;
+            if (!toks[ti].empty() && toks[ti][0] != '-' && ew::ew_split_kv_token_ascii(std::string_view(toks[ti]), k, v)) {
+                std::string nk(k);
+                ew::ew_ascii_lower_inplace(nk);
                 norm.push_back(std::string("--") + nk);
-                norm.push_back(v);
+                norm.push_back(std::string(v));
             } else {
                 norm.push_back(toks[ti]);
             }

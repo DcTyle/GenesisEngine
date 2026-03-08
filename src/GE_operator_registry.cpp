@@ -1,4 +1,5 @@
 #include "GE_operator_registry.hpp"
+#include "GE_hilbert_actuation.hpp"
 #include "ancilla_ops.hpp"
 
 #include "canonical_ops.hpp"
@@ -9,7 +10,7 @@
 #include "qubit_lanes.hpp"
 
 #include "substrate_alu.hpp"
-#include "harmonic_fingerprint.hpp"
+#include "harmonic_signature.hpp"
 #include "substrate_harmonics.hpp"
 #include "ewmesh_voxelizer.hpp"
 #include "GE_uv_atlas_baker.hpp"
@@ -258,30 +259,22 @@ EwState evolve_state(const EwState& current_state, const EwInputs& inputs, const
     // remains internal to the substrate state (no external knobs).
     // - reservoir is the primary budget (Q0), promoted to Q32.32.
     // - CMB bath energy is a secondary accumulator (Q63), reduced to Q32.32.
-    const int64_t energy_budget_q32_32 = ((int64_t)current_state.reservoir << 32)
-        + (int64_t)(current_state.cmb_bath.reservoir_energy_q63 >> 31);
-    const int64_t abs_zero_floor_q32_32 = 0;
-    if (energy_budget_q32_32 <= abs_zero_floor_q32_32) {
-        // Freeze evolution when the domain has no available energy budget.
-        // We still advance canonical_tick to preserve deterministic time
-        // indexing, but no state variables are mutated.
+    const EwHilbertActuationBudget hilbert_budget = ge_build_hilbert_actuation_budget(current_state, inputs, ctx);
+    if (!hilbert_budget.allow_state_update) {
+        // Freeze evolution when the domain has no available Hilbert-space
+        // actuation budget. We still advance canonical_tick to preserve
+        // deterministic time indexing, but no state variables are mutated.
         return cand;
     }
-
-    // CMB sink gate for *force* updates (spatial displacement on x/y/z axes).
-    // The sink is proportional to the ambient bath proxy and existing bounded
-    // phase scale. This keeps units consistent (TURN_SCALE domain) and avoids
-    // introducing new free parameters.
-    const int64_t ambient_temp_q32_32 = lock_fixed_point_q32_32(energy_budget_q32_32, 0, (8LL << 32));
-    const int64_t cmb_sink_turns_q = (int64_t)(((__int128)ambient_temp_q32_32 * (__int128)ctx.max_dtheta_turns_q) >> (32 + 3)); // ~ambient/8
-    const int64_t force_mag_turns_q = abs_i64(inputs.pending_text_x_q) + abs_i64(inputs.pending_image_y_q) + abs_i64(inputs.pending_audio_z_q);
-    const bool allow_force_update = (force_mag_turns_q > cmb_sink_turns_q);
+    const std::vector<EwAnchorHilbertActuation> hilbert_actuation =
+        ge_build_anchor_hilbert_actuation_table(current_state, hilbert_budget, ctx);
+    (void)hilbert_actuation;
 
     // Boundary expansion.
     expand_boundary(cand, ctx);
 
     // Apply modality displacement (force) only if it clears the CMB sink gate.
-    if (allow_force_update) {
+    if (hilbert_budget.allow_force_update) {
         apply_pending_displacements(cand, inputs);
     }
     apply_inbound_pulses(cand, inputs);
@@ -506,12 +499,12 @@ EwState evolve_state(const EwState& current_state, const EwInputs& inputs, const
             coherent_window = (e_dev_q32_32 <= epsilon_coh_q32_32);
         }
 
-        // Blueprint 3.5 / Omega.3: per-anchor harmonic fingerprint.
+        // Blueprint 3.5 / Omega.3: per-anchor harmonic signature.
         // This is used for trace/inspection only and can be compiled out.
 #if EW_ALU_TRACE_ENABLE
         int64_t coord9_turns_q[kDims9];
         for (int d = 0; d < kDims9; ++d) coord9_turns_q[d] = a.basis9.d[d];
-        const AnchorHarmonicFingerprintQ63 fp = ew_build_anchor_fp(a.id, coord9_turns_q);
+        const AnchorHarmonicSignatureQ63 fp = ew_build_anchor_signature(a.id, coord9_turns_q);
 #endif
 
         // Blueprint C.4: object reference influence (anchor-permitted), expressed
@@ -1036,7 +1029,7 @@ bool object_synthesize_voxelize(EwState& state,
 
     // Genesis synthesis: import -> EWM1 mesh -> voxelize.
     // The voxel volume is derived from the object's associated mesh file.
-    const std::string mesh_path = std::string("Draft Container/Assets/Imported/") + e->label_utf8 + ".ewmesh";
+    const std::string mesh_path = std::string("AssetSubstrate/Assets/Imported/") + e->label_utf8 + ".ewmesh";
     genesis::EwMeshV1 mesh;
     if (!genesis::ewmesh_read_v1(mesh_path, mesh)) {
         if (out_reject_code) *out_reject_code = 5; // missing_mesh

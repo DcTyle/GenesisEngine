@@ -637,7 +637,7 @@ See: CANONICAL EVOLUTION RULE — NON-INTERPRETIVE CONSTRAINT SYSTEM (canonical 
 // This structure SHALL be treated as immutable during kernel execution.
 struct AnchorStateQ63 {
     q63_t coord[kDims9];                 // fixed 9D coordinate payload (canonical)
-    AnchorHarmonicFingerprintQ63 fp;     // per-anchor harmonic identity (pre-encoded or bound once)
+    AnchorHarmonicSignatureQ63 fp;     // per-anchor harmonic identity (pre-encoded or bound once)
 };
 
 // ====================================================================
@@ -1546,10 +1546,10 @@ using q63_t = int64_t;
 static constexpr int kDims9 = 9;
 
 
-// Fully enumerated, per-anchor harmonic fingerprint.
+// Fully enumerated, per-anchor harmonic signature.
 // This is the compact identity basis used to interpret pulses and to derive
 // semantic + physics constraints WITHOUT exposing the 9D lattice externally.
-struct AnchorHarmonicFingerprintQ63 {
+struct AnchorHarmonicSignatureQ63 {
     uint64_t seed_u64;                   // deterministic: f(anchor_id, coord[9])
     q63_t base_freq_code_q63;            // Q63 carrier in [0..Q63_ONE]
 
@@ -1568,7 +1568,7 @@ struct AnchorHarmonicFingerprintQ63 {
 // This structure SHALL be treated as immutable during kernel execution.
 struct AnchorStateQ63 {
     q63_t coord[kDims9];                 // fixed 9D coordinate payload (canonical)
-    AnchorHarmonicFingerprintQ63 fp;     // per-anchor harmonic identity (pre-encoded or bound once)
+    AnchorHarmonicSignatureQ63 fp;     // per-anchor harmonic identity (pre-encoded or bound once)
 };
 
 
@@ -1679,10 +1679,10 @@ static inline uint64_t ew_mix64(uint64_t x) {
 }
 
 
-// Build the fully enumerated harmonic fingerprint for one anchor.
+// Build the fully enumerated harmonic signature for one anchor.
 // This produces a stable "harmonic identity" without exposing lattice internals.
-static inline AnchorHarmonicFingerprintQ63 ew_build_anchor_fp(uint32_t anchor_id, const q63_t coord[kDims9]) {
-    AnchorHarmonicFingerprintQ63 fp{};
+static inline AnchorHarmonicSignatureQ63 ew_build_anchor_signature(uint32_t anchor_id, const q63_t coord[kDims9]) {
+    AnchorHarmonicSignatureQ63 fp{};
     fp.seed_u64 = ew_anchor_seed_u64(anchor_id, coord);
 
     const int bits_per_lane = 64 / kDims9; // 7
@@ -6890,7 +6890,7 @@ Normative rules:
 
 1. For each anchor_id i in [0 .. anchor_count-1], substrate control SHALL ensure:
 
-   anchors[i].fp = ew_build_anchor_fp(i, anchors[i].coord)
+   anchors[i].fp = ew_build_anchor_signature(i, anchors[i].coord)
 
    exactly once **before** the kernel tick loop begins (unless the anchor bank already ships
    with fp pre-encoded).
@@ -6925,7 +6925,7 @@ static inline void enumerate_anchor_fingerprints_or_halt(
     EW_REQUIRE(anchors_rw != nullptr, last_violation_code, run_flag, VC_ANCHOR_REGEN_ATTEMPT);
 
     for (uint32_t i = 0; i < anchor_count; ++i) {
-        anchors_rw[i].fp = ew_build_anchor_fp(i, anchors_rw[i].coord);
+        anchors_rw[i].fp = ew_build_anchor_signature(i, anchors_rw[i].coord);
     }
 }
 
@@ -7675,8 +7675,8 @@ This bridge is required so that:
 
 **Contract:**
 - These anchors MUST be present and immutable post-start.
-- Their resonance-driving lane MUST be stored in `coord[0]` (see `ew_build_anchor_fp`).
-- Their harmonic fingerprint and resonance profile MUST be fully enumerated at bind time.
+- Their resonance-driving lane MUST be stored in `coord[0]` (see `ew_build_anchor_signature`).
+- Their harmonic signature and resonance profile MUST be fully enumerated at bind time.
 
 ##### Runtime Logic Schematic (as written)
 
@@ -7755,7 +7755,7 @@ static inline void ew_build_cmb_anchor_bank_or_halt(
 
     for (uint32_t i = 0; i < CMB_ANCHOR_COUNT; ++i) {
         ew_fill_cmb_coord_q63(i, out_anchors[i].coord);
-        out_anchors[i].fp = ew_build_anchor_fp(i, out_anchors[i].coord);
+        out_anchors[i].fp = ew_build_anchor_signature(i, out_anchors[i].coord);
 
         // Explicitly tag semantic lanes for artifact emission (projection-only).
         out_anchors[i].fp.semantic_mask_u64 ^= CMB_ROLE_MASKS[i];
@@ -20051,10 +20051,10 @@ using q63_t = int64_t;
 // This structure SHALL be treated as immutable during kernel execution.
 // The per-anchor fingerprint is the harmonic identity used to interpret pulses
 // and derive constraint semantics WITHOUT exposing lattice internals.
-// (See CANONICAL IDENTIFIERS for the normative generator ew_build_anchor_fp.)
+// (See CANONICAL IDENTIFIERS for the normative generator ew_build_anchor_signature.)
 static constexpr int kDims9 = 9;
 
-struct AnchorHarmonicFingerprintQ63 {
+struct AnchorHarmonicSignatureQ63 {
     uint64_t seed_u64;
     q63_t base_freq_code_q63;
     uint32_t harmonic_order[kDims9];
@@ -20064,7 +20064,7 @@ struct AnchorHarmonicFingerprintQ63 {
 
 struct AnchorStateQ63 {
     q63_t coord[kDims9];
-    AnchorHarmonicFingerprintQ63 fp;
+    AnchorHarmonicSignatureQ63 fp;
 };
 ```
 

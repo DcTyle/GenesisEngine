@@ -3,14 +3,14 @@
 
 static inline std::string u32_to_s(uint32_t v) { return std::to_string((uint32_t)v); }
 
-bool GE_CurriculumManager::stage0_ready_(SubstrateMicroprocessor* sm) const {
+bool GE_CurriculumManager::stage0_ready_(SubstrateManager* sm) const {
     if (!sm) return false;
     const uint64_t req = sm->learning_stage_required_mask_u64[0];
     const uint64_t done = sm->learning_stage_completed_mask_u64[0];
     return (req != 0u) && ((done & req) == req);
 }
 
-void GE_CurriculumManager::update_lane_masks_(SubstrateMicroprocessor* sm) {
+void GE_CurriculumManager::update_lane_masks_(SubstrateManager* sm) {
     // Deterministic lane masks:
     // stage0: lane8 dictionaries/encyclopedia + lane2 math sources (khan, etc)
     // stage1: lane2 physics + lane1 determinism/compilers
@@ -32,7 +32,7 @@ void GE_CurriculumManager::update_lane_masks_(SubstrateMicroprocessor* sm) {
     (void)sm;
 }
 
-void GE_CurriculumManager::maybe_advance_(SubstrateMicroprocessor* sm) {
+void GE_CurriculumManager::maybe_advance_(SubstrateManager* sm) {
     if (!sm) return;
     if (stage_u32 == 0u) {
         if (stage0_ready_(sm)) {
@@ -57,7 +57,7 @@ void GE_CurriculumManager::maybe_advance_(SubstrateMicroprocessor* sm) {
     }
 }
 
-void GE_CurriculumManager::tick(SubstrateMicroprocessor* sm) {
+void GE_CurriculumManager::tick(SubstrateManager* sm) {
     if (!sm) return;
 
     update_lane_masks_(sm);

@@ -1,5 +1,5 @@
 #include "GE_ai_anticipation.hpp"
-#include "GE_runtime.hpp" // SubstrateMicroprocessor + corpus_query_best_score
+#include "GE_runtime.hpp" // SubstrateManager + corpus_query_best_score
 
 #include <cctype>
 
@@ -106,7 +106,7 @@ static inline bool ge_looks_like_question(const std::string& s) {
     return starts_word("what") || starts_word("why") || starts_word("how") || starts_word("when") || starts_word("where") || starts_word("who");
 }
 
-bool EwAiAnticipator::route(SubstrateMicroprocessor* sm,
+bool EwAiAnticipator::route(SubstrateManager* sm,
                            const std::string& in_line,
                            std::string& out_line,
                            std::string& ui_tag) const {

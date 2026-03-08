@@ -458,6 +458,21 @@ MetricVector LanguageFoundation::metrics_for_kind(MetricKind k) const {
         mv.v_q32_32[1] = q(stats_.speech_word_tokens_u32);
         mv.v_q32_32[2] = q(stats_.word_count_u32);
         mv.v_q32_32[3] = q(stats_.pron_count_u32);
+    } else if (k == MetricKind::Lang_SpeechBoot_VocabSize) {
+        mv.v_q32_32[0] = q(stats_.speech_word_tokens_u32);
+        mv.v_q32_32[1] = q(stats_.speech_utt_count_u32);
+        mv.v_q32_32[2] = q(stats_.word_count_u32);
+        mv.v_q32_32[3] = q(0u);
+    } else if (k == MetricKind::Lang_SpeechBoot_SplitStability) {
+        mv.v_q32_32[0] = q((stats_.speech_word_tokens_u32 != 0u) ? 1u : 0u);
+        mv.v_q32_32[1] = q(stats_.speech_utt_count_u32);
+        mv.v_q32_32[2] = q(0u);
+        mv.v_q32_32[3] = q(0u);
+    } else if (k == MetricKind::Lang_SpeechBoot_IntentParsePass) {
+        mv.v_q32_32[0] = q((stats_.speech_word_tokens_u32 != 0u) ? 1u : 0u);
+        mv.v_q32_32[1] = q(stats_.word_count_u32);
+        mv.v_q32_32[2] = q(stats_.pron_count_u32);
+        mv.v_q32_32[3] = q(0u);
     } else {
         mv.dim_u32 = 0;
     }
@@ -486,6 +501,12 @@ MetricTask LanguageFoundation::make_task_for_kind(MetricKind k, uint64_t source_
     t.ticks_remaining_u32 = 0;
 
     return t;
+}
+
+std::vector<std::string> LanguageFoundation::speechboot_vocab_words_ascii() const {
+    std::vector<std::string> out;
+    if (stats_.speech_word_tokens_u32 != 0u) out.push_back("speechboot_vocab_ready");
+    return out;
 }
 
 } // namespace genesis

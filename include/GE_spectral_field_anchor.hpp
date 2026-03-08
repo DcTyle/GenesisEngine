@@ -85,7 +85,7 @@ struct EwSpectralFieldAnchorState {
     uint8_t leakage_band_u8 = 0;
     uint8_t leakage_pending_u8 = 0;
     uint16_t pad3 = 0;
-    uint64_t leakage_hash_u64 = 0;
+    EwId9 leakage_id9{};
 
     // Explicit measurement lanes for temporal coupling.
     EwIntentSummary intent_summary;

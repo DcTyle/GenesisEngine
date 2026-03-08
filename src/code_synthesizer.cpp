@@ -67,30 +67,185 @@ static std::string pick_explicit_path_or_empty(const std::string& request) {
     return std::string();
 }
 
-static bool emit_function_stub_patch(SubstrateManager* sm, const std::string& rel_path, const std::string& func_name) {
-    if (!sm) return false;
-    if (rel_path.empty() || func_name.empty()) return false;
 
-    EwPatchSpec ps;
-    ps.mode_u16 = EW_PATCH_APPEND_EOF;
-    ps.text = "\n// EW_ANCHOR:EW_SYNTH_STUB_BEGIN\n";
-    ps.text += "// Synthesized stub (deterministic). Fill in logic under coherence gate.\n";
-    ps.text += "static int ";
-    ps.text += func_name;
-    ps.text += "(int argc, char** argv) {\n";
-    ps.text += "    (void)argc; (void)argv;\n";
-    ps.text += "    return 0;\n";
-    ps.text += "}\n";
-    ps.text += "// EW_ANCHOR:EW_SYNTH_STUB_END\n";
 
-    return code_apply_patch_coherence_gated(sm, rel_path, kind_from_path(rel_path), ps, 0xE310u);
+static std::string sanitize_slug_ascii(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        unsigned char uc = (unsigned char)s[i];
+        if (uc >= 0x80) continue;
+        char c = (char)uc;
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) out.push_back(c);
+        else if (c == '_' || c == '-' || c == ' ') out.push_back('_');
+    }
+    while (!out.empty() && out.front() == '_') out.erase(out.begin());
+    while (!out.empty() && out.back() == '_') out.pop_back();
+    if (out.empty()) out = "patch_view";
+    if (out.size() > 48) out.resize(48);
+    return out;
+}
+
+static void emit_patch_view_artifact(SubstrateManager* sm,
+                                     const std::string& request_utf8,
+                                     const std::vector<EwCoherenceGraph::SemanticPatchTarget>& semantic_targets,
+                                     const std::vector<EwCoherenceGraph::Match>& fallback_matches,
+                                     const std::string& chosen_rel_path,
+                                     const std::string& chosen_anchor_a,
+                                     const std::string& chosen_anchor_b,
+                                     uint16_t chosen_mode_u16,
+                                     bool used_semantic_binding) {
+    if (!sm) return;
+    const std::string slug = sanitize_slug_ascii(extract_first_ident(request_utf8));
+    const std::string rel_path = std::string("docs/ai_patch_views/") +
+                                 slug + "_" + std::to_string((unsigned long long)sm->canonical_tick) + ".md";
+    std::string md;
+    md.reserve(4096);
+    md += "# Genesis AI Coherent Patch View\n\n";
+    md += "- Tick: `" + std::to_string((unsigned long long)sm->canonical_tick) + "`\n";
+    md += "- Request: `" + request_utf8 + "`\n";
+    md += "- Coherence relation layer: emergent coherence determines what artifacts and anchors are related.\n";
+    md += "- Patch scope layer: the coherent patch view narrows those relations into likely logic regions that should change together.\n";
+    md += "- Canonical binding layer: the chosen write target resolves the patch view into exact source/export spans.\n\n";
+    md += "## Chosen Canonical Binding\n\n";
+    md += "- Binding mode: `";
+    md += used_semantic_binding ? "semantic-anchor" : "fallback-file";
+    md += "`\n";
+    md += "- Target file: `" + (chosen_rel_path.empty() ? std::string("<none>") : chosen_rel_path) + "`\n";
+    md += "- Patch mode: `" + std::to_string((unsigned)chosen_mode_u16) + "`\n";
+    md += "- Anchor A: `" + (chosen_anchor_a.empty() ? std::string("<none>") : chosen_anchor_a) + "`\n";
+    md += "- Anchor B: `" + (chosen_anchor_b.empty() ? std::string("<none>") : chosen_anchor_b) + "`\n\n";
+    md += "## Semantic Patch Scope Candidates\n\n";
+    if (semantic_targets.empty()) {
+        md += "No semantic anchor-bounded patch targets were available for this request.\n\n";
+    } else {
+        for (size_t i = 0; i < semantic_targets.size(); ++i) {
+            const auto& t = semantic_targets[i];
+            md += std::to_string((unsigned long long)(i + 1)) + ". `" + t.rel_path + "`";
+            md += " score=`" + std::to_string((unsigned)t.score_u32) + "`";
+            md += " mode=`" + std::to_string((unsigned)t.patch_mode_u16) + "`";
+            md += " anchorA=`" + (t.anchor_a.empty() ? std::string("<none>") : t.anchor_a) + "`";
+            md += " anchorB=`" + (t.anchor_b.empty() ? std::string("<none>") : t.anchor_b) + "`";
+            md += " reason=`" + t.reason_utf8 + "`\n";
+        }
+        md += "\n";
+    }
+    md += "## Fallback File Ranking\n\n";
+    if (fallback_matches.empty()) {
+        md += "No fallback file matches were needed.\n";
+    } else {
+        for (size_t i = 0; i < fallback_matches.size(); ++i) {
+            const auto& m = fallback_matches[i];
+            md += std::to_string((unsigned long long)(i + 1)) + ". `" + m.rel_path + "` score=`" + std::to_string((unsigned)m.score_u32) + "`\n";
+        }
+    }
+    md += "\n## Contract Reminder\n\n";
+    md += "Coherence tells what is related. The coherent patch view tells what is in scope. Canonical binding tells where to write. The coherence view remains derived and is regenerated after canonical edits.\n";
+
+    EwInspectorArtifact a;
+    a.rel_path = rel_path;
+    a.kind_u32 = (uint32_t)EW_ARTIFACT_MD;
+    a.payload = md;
+    a.producer_operator_id_u32 = 0xE312u;
+    a.producer_tick_u64 = sm->canonical_tick;
+    const EwCoherenceResult cr = EwCoherenceGate::validate_artifact(a.rel_path, a.kind_u32, a.payload);
+    a.coherence_q15 = cr.coherence_q15;
+    a.commit_ready = cr.commit_ready;
+    a.denial_code_u32 = cr.denial_code_u32;
+    sm->inspector_fields.upsert(a);
+}
+
+
+static void emit_patch_view_chat_lines(SubstrateManager* sm,
+                                       const std::string& request_utf8,
+                                       const std::vector<EwCoherenceGraph::SemanticPatchTarget>& semantic_targets,
+                                       const std::vector<EwCoherenceGraph::Match>& fallback_matches,
+                                       const std::string& chosen_rel_path,
+                                       const std::string& chosen_anchor_a,
+                                       const std::string& chosen_anchor_b,
+                                       uint16_t chosen_mode_u16,
+                                       bool used_semantic_binding) {
+    if (!sm) return;
+    sm->emit_ui_line(std::string("AI_PATCH_VIEW request=") + request_utf8);
+    if (used_semantic_binding) {
+        sm->emit_ui_line(std::string("AI_PATCH_SCOPE semantic target=") + chosen_rel_path +
+                         " anchorA=" + (chosen_anchor_a.empty() ? std::string("<none>") : chosen_anchor_a) +
+                         " anchorB=" + (chosen_anchor_b.empty() ? std::string("<none>") : chosen_anchor_b) +
+                         " mode=" + std::to_string((unsigned)chosen_mode_u16));
+    } else {
+        sm->emit_ui_line(std::string("AI_PATCH_SCOPE fallback target=") +
+                         (chosen_rel_path.empty() ? std::string("<none>") : chosen_rel_path) +
+                         " mode=" + std::to_string((unsigned)chosen_mode_u16));
+    }
+    if (!semantic_targets.empty()) {
+        const auto& t = semantic_targets[0];
+        sm->emit_ui_line(std::string("AI_PATCH_REASON primary=") + t.reason_utf8 +
+                         " score=" + std::to_string((unsigned)t.score_u32));
+        const size_t cap = std::min<size_t>(semantic_targets.size(), 3u);
+        for (size_t i = 0; i < cap; ++i) {
+            const auto& alt = semantic_targets[i];
+            sm->emit_ui_line(std::string("AI_PATCH_CANDIDATE ") + std::to_string((unsigned long long)(i + 1)) +
+                             " path=" + alt.rel_path +
+                             " score=" + std::to_string((unsigned)alt.score_u32) +
+                             " anchorA=" + (alt.anchor_a.empty() ? std::string("<none>") : alt.anchor_a) +
+                             " anchorB=" + (alt.anchor_b.empty() ? std::string("<none>") : alt.anchor_b));
+        }
+    } else if (!fallback_matches.empty()) {
+        const size_t cap = std::min<size_t>(fallback_matches.size(), 3u);
+        for (size_t i = 0; i < cap; ++i) {
+            const auto& alt = fallback_matches[i];
+            sm->emit_ui_line(std::string("AI_PATCH_FALLBACK ") + std::to_string((unsigned long long)(i + 1)) +
+                             " path=" + alt.rel_path +
+                             " score=" + std::to_string((unsigned)alt.score_u32));
+        }
+    }
+    sm->emit_ui_line("AI_PATCH_BIND coherence tells related logic; patch view sets scope; canonical binding sets write target.");
+}
+
+static void emit_stub_refusal_lines(SubstrateManager* sm,
+                                   const std::string& req,
+                                   const std::string& rel_path,
+                                   const std::string& func_name,
+                                   const std::string& anchor_a,
+                                   const std::string& anchor_b,
+                                   uint16_t patch_mode_u16,
+                                   bool used_semantic_binding,
+                                   const std::string& reason_utf8) {
+    if (!sm) return;
+    sm->emit_ui_line(std::string("SYNTHCODE_STUB_REFUSED path=") +
+                     (rel_path.empty() ? std::string("<none>") : rel_path) +
+                     " function=" + (func_name.empty() ? std::string("<none>") : func_name));
+    if (!reason_utf8.empty()) {
+        sm->emit_ui_line(std::string("SYNTHCODE_STUB_REFUSED_REASON ") + reason_utf8);
+    }
+
+    std::vector<EwCoherenceGraph::SemanticPatchTarget> ts;
+    std::vector<EwCoherenceGraph::Match> ms;
+    if (used_semantic_binding) {
+        EwCoherenceGraph::SemanticPatchTarget t{};
+        t.rel_path = rel_path;
+        t.anchor_a = anchor_a;
+        t.anchor_b = anchor_b;
+        t.patch_mode_u16 = patch_mode_u16;
+        t.reason_utf8 = reason_utf8;
+        ts.push_back(t);
+    } else if (!rel_path.empty()) {
+        EwCoherenceGraph::Match m{};
+        m.rel_path = rel_path;
+        ms.push_back(m);
+    }
+
+    emit_patch_view_artifact(sm, req, ts, ms, rel_path, anchor_a, anchor_b, patch_mode_u16, used_semantic_binding);
+    emit_patch_view_chat_lines(sm, req, ts, ms, rel_path, anchor_a, anchor_b, patch_mode_u16, used_semantic_binding);
+    sm->emit_ui_line("SYNTHCODE_NEXT produce a complete patch diff or module/tool artifact instead of a synthesized function stub.");
 }
 
 static bool emit_cli_tool(SubstrateManager* sm, const std::string& tool_name) {
     if (!sm) return false;
     if (tool_name.empty()) return false;
 
-    const std::string base_dir = "Draft Container/GenesisEngine/src/tools/";
+    const std::string base_dir = "src/tools/";
     const std::string cpp_path = base_dir + tool_name + "_main.cpp";
 
     std::string cpp;
@@ -139,7 +294,7 @@ static bool emit_cli_tool(SubstrateManager* sm, const std::string& tool_name) {
     sm->inspector_fields.upsert(a);
 
     // Patch top-level CMakeLists to add this executable.
-    const std::string cmake_path = "Draft Container/GenesisEngine/CMakeLists.txt";
+    const std::string cmake_path = "CMakeLists.txt";
     EwPatchSpec ps;
     ps.mode_u16 = EW_PATCH_APPEND_EOF;
     ps.text = "\n# EW_ANCHOR:EW_SYNTH_TOOLS\n";
@@ -206,18 +361,29 @@ bool EwCodeSynthesizer::synthesize(SubstrateManager* sm, const std::string& requ
 
     if (!func.empty()) {
         if (!explicit_path.empty()) {
-            const bool ok = emit_function_stub_patch(sm, explicit_path, func);
-            sm->emit_ui_line(std::string("SYNTHCODE_PATCH ") + explicit_path + " ok=" + (ok ? "1" : "0"));
-            return ok;
+            emit_stub_refusal_lines(sm, req, explicit_path, func, std::string(), std::string(),
+                                    (uint16_t)EW_PATCH_APPEND_EOF, false,
+                                    "stub/function synthesis is disabled on the canonical path; emit a complete diff or artifact instead");
+            return false;
         }
 
         std::vector<EwCoherenceGraph::Match> ms;
         cg.query_best(req, 8u, ms);
+        std::vector<EwCoherenceGraph::SemanticPatchTarget> ts;
+        cg.query_semantic_patch_targets(req, 8u, ts);
+        if (!ts.empty()) {
+            emit_stub_refusal_lines(sm, req, ts[0].rel_path, func, ts[0].anchor_a, ts[0].anchor_b,
+                                    ts[0].patch_mode_u16, true,
+                                    ts[0].reason_utf8.empty()
+                                        ? std::string("stub/function synthesis is disabled on the canonical path; emit a complete diff or artifact instead")
+                                        : std::string("stub/function synthesis is disabled on the canonical path; candidate binding reason=") + ts[0].reason_utf8);
+        }
         if (!ms.empty()) {
             const std::string target = ms[0].rel_path;
-            const bool ok = emit_function_stub_patch(sm, target, func);
-            sm->emit_ui_line(std::string("SYNTHCODE_PATCH ") + target + " ok=" + (ok ? "1" : "0"));
-            return ok;
+            emit_stub_refusal_lines(sm, req, target, func, std::string(), std::string(),
+                                    (uint16_t)EW_PATCH_APPEND_EOF, false,
+                                    "stub/function synthesis is disabled on the canonical path; emit a complete diff or artifact instead");
+            return false;
         }
     }
 

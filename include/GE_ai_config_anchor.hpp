@@ -9,7 +9,7 @@
 //
 // NOTE: These are not “tweak live by poking globals.” Changes must be applied
 // via control packets so they can be replayed and included in the state
-// fingerprint.
+// signature.
 // -----------------------------------------------------------------------------
 
 // Field IDs for AiConfigSet control packet (stable, non-versioned).

@@ -69,6 +69,11 @@ public:
                                           uint32_t source_anchor_id_u32,
                                           uint32_t context_anchor_id_u32) const;
 
+    bool has_speechboot_vocab() const { return stats_.speech_word_tokens_u32 != 0u; }
+    uint32_t speechboot_vocab_count_u32() const { return stats_.speech_word_tokens_u32; }
+    uint32_t speechboot_vocab_min_u32() const { return stats_.speech_word_tokens_u32 ? 1u : 0u; }
+    std::vector<std::string> speechboot_vocab_words_ascii() const;
+
 private:
     LangLexiconStats stats_;
 

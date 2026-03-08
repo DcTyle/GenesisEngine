@@ -7,7 +7,7 @@
 #include "GE_domain_policy.hpp"
 #include "GE_rate_limiter.hpp"
 
-class SubstrateMicroprocessor;
+class SubstrateManager;
 
 // Live crawling is off by default and requires explicit enabling.
 // This module fetches ONLY http:// URLs (plaintext) without TLS.
@@ -35,7 +35,7 @@ struct GE_LiveCrawler {
     void enqueue_url(const std::string& url_ascii);
 
     // Tick: fetch up to max_fetch_per_tick docs and submit observations.
-    void tick(SubstrateMicroprocessor* sm, const GE_DomainPolicyTable& pol, GE_RateLimiter* rl);
+    void tick(SubstrateManager* sm, const GE_DomainPolicyTable& pol, GE_RateLimiter* rl);
 
 private:
     bool parse_http_url_(const std::string& url, std::string& out_domain, std::string& out_path, uint16_t& out_port) const;

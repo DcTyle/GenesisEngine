@@ -40,7 +40,7 @@
 
 #include "GE_planet_anchor.hpp"
 #include "GE_nbody.hpp"
-#include "GE_state_fingerprint.hpp"
+#include "GE_state_signature.hpp"
 
 #include "GE_curriculum.hpp"
 #include "GE_curriculum_manager.hpp"
@@ -50,6 +50,7 @@
 #include "ai_action_log.hpp"
 
 #include "inspector_fields.hpp"
+#include "coherence_graph.hpp"
 #include "coherence_gate.hpp"
 #include "hydrator.hpp"
 #include "anchor_pack.hpp"
@@ -469,6 +470,52 @@ public:
         // Unseen experiment cursor (committed experiments counter at last user view).
         uint64_t ai_ui_experiments_seen_cursor_u64 = 0ull;
 
+        // -------------------------------------------------------------
+        // Global chat-memory substrate (conversation cortex)
+        // Separate from code/simulation intent so context memory stays
+        // conversational instead of contaminating proposal/apply paths.
+        // -------------------------------------------------------------
+        enum EwChatMemoryMode : uint32_t {
+            EW_CHAT_MEMORY_MODE_TALK = 1u,
+            EW_CHAT_MEMORY_MODE_CODE = 2u,
+            EW_CHAT_MEMORY_MODE_SIM  = 3u,
+        };
+        struct EwChatMemoryEntry {
+            uint64_t tick_u64 = 0ull;
+            uint32_t chat_slot_u32 = 0u;
+            uint32_t mode_u32 = EW_CHAT_MEMORY_MODE_TALK;
+            uint32_t salience_u32 = 0u;
+            std::string text_utf8;
+        };
+        static constexpr uint32_t CHAT_MEMORY_CAP_U32 = 192u;
+        EwChatMemoryEntry chat_memory_ring[CHAT_MEMORY_CAP_U32];
+        uint32_t chat_memory_head_u32 = 0u;
+        uint32_t chat_memory_count_u32 = 0u;
+        uint64_t chat_memory_revision_u64 = 0ull;
+        std::string chat_memory_focus_utf8;
+
+        // -------------------------------------------------------------
+        // AI project/work substrate (separate from chat cortex)
+        // Stores project links and bounded Fourier-style directory spectra summaries
+        // so code-writing context stays isolated from conversational memory.
+        // -------------------------------------------------------------
+        static constexpr uint32_t PROJECT_LINK_PATH_CAP_U32 = 64u;
+        struct EwProjectLinkEntry {
+            uint64_t tick_u64 = 0ull;
+            uint32_t chat_slot_u32 = 0u;
+            uint32_t file_count_u32 = 0u;
+            uint32_t spectrum_count_u32 = 0u;
+            uint32_t rel_path_count_u32 = 0u;
+            std::string project_root_utf8;
+            std::string spectrum_summary_utf8;
+            std::string rel_paths_utf8[PROJECT_LINK_PATH_CAP_U32];
+        };
+        static constexpr uint32_t PROJECT_LINK_CAP_U32 = 32u;
+        EwProjectLinkEntry project_link_ring[PROJECT_LINK_CAP_U32];
+        uint32_t project_link_head_u32 = 0u;
+        uint32_t project_link_count_u32 = 0u;
+        uint64_t project_link_revision_u64 = 0ull;
+
         void domain_crawl_record_page_seen(const std::string& domain_ascii);
 
 
@@ -503,11 +550,11 @@ public:
     std::vector<EwRenderObjectPacket> render_object_packets;
     uint64_t render_object_packets_tick_u64 = 0;
 
-    // Deterministic state fingerprint (9D fingerprint harness).
-    uint64_t state_fingerprint_u64 = 0;
-    uint64_t state_fingerprint_tick_u64 = 0;
+    // Deterministic state signature (9D signature harness).
+    uint64_t state_signature_u64 = 0;
+    uint64_t state_signature_tick_u64 = 0;
     bool determinism_ref_loaded = false;
-    std::vector<uint64_t> determinism_ref_fingerprints;
+    std::vector<uint64_t> determinism_ref_signatures;
 
     // XR per-eye projected view packets. The viewport submits raw eye poses as observations,
     // but the substrate computes and projects view matrices deterministically.
@@ -802,7 +849,7 @@ public:
     uint32_t corpus_query_best_score(const std::string& query_utf8);
 
     // Deterministic extractive answer generator over derived corpus text.
-    // Emits Draft Container/Corpus/answer_<tick>.txt and queues UI lines.
+    // Emits Corpus/answer_<tick>.txt and queues UI lines.
     void corpus_answer_emit(const std::string& query_utf8, uint32_t context_anchor_id_u32);
 
 
@@ -1251,7 +1298,9 @@ std::deque<std::string> ui_out_q;
     void emit_ai_event_line(const char* event_name_ascii, const std::string& kv_ascii);
 
     // Allowlist update surface (UI command + config file). Deterministic validation.
-    bool corpus_allowlist_update_from_user_text(const std::string& allowlist_md_utf8);
+    // Update allowlist from user-provided markdown. By default this is substrate-resident
+    // (no disk write). Disk persistence only occurs when persist_to_disk is true.
+    bool corpus_allowlist_update_from_user_text(const std::string& allowlist_md_utf8, bool persist_to_disk);
     bool corpus_allowlist_load_user_file_if_present();
 
     // Spec/Blueprint: neural phase dynamics controller.
@@ -1295,6 +1344,21 @@ std::deque<std::string> ui_out_q;
     EwInspectorFields inspector_fields;
 
     // -----------------------------------------------------------------
+    // Coherence index v1 (symbol-coherence graph over inspector artifacts)
+    // -----------------------------------------------------------------
+    // Derived cache keyed by inspector_fields.revision_u64(). This is used
+    // for read-only query UX (repo browsing / coherence view v1). It must
+    // never be treated as authoritative truth.
+    uint64_t coh_index_revision_u64 = 0;
+    EwCoherenceGraph coh_graph;
+
+    
+
+    // Derived-only coherence highlight set (Content Browser coherence view v1 hook).
+    // Populated by GUI-driven coherence highlight actions. These are *paths* only; no file mutation.
+    std::vector<std::string> coh_highlight_paths;
+    uint64_t coh_highlight_revision_u64 = 0;
+// -----------------------------------------------------------------
     // AnchorPack: super-compressed process artifacts encoded into carrier
     // harmonics and installed as anchors for substrate-native processing.
     // -----------------------------------------------------------------
@@ -1318,7 +1382,181 @@ std::deque<std::string> ui_out_q;
     uint64_t synth_index_revision_u64 = 0;
     std::vector<EwSynthArtifactInfo> synth_artifacts;
     std::vector<EwSynthSymRef> synth_sym_refs;
-    
+
+    // -----------------------------------------------------------------
+    // Canonical AI patch workflow state (Pass 1 closure)
+    // One source of truth for patch session status, target validation,
+    // and per-chat engineering history.
+    // -----------------------------------------------------------------
+    enum EwAiPatchBindMode : uint16_t {
+        EW_AI_PATCH_BIND_NONE = 0u,
+        EW_AI_PATCH_BIND_ANCHOR = 1u,
+        EW_AI_PATCH_BIND_EXACT = 2u,
+        EW_AI_PATCH_BIND_FILE = 3u,
+    };
+    enum EwAiPatchTriageState : uint8_t {
+        EW_AI_PATCH_TRIAGE_PENDING = 0u,
+        EW_AI_PATCH_TRIAGE_READY = 1u,
+        EW_AI_PATCH_TRIAGE_BLOCKED = 2u,
+        EW_AI_PATCH_TRIAGE_RETRY_NEEDED = 3u,
+        EW_AI_PATCH_TRIAGE_COMPLETED = 4u,
+    };
+    struct EwAiPatchTargetValidation {
+        uint64_t session_id_u64 = 0ull;
+        uint64_t tick_u64 = 0ull;
+        uint16_t patch_mode_u16 = 0u;
+        uint16_t bind_mode_u16 = EW_AI_PATCH_BIND_NONE;
+        uint8_t binding_success_u8 = 0u;
+        uint8_t textual_apply_success_u8 = 0u;
+        uint8_t target_integrity_ok_u8 = 0u;
+        uint8_t expected_region_present_u8 = 0u;
+        uint8_t precondition_match_u8 = 0u;
+        uint8_t postcondition_check_u8 = 0u;
+        uint8_t conflict_detected_u8 = 0u;
+        uint8_t retry_viable_u8 = 0u;
+        uint8_t used_fallback_text_surgery_u8 = 0u;
+        uint8_t residual_ambiguity_u8 = 0u;
+        std::string rel_path_utf8;
+        std::string anchor_a_utf8;
+        std::string anchor_b_utf8;
+        std::string target_span_utf8;
+        std::string apply_outcome_utf8;
+        std::string residual_note_utf8;
+        std::string follow_up_action_utf8;
+        std::string summary_utf8;
+    };
+    static constexpr uint32_t EW_AI_PATCH_TARGET_CAP_U32 = 8u;
+    static constexpr uint32_t EW_AI_PATCH_PLAN_CAP_U32 = 8u;
+    struct EwAiPatchPlanItem {
+        uint8_t sequence_u8 = 0u;
+        uint8_t dependency_index_u8 = 0xFFu;
+        uint16_t patch_mode_u16 = 0u;
+        uint16_t bind_mode_u16 = EW_AI_PATCH_BIND_NONE;
+        std::string rel_path_utf8;
+        std::string anchor_a_utf8;
+        std::string anchor_b_utf8;
+        std::string task_summary_utf8;
+        std::string rationale_utf8;
+        std::string validation_step_utf8;
+        std::string completion_criteria_utf8;
+    };
+    struct EwAiPatchWorkflowState {
+        uint32_t valid_u32 = 0u;
+        uint32_t chat_slot_u32 = 0u;
+        uint64_t session_id_u64 = 0ull;
+        uint64_t start_tick_u64 = 0ull;
+        uint16_t selected_patch_mode_u16 = 0u;
+        uint8_t preview_ready_u8 = 0u;
+        uint8_t apply_ready_u8 = 0u;
+        uint8_t warning_present_u8 = 0u;
+        uint8_t last_bind_mode_u8 = EW_AI_PATCH_BIND_NONE;
+        uint8_t planner_ready_u8 = 0u;
+        uint8_t ambiguity_level_u8 = 0u;
+        uint8_t human_review_prudent_u8 = 0u;
+        uint8_t triage_state_u8 = EW_AI_PATCH_TRIAGE_PENDING;
+        uint8_t retry_needed_u8 = 0u;
+        uint8_t warning_severity_u8 = 0u;
+        uint8_t pad0_u8 = 0u;
+        uint32_t plan_item_count_u32 = 0u;
+        uint32_t target_validation_count_u32 = 0u;
+        std::string patch_explanation_utf8;
+        std::string current_scope_utf8;
+        std::string canonical_write_targets_utf8;
+        std::string warning_state_utf8;
+        std::string next_action_guidance_utf8;
+        std::string validation_outcome_utf8;
+        std::string last_event_utf8;
+        std::string session_history_ref_utf8;
+        std::string anchor_binding_reason_utf8;
+        std::string rejected_candidate_summary_utf8;
+        std::string bind_confidence_utf8;
+        EwAiPatchPlanItem plan_items[EW_AI_PATCH_PLAN_CAP_U32];
+        EwAiPatchTargetValidation target_validations[EW_AI_PATCH_TARGET_CAP_U32];
+    };
+    struct EwAiPatchSessionRecord {
+        uint64_t session_id_u64 = 0ull;
+        uint64_t start_tick_u64 = 0ull;
+        uint64_t end_tick_u64 = 0ull;
+        uint32_t chat_slot_u32 = 0u;
+        uint16_t selected_patch_mode_u16 = 0u;
+        uint8_t retry_count_u8 = 0u;
+        uint8_t final_success_u8 = 0u;
+        uint8_t warning_count_u8 = 0u;
+        uint8_t target_validation_count_u8 = 0u;
+        uint8_t triage_state_u8 = EW_AI_PATCH_TRIAGE_PENDING;
+        uint8_t retry_needed_u8 = 0u;
+        uint8_t warning_severity_u8 = 0u;
+        uint8_t pad0_u8 = 0u;
+        std::string patch_goal_summary_utf8;
+        std::string selected_scope_utf8;
+        std::string canonical_targets_utf8;
+        std::string preview_result_utf8;
+        std::string apply_result_utf8;
+        std::string validation_result_utf8;
+        std::string warnings_utf8;
+        std::string final_disposition_utf8;
+        EwAiPatchTargetValidation target_validations[EW_AI_PATCH_TARGET_CAP_U32];
+    };
+    static constexpr uint32_t EW_AI_PATCH_HISTORY_CAP_U32 = 64u;
+    enum : uint8_t {
+        EW_STAGE_EXPORT_NONE = 0u,
+        EW_STAGE_EXPORT_FILE_ARTIFACT = 1u,
+        EW_STAGE_EXPORT_REPO_PATCH = 2u,
+        EW_STAGE_EXPORT_WHOLE_REPO = 3u,
+        EW_STAGE_EXPORT_AUTO_LANGUAGE = 4u,
+        EW_STAGE_EXPORT_LANGUAGE_OVERRIDE = 5u
+    };
+    struct EwStagedExportTarget {
+        uint8_t language_locked_u8 = 0u;
+        uint8_t selected_by_policy_u8 = 0u;
+        uint8_t scope_kind_u8 = EW_STAGE_EXPORT_NONE;
+        uint8_t reserved0_u8 = 0u;
+        std::string rel_path_utf8;
+        std::string suggested_language_utf8;
+        std::string effective_language_utf8;
+        std::string constraint_reason_utf8;
+    };
+    static constexpr uint32_t EW_STAGE_EXPORT_TARGET_CAP_U32 = 16u;
+    struct EwStagedExportBundle {
+        uint64_t stage_id_u64 = 0ull;
+        uint64_t tick_u64 = 0ull;
+        uint32_t chat_slot_u32 = 0u;
+        uint32_t linked_file_count_u32 = 0u;
+        uint32_t target_count_u32 = 0u;
+        uint32_t runtime_target_count_u32 = 0u;
+        uint32_t editor_only_target_count_u32 = 0u;
+        uint8_t scope_kind_u8 = EW_STAGE_EXPORT_NONE;
+        uint8_t language_locked_u8 = 0u;
+        uint8_t blocked_u8 = 0u;
+        uint8_t whole_repo_continuation_u8 = 0u;
+        uint8_t runtime_editor_split_checked_u8 = 0u;
+        uint8_t export_dialect_clean_u8 = 0u;
+        uint8_t reserved0_u8 = 0u;
+        std::string node_label_utf8;
+        std::string node_lookup_utf8;
+        std::string export_scope_utf8;
+        std::string language_hint_utf8;
+        std::string language_policy_utf8;
+        std::string linked_project_root_utf8;
+        std::string stage_status_utf8;
+        std::string operation_label_utf8;
+        std::string bundle_summary_utf8;
+        std::string continuation_summary_utf8;
+        std::string runtime_split_summary_utf8;
+        EwStagedExportTarget targets[EW_STAGE_EXPORT_TARGET_CAP_U32];
+    };
+    static constexpr uint32_t EW_STAGE_EXPORT_HISTORY_CAP_U32 = 32u;
+    EwAiPatchWorkflowState patch_workflow_state;
+    EwAiPatchSessionRecord patch_history_ring[EW_AI_PATCH_HISTORY_CAP_U32];
+    uint32_t patch_history_head_u32 = 0u;
+    uint32_t patch_history_count_u32 = 0u;
+    uint64_t patch_history_revision_u64 = 0ull;
+    uint64_t patch_session_seq_u64 = 0ull;
+    EwStagedExportBundle staged_export_ring[EW_STAGE_EXPORT_HISTORY_CAP_U32];
+    uint32_t staged_export_head_u32 = 0u;
+    uint32_t staged_export_count_u32 = 0u;
+    uint64_t staged_export_seq_u64 = 0ull;
+    uint32_t ai_active_chat_slot_u32 = 0u;
 
     // Latest human-readable observation line (e.g., from headless tools).
     // Stored inside the substrate so phase operators can emit inspector artifacts
@@ -1349,10 +1587,10 @@ std::deque<std::string> ui_out_q;
     uint32_t op_overlay_enabled_u32 = 0u;
 
 
-    // Last hydration receipt (observable). Hydration is a deterministic
-    // projection step from inspector fields into functioning files.
-    EwHydrationReceipt last_hydration_receipt;
-    uint32_t last_hydration_error_code_u32 = 0;
+    // Last projection receipt (observable). This is the deterministic
+    // inspector-to-file projection result for explicit workspace writes.
+    EwHydrationReceipt last_projection_receipt;
+    uint32_t last_projection_error_code_u32 = 0;
 
     // Omega.3 carrier metric (diagonal, Q32.32). Default identity.
     int64_t carrier_g_q32_32[9] = {
@@ -1398,12 +1636,95 @@ std::deque<std::string> ui_out_q;
 // UI interaction (adapter-driven I/O; computation occurs in substrate)
 // -----------------------------------------------------------------
 void ui_submit_user_text_line(const std::string& utf8_line);
+// Submit normal conversational AI chat text without exposing command parsing at the app surface.
+void ui_submit_chat_message_line(const std::string& utf8_line, uint32_t chat_slot_u32 = 0u, uint32_t mode_u32 = EW_CHAT_MEMORY_MODE_TALK);
+// Submit an internal UI/system observation line without using the app command surface.
+void ui_observe_system_event_line(const std::string& utf8_line);
+// Explicit memory-cortex observation path used by the AI panel before proposal/apply work.
+void ui_chat_memory_observe(uint32_t chat_slot_u32, uint32_t mode_u32, const std::string& utf8_line);
+bool ui_snapshot_chat_memory(uint32_t prefer_mode_u32, uint32_t max_entries_u32, std::vector<EwChatMemoryEntry>& out_entries, std::string& out_summary_utf8) const;
+void ui_link_chat_project(uint32_t chat_slot_u32, const std::string& project_root_utf8, const std::vector<std::string>& rel_paths_utf8);
+bool ui_snapshot_chat_project(uint32_t chat_slot_u32, EwProjectLinkEntry& out_entry) const;
+bool ui_snapshot_project_spectrum_lines(uint32_t chat_slot_u32, uint32_t max_lines_u32, std::vector<std::string>& out_lines_utf8) const;
+bool ui_stage_node_export_bundle(uint32_t chat_slot_u32,
+                                 const std::string& node_lookup_utf8,
+                                 const std::string& node_label_utf8,
+                                 const std::string& export_scope_utf8,
+                                 const std::string& language_hint_utf8,
+                                 const std::string& language_policy_utf8,
+                                 bool language_locked,
+                                 std::string& out_stage_summary_utf8,
+                                 std::string* out_err);
+bool ui_snapshot_latest_export_bundle(uint32_t chat_slot_u32, EwStagedExportBundle& out_bundle) const;
+void ui_note_active_chat_slot(uint32_t chat_slot_u32);
+bool ui_snapshot_patch_workflow_state(EwAiPatchWorkflowState& out_state) const;
+bool ui_snapshot_patch_session_history(uint32_t chat_slot_u32, uint32_t max_entries_u32, std::vector<EwAiPatchSessionRecord>& out_entries) const;
+bool ui_snapshot_editor_state(EwEditorAnchorState& out_state) const;
+uint64_t ai_patch_begin_session(const std::string& goal_utf8,
+                                const std::string& scope_utf8,
+                                const std::string& canonical_targets_utf8,
+                                uint16_t patch_mode_u16);
+void ai_patch_note_preview_result(const std::string& preview_result_utf8,
+                                  const std::string& current_scope_utf8,
+                                  const std::string& canonical_targets_utf8,
+                                  uint16_t patch_mode_u16,
+                                  uint16_t bind_mode_u16,
+                                  bool preview_ready,
+                                  bool apply_ready,
+                                  const std::string& warning_utf8);
+void ai_patch_note_binding_report(const std::string& binding_reason_utf8,
+                                  const std::string& rejected_candidates_utf8,
+                                  const std::string& bind_confidence_utf8,
+                                  uint8_t ambiguity_level_u8,
+                                  bool human_review_prudent,
+                                  uint16_t bind_mode_u16,
+                                  const std::string& canonical_targets_utf8);
+void ai_patch_set_plan(const EwAiPatchPlanItem* items,
+                       uint32_t item_count_u32,
+                       const std::string& next_action_utf8);
+void ai_patch_note_target_validation(const EwAiPatchTargetValidation& rec,
+                                     const std::string& validation_outcome_utf8,
+                                     const std::string& next_action_utf8);
+void ai_patch_finish_session(bool final_success,
+                             const std::string& apply_result_utf8,
+                             const std::string& validation_result_utf8,
+                             const std::string& final_disposition_utf8,
+                             const std::string& warning_utf8);
 // AI subsystem smoke test: emits a deterministic status summary into UI output.
 void emit_ai_smoke_lines();
 // AI UI panel projection lines (crawler progress + experiment list + notifications).
 void emit_ai_ui_panel_lines();
 // Pop one UI output message into out_utf8 (returns true if one was available).
 bool ui_pop_output_text(std::string& out_utf8);
+
+// GUI-driven editor control surface (no in-app CLI required).
+void ui_content_reindex();
+void ui_content_list_all(uint32_t limit_u32);
+bool ui_snapshot_content_entries(uint32_t limit_u32, std::vector<genesis::GeAssetEntry>& out_entries, std::string* out_err) const;
+void ui_set_repo_reader_enabled(bool enabled);
+void ui_repo_reader_rescan();
+bool ui_snapshot_repo_reader_status(std::string& out_status_utf8) const;
+bool ui_snapshot_repo_reader_files(uint32_t limit_u32, std::vector<std::string>& out_rel_paths_utf8, std::string* out_err);
+bool ui_snapshot_repo_file_preview(const std::string& rel_path_utf8, uint32_t max_bytes_u32, std::string& out_preview_utf8, std::string* out_err);
+bool ui_snapshot_repo_file_coherence_hits(const std::string& rel_path_utf8, uint32_t limit_u32, std::vector<genesis::GeCoherenceHit>& out_hits, std::string* out_err) const;
+bool ui_snapshot_coherence_stats(std::string& out_stats_utf8) const;
+bool ui_snapshot_coherence_query(const std::string& query_utf8, uint32_t limit_u32, std::vector<genesis::GeCoherenceHit>& out_hits, std::string* out_err) const;
+bool ui_snapshot_coherence_rename_plan(const std::string& old_ident_ascii, const std::string& new_ident_ascii, uint32_t limit_u32, std::vector<genesis::GeCoherenceHit>& out_hits, std::string* out_err) const;
+bool ui_snapshot_coherence_rename_patch(const std::string& old_ident_ascii, const std::string& new_ident_ascii, uint32_t limit_u32, std::string& out_patch_utf8, std::string* out_err) const;
+bool ui_snapshot_coherence_selftest(bool& out_ok, std::string& out_report_utf8) const;
+void ui_emit_coherence_stats();
+void ui_emit_coherence_query(const std::string& query_utf8, uint32_t limit_u32);
+void ui_emit_coherence_rename_plan(const std::string& old_ident_ascii, const std::string& new_ident_ascii, uint32_t limit_u32);
+void ui_emit_coherence_rename_patch(const std::string& old_ident_ascii, const std::string& new_ident_ascii, uint32_t limit_u32);
+void ui_set_coherence_highlight_query(const std::string& query_utf8, uint32_t limit_u32);
+void ui_set_coherence_highlight_path(const std::string& rel_path_utf8);
+void ui_emit_coherence_selftest();
+bool ui_snapshot_vault_entries(uint32_t limit_u32, std::vector<std::string>& out_rel_paths_utf8, std::string* out_err) const;
+bool ui_snapshot_vault_entry_preview(const std::string& rel_path_utf8, uint32_t max_bytes_u32, std::string& out_preview_utf8, std::string* out_err) const;
+bool ui_import_vault_entry(const std::string& rel_path_utf8, std::string& out_written_path_utf8, std::string* out_err);
+void ui_emit_vault_list_all(uint32_t limit_u32);
+void ui_request_game_bootstrap(const std::string& request_utf8);
+void ui_emit_ai_model_train_ready(const std::string& base_name_utf8);
 
 // -----------------------------------------------------------------
 // Deterministic export
@@ -1506,10 +1827,10 @@ void corpus_crawl_stop();
 
     bool check_invariants() const;
 
-    // Deterministic hydration projection: projects commit-ready inspector
+    // Deterministic workspace projection: projects commit-ready inspector
     // artifacts into a functioning file workspace.
     // Returns true on success.
-    bool hydrate_workspace_to(const std::string& root_dir);
+    bool project_workspace_to(const std::string& root_dir);
 
     // Read-only AI status for visualization and host integration.
     const EwAiStatus& ai_status() const { return neural_ai.status(); }
@@ -1537,3 +1858,13 @@ private:
     };
     EwLatticeProjectionTag lattice_proj_tag_{};
 };
+
+class SubstrateMicroprocessor final : public SubstrateManager {
+public:
+    using SubstrateManager::SubstrateManager;
+    SubstrateMicroprocessor() : SubstrateManager((size_t)0) {}
+};
+namespace genesis {
+} // namespace genesis
+
+

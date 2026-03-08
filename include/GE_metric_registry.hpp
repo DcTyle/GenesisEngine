@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include "GE_metric_claim.hpp"
+
 // -----------------------------------------------------------------------------
 // Metric Registry + Checkpoint Tasks
 //
@@ -43,6 +45,9 @@ enum class MetricKind : uint32_t {
     Lang_Thesaurus_RelationStats = 101,
     Lang_Encyclopedia_ConceptStats = 102,
     Lang_SpeechCorpus_AlignmentStats = 103,
+    Lang_SpeechBoot_VocabSize = 107,
+    Lang_SpeechBoot_SplitStability = 108,
+    Lang_SpeechBoot_IntentParsePass = 109,
 
     // ---------------------------------------------------------------------
     // Math foundations measurable set (Stage 0, parallel with language).
@@ -114,6 +119,14 @@ struct MetricTask {
     uint32_t context_anchor_id_u32 = 0;
 
     MetricTarget target;
+
+    // Optional originating claim from corpus extraction.
+    // Stored directly so vault commits and regression tests remain deterministic.
+    uint32_t has_claim_u32 = 0u;
+    MetricClaim claim{};
+
+    // Declared abstract work units for budget accounting.
+    uint32_t declared_work_units_u32 = 0u;
 
     // Search budget expressed as conceptual "tries" (object updates).
     uint64_t tries_remaining_u64 = 0;

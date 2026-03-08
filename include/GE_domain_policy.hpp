@@ -14,6 +14,7 @@ struct GE_DomainPolicy {
     uint32_t req_per_sec_u32 = 0;
     // Maximum bytes admitted per response body (cap before encoding).
     uint32_t max_body_bytes_u32 = 0;
+    uint32_t target_pages_u32 = 0;
     // If true, the domain is offline-only (dumps, local corpora).
     bool offline_only = true;
     // If true, allow http:// (plaintext) live fetch. https requires separate TLS module.

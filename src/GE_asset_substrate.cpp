@@ -23,7 +23,7 @@ const char* GeAssetSubstrate::partition_dirname(GeAssetPartition p) {
         case GeAssetPartition::Character: return "Character";
         case GeAssetPartition::Foliage: return "Foliage";
         case GeAssetPartition::Assets: return "Assets";
-        case GeAssetPartition::Ai: return "AI";
+        case GeAssetPartition::Vault: return "Vault";
         default: return "Assets";
     }
 }
@@ -43,30 +43,101 @@ std::string GeAssetSubstrate::sanitize_filename_ascii_(const std::string& in_utf
         const bool ok = (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_' || b == '-' || b == '.';
         if (!ok) s[i] = '_';
     }
-    // Prevent directory traversal semantics.
     for (size_t i = 0; i < s.size(); ++i) {
         if (s[i] == '/' || s[i] == '\\') s[i] = '_';
     }
     return s;
 }
 
+void GeAssetSubstrate::ensure_partition_schema_(const std::string& root_utf8, GeAssetPartition partition) {
+    const std::string base = join_path_(root_utf8, partition_dirname(partition));
+    (void)_ensure_dirs(base);
+
+    switch (partition) {
+        case GeAssetPartition::Worlds:
+            (void)_ensure_dirs(join_path_(base, "Levels"));
+            (void)_ensure_dirs(join_path_(base, "Scenarios"));
+            break;
+        case GeAssetPartition::Planets:
+            (void)_ensure_dirs(join_path_(base, "Atmospheres"));
+            (void)_ensure_dirs(join_path_(base, "Surfaces"));
+            (void)_ensure_dirs(join_path_(base, "OrbitalSets"));
+            break;
+        case GeAssetPartition::Simulations:
+            (void)_ensure_dirs(join_path_(base, "Conditions"));
+            (void)_ensure_dirs(join_path_(base, "Experiments"));
+            break;
+        case GeAssetPartition::Actors:
+            (void)_ensure_dirs(join_path_(base, "Props"));
+            (void)_ensure_dirs(join_path_(base, "Machines"));
+            break;
+        case GeAssetPartition::Character:
+            (void)_ensure_dirs(join_path_(base, "Profiles"));
+            (void)_ensure_dirs(join_path_(base, "Animation"));
+            break;
+        case GeAssetPartition::Foliage:
+            (void)_ensure_dirs(join_path_(base, "Species"));
+            (void)_ensure_dirs(join_path_(base, "BiomeSets"));
+            break;
+        case GeAssetPartition::Assets: {
+            (void)_ensure_dirs(join_path_(base, "Objects"));
+            (void)_ensure_dirs(join_path_(base, "Meshes"));
+            (void)_ensure_dirs(join_path_(base, "Textures"));
+            (void)_ensure_dirs(join_path_(base, "UV"));
+            (void)_ensure_dirs(join_path_(base, "Voxels"));
+            const std::string mat = join_path_(base, "Materials");
+            (void)_ensure_dirs(mat);
+            (void)_ensure_dirs(join_path_(mat, "Mixer"));
+            (void)_ensure_dirs(join_path_(mat, "Designer"));
+            (void)_ensure_dirs(join_path_(mat, "SurfaceProfiles"));
+            (void)_ensure_dirs(join_path_(mat, "Compositions"));
+            const std::string pt = join_path_(mat, "PeriodicTable");
+            (void)_ensure_dirs(pt);
+            (void)_ensure_dirs(join_path_(pt, "Particles"));
+            (void)_ensure_dirs(join_path_(pt, "Atoms"));
+            (void)_ensure_dirs(join_path_(pt, "Compounds"));
+            (void)_ensure_dirs(join_path_(pt, "DNA"));
+            break;
+        }
+        case GeAssetPartition::Vault: {
+            (void)_ensure_dirs(join_path_(base, "AI"));
+            (void)_ensure_dirs(join_path_(base, "AI/research"));
+            (void)_ensure_dirs(join_path_(base, "AI/experiments/metrics"));
+            (void)_ensure_dirs(join_path_(base, "AI/experiments/metrics_failures"));
+            (void)_ensure_dirs(join_path_(base, "AI/corpus/allowlist_pages"));
+            (void)_ensure_dirs(join_path_(base, "AI/corpus/resonant_pages"));
+            (void)_ensure_dirs(join_path_(base, "AI/corpus/speech_boot"));
+            (void)_ensure_dirs(join_path_(base, "AI/uspto"));
+            (void)_ensure_dirs(join_path_(base, "Objects"));
+            (void)_ensure_dirs(join_path_(base, "Components"));
+            (void)_ensure_dirs(join_path_(base, "Machines"));
+            (void)_ensure_dirs(join_path_(base, "Inventions"));
+            const std::string mat = join_path_(base, "Materials");
+            (void)_ensure_dirs(mat);
+            (void)_ensure_dirs(join_path_(mat, "Compositions"));
+            const std::string pt = join_path_(mat, "PeriodicTable");
+            (void)_ensure_dirs(pt);
+            (void)_ensure_dirs(join_path_(pt, "Particles"));
+            (void)_ensure_dirs(join_path_(pt, "Atoms"));
+            (void)_ensure_dirs(join_path_(pt, "Compounds"));
+            (void)_ensure_dirs(join_path_(pt, "DNA"));
+            break;
+        }
+        default:
+            break;
+    }
+}
+
 void GeAssetSubstrate::ensure_default_tree_(const std::string& root_utf8) {
     (void)_ensure_dirs(root_utf8);
-    (void)_ensure_dirs(join_path_(root_utf8, "Worlds"));
-    (void)_ensure_dirs(join_path_(root_utf8, "Planets"));
-    (void)_ensure_dirs(join_path_(root_utf8, "Simulations"));
-    (void)_ensure_dirs(join_path_(root_utf8, "Actors"));
-    (void)_ensure_dirs(join_path_(root_utf8, "Character"));
-    (void)_ensure_dirs(join_path_(root_utf8, "Foliage"));
-    (void)_ensure_dirs(join_path_(root_utf8, "Assets"));
-
-    // AI partition with stable subfolders.
-    const std::string ai = join_path_(root_utf8, "AI");
-    (void)_ensure_dirs(ai);
-    (void)_ensure_dirs(join_path_(ai, "research"));
-    (void)_ensure_dirs(join_path_(ai, "experiments"));
-    (void)_ensure_dirs(join_path_(ai, "machines"));
-    (void)_ensure_dirs(join_path_(ai, "inventions"));
+    ensure_partition_schema_(root_utf8, GeAssetPartition::Worlds);
+    ensure_partition_schema_(root_utf8, GeAssetPartition::Planets);
+    ensure_partition_schema_(root_utf8, GeAssetPartition::Simulations);
+    ensure_partition_schema_(root_utf8, GeAssetPartition::Actors);
+    ensure_partition_schema_(root_utf8, GeAssetPartition::Character);
+    ensure_partition_schema_(root_utf8, GeAssetPartition::Foliage);
+    ensure_partition_schema_(root_utf8, GeAssetPartition::Assets);
+    ensure_partition_schema_(root_utf8, GeAssetPartition::Vault);
 }
 
 bool GeAssetSubstrate::init(const std::string& project_root_utf8,
@@ -80,11 +151,10 @@ bool GeAssetSubstrate::init(const std::string& project_root_utf8,
     ensure_default_tree_(project_root_utf8_);
     ensure_default_tree_(global_cache_root_utf8_);
 
-    // Create/refresh project index at init.
     return rebuild_project_index(out_err);
 }
 
-bool GeAssetSubstrate::save_into_root_(SubstrateMicroprocessor* sm,
+bool GeAssetSubstrate::save_into_root_(SubstrateManager* sm,
                                       const std::string& root_utf8,
                                       uint64_t object_id_u64,
                                       uint32_t kind_u32,
@@ -104,7 +174,6 @@ bool GeAssetSubstrate::save_into_root_(SubstrateMicroprocessor* sm,
     const std::string part_dir = join_path_(root_utf8, partition_dirname(partition));
     (void)_ensure_dirs(part_dir);
 
-    // Deterministic file name: label + kind + object id.
     std::string label = e->label_utf8.empty() ? std::string("asset") : e->label_utf8;
     label = sanitize_filename_ascii_(label);
 
@@ -112,15 +181,32 @@ bool GeAssetSubstrate::save_into_root_(SubstrateMicroprocessor* sm,
     const std::string full = join_path_(part_dir, fname);
     if (out_path_utf8) *out_path_utf8 = full;
 
-    // Write the geasset via substrate-owned serializer.
-    if (!sm->sim_save_object_asset_to_exact_path(full, object_id_u64, kind_u32)) {
-        if (out_err) *out_err = "write_failed";
-        return false;
+    {
+        std::ofstream out(full, std::ios::binary | std::ios::trunc);
+        if (!out) {
+            if (out_err) *out_err = "write_failed";
+            return false;
+        }
+        out << "# geasset_v1\n";
+        out << "object_id_u64=" << object_id_u64 << "\n";
+        out << "kind_u32=" << kind_u32 << "\n";
+        out << "label_utf8=" << e->label_utf8 << "\n";
+        out << "partition=" << partition_dirname(partition) << "\n";
+        out << "hook=sim_save_object_asset_to_exact_path_pending\n";
+        out << "mass_or_cost_q32_32=" << e->mass_or_cost_q32_32 << "\n";
+        out << "phase_seed_u64=" << e->phase_seed_u64 << "\n";
+        out << "voxel_grid=" << e->voxel_grid_x_u32 << "," << e->voxel_grid_y_u32 << "," << e->voxel_grid_z_u32 << "\n";
+        out << "uv_atlas=" << e->uv_atlas_w_u32 << "," << e->uv_atlas_h_u32 << "," << e->uv_atlas_format_u32 << "\n";
+        out << "local_grid=" << e->local_grid_x_u32 << "," << e->local_grid_y_u32 << "," << e->local_grid_z_u32 << "\n";
+        if (!out.good()) {
+            if (out_err) *out_err = "write_failed";
+            return false;
+        }
     }
     return true;
 }
 
-bool GeAssetSubstrate::save_object_asset(SubstrateMicroprocessor* sm,
+bool GeAssetSubstrate::save_object_asset(SubstrateManager* sm,
                                         uint64_t object_id_u64,
                                         uint32_t kind_u32,
                                         GeAssetPartition partition,
@@ -134,7 +220,6 @@ bool GeAssetSubstrate::save_object_asset(SubstrateMicroprocessor* sm,
         std::string p2;
         (void)save_into_root_(sm, global_cache_root_utf8_, object_id_u64, kind_u32, partition, &p2, nullptr);
     }
-    // Rebuild project index deterministically after write.
     return rebuild_project_index(out_err);
 }
 
@@ -155,16 +240,13 @@ bool GeAssetSubstrate::scan_entries_(const std::string& root_utf8, std::vector<G
             if (ec) break;
             if (!it->is_regular_file()) continue;
             const std::string ext = it->path().extension().string();
-            if (ext != ".geasset") continue;
+            if (ext != ".geasset" && ext != ".geassetref") continue;
             GeAssetEntry e{};
             e.partition = part;
 
-            // Partition-relative path.
             std::filesystem::path rel = std::filesystem::relative(it->path(), root_utf8, ec);
             e.relpath_utf8 = ec ? it->path().string() : rel.generic_string();
 
-            // Best-effort parse of the deterministic file name fields.
-            // label_k<kind>_oid<object>.geasset
             const std::string stem = it->path().stem().string();
             e.label_utf8 = stem;
             size_t kpos = stem.rfind("_k");
@@ -191,7 +273,7 @@ bool GeAssetSubstrate::scan_entries_(const std::string& root_utf8, std::vector<G
     scan_partition(GeAssetPartition::Character);
     scan_partition(GeAssetPartition::Foliage);
     scan_partition(GeAssetPartition::Assets);
-    scan_partition(GeAssetPartition::Ai);
+    scan_partition(GeAssetPartition::Vault);
 
     std::sort(out_entries.begin(), out_entries.end(), [](const GeAssetEntry& a, const GeAssetEntry& b) {
         if ((uint32_t)a.partition != (uint32_t)b.partition) return (uint32_t)a.partition < (uint32_t)b.partition;
@@ -208,18 +290,6 @@ bool GeAssetSubstrate::write_index_file_(const std::string& root_utf8, const std
         return false;
     }
 
-    // Binary format (deterministic):
-    //  u32 magic 'GECP' (Genesis Engine Content Panel)
-    //  u32 ver 1
-    //  u32 entry_count
-    //  repeated entries:
-    //    u32 partition
-    //    u32 relpath_len
-    //    bytes relpath
-    //    u32 label_len
-    //    bytes label
-    //    u64 object_id
-    //    u32 kind
     const uint32_t magic = 0x50434547U; // 'GECP'
     const uint32_t ver = 1u;
     const uint32_t n = (uint32_t)entries.size();

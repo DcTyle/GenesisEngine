@@ -73,7 +73,7 @@ static inline void ge_hex_u64(char out17[17], uint64_t v) {
 static inline fs::path ge_ai_asset_root_path() {
     // Mirrors AI-created artifacts into the project asset substrate so the editor
     // can expose them as a “vault-like” library surface.
-    return fs::path("Draft Container/AssetSubstrate") / "AI";
+    return fs::path("AssetSubstrate") / "Vault" / "AI";
 }
 
 
@@ -218,6 +218,16 @@ void AiVault::ensure_dirs_() {
     ec.clear();
     (void)fs::create_directories(fs::path(canonical_dir_utf8_) / "materials", ec);
     ec.clear();
+    (void)fs::create_directories(fs::path(canonical_dir_utf8_) / "materials" / "compositions", ec);
+    ec.clear();
+    (void)fs::create_directories(fs::path(canonical_dir_utf8_) / "materials" / "periodic_table" / "particles", ec);
+    ec.clear();
+    (void)fs::create_directories(fs::path(canonical_dir_utf8_) / "materials" / "periodic_table" / "atoms", ec);
+    ec.clear();
+    (void)fs::create_directories(fs::path(canonical_dir_utf8_) / "materials" / "periodic_table" / "compounds", ec);
+    ec.clear();
+    (void)fs::create_directories(fs::path(canonical_dir_utf8_) / "materials" / "periodic_table" / "dna", ec);
+    ec.clear();
     (void)fs::create_directories(fs::path(canonical_dir_utf8_) / "objects", ec);
     ec.clear();
     (void)fs::create_directories(fs::path(canonical_dir_utf8_) / "inventions", ec);
@@ -262,6 +272,16 @@ void AiVault::ensure_dirs_() {
     (void)fs::create_directories(ai / "components", ec);
     ec.clear();
     (void)fs::create_directories(ai / "materials", ec);
+    ec.clear();
+    (void)fs::create_directories(ai / "materials" / "compositions", ec);
+    ec.clear();
+    (void)fs::create_directories(ai / "materials" / "periodic_table" / "particles", ec);
+    ec.clear();
+    (void)fs::create_directories(ai / "materials" / "periodic_table" / "atoms", ec);
+    ec.clear();
+    (void)fs::create_directories(ai / "materials" / "periodic_table" / "compounds", ec);
+    ec.clear();
+    (void)fs::create_directories(ai / "materials" / "periodic_table" / "dna", ec);
     ec.clear();
     (void)fs::create_directories(ai / "corpus" / "allowlist_pages", ec);
     ec.clear();
@@ -346,15 +366,13 @@ void AiVault::init_once(::SubstrateManager* sm) {
             sm->vault_experiments_ephemeral_u64 = ephemeral_experiment_count_u64_;
             sm->vault_allowlist_pages_u64 = committed_allowlist_page_count_u64_;
             sm->vault_resonant_pages_u64 = committed_resonant_page_count_u64_;
-        sm->emit_ai_event_line("commit_resonant_page", std::string("key=") + std::to_string(key_u64) + " rq15=" + std::to_string((uint32_t)best_q15) + " bytes=" + std::to_string((uint64_t)len_u32));
-
         }
         return;
     }
     inited_ = true;
 
-    // Root under user’s preferred “Draft Container”.
-    root_utf8_ = "Draft Container/AI_Vault";
+    // Root under the canonical GenesisEngine repo layout.
+    root_utf8_ = "AI_Vault";
     canonical_dir_utf8_ = root_utf8_ + "/canonical";
     ephemeral_dir_utf8_ = root_utf8_ + "/_ephemeral";
 
@@ -446,7 +464,12 @@ bool AiVault::write_metric_json_(::SubstrateManager* sm,
                   "\"task_id\":%llu,"
                   "\"source_id\":%llu,"
                   "\"source_anchor\":%u,"
-                  "\"context_anchor\":%u,"\"has_claim\":%u,"\"claim_value_q32_32\":%lld,"\"claim_unit\":%u,"\"claim_ordinal\":%u,"\"declared_work_units\":%u,"
+                  "\"context_anchor\":%u,"
+                  "\"has_claim\":%u,"
+                  "\"claim_value_q32_32\":%lld,"
+                  "\"claim_unit\":%u,"
+                  "\"claim_ordinal\":%u,"
+                  "\"declared_work_units\":%u,"
                   "\"accepted\":%s,"
                   "\"tol_num\":%u,"
                   "\"tol_den\":%u,"
@@ -494,7 +517,7 @@ bool AiVault::commit_metric_task(::SubstrateManager* sm, const genesis::MetricTa
         last_commit_key_u64_ = t.task_id_u64;
         last_commit_kind_u32_ = 1u;
         if (sm) { sm->vault_last_commit_key_u64 = last_commit_key_u64_; sm->vault_last_commit_kind_u32 = last_commit_kind_u32_; }
-        if (sm) sm->emit_ai_event_line("commit_metric", std::string("key=") + std::to_string(last_commit_key_u64_) + " kind=" + ew_metric_kind_name_ascii(t.kind));
+        if (sm) sm->emit_ai_event_line("commit_metric", std::string("key=") + std::to_string(last_commit_key_u64_) + " kind=" + ew_metric_kind_name_ascii(t.target.kind));
 
         // Mirror a stable reference into the AssetSubstrate AI partition.
         {
@@ -551,7 +574,7 @@ bool AiVault::store_ephemeral_metric_task(::SubstrateManager* sm, const genesis:
         last_commit_key_u64_ = t.task_id_u64;
         last_commit_kind_u32_ = 2u;
         if (sm) { sm->vault_last_commit_key_u64 = last_commit_key_u64_; sm->vault_last_commit_kind_u32 = last_commit_kind_u32_; }
-        if (sm) sm->emit_ai_event_line("commit_metric", std::string("key=") + std::to_string(last_commit_key_u64_) + " kind=" + ew_metric_kind_name_ascii(t.kind));
+        if (sm) sm->emit_ai_event_line("commit_metric", std::string("key=") + std::to_string(last_commit_key_u64_) + " kind=" + ew_metric_kind_name_ascii(t.target.kind));
 
         // Mirror a stable reference into the AssetSubstrate AI partition.
         {
@@ -745,7 +768,7 @@ bool AiVault::maybe_commit_resonant_page(::SubstrateManager* sm,
         last_commit_kind_u32_ = 4u;
         sm->vault_last_commit_key_u64 = last_commit_key_u64_;
         sm->vault_last_commit_kind_u32 = last_commit_kind_u32_;
-        sm->emit_ai_event_line("commit_allowlist_page", std::string("key=") + std::to_string(last_commit_key_u64_) + " bytes=" + std::to_string((uint64_t)page_bytes_u32));
+        sm->emit_ai_event_line("commit_resonant_page", std::string("key=") + std::to_string(last_commit_key_u64_) + " bytes=" + std::to_string((uint64_t)len_u32));
 
         // Bounded topic mask cache used for resonance gating.
         if (canonical_topic_masks_.size() < 1024u) canonical_topic_masks_.push_back(topic_mask_u64);

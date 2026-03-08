@@ -4,6 +4,7 @@ layout(push_constant) uniform Push {
     mat4 proj;
     vec3 sunPosCam;
     float pointSize;
+    vec4 debug; // x: resonance_only(0/1), y: spectrum_band, z: spectrum_phase, w: selected carrier coupling [0,1]
 } pc;
 
 layout(location=0) in vec2 vUV;
@@ -73,6 +74,56 @@ void main(){
     vec3 L = normalize(pc.sunPosCam - vCenterCam);
     float ndl = max(dot(n, L), 0.0);
 
+
+
+// Resonance-only viewport mode:
+// When enabled, render only substrate resonance proxies (leak/harmonics/flux/density)
+// as a black-and-gold carrier field with bounded Fourier-like rings and coupling filaments.
+if (pc.debug.x > 0.5) {
+    float band = pc.debug.y;
+    float ph = pc.debug.z;
+    float coupling = clamp(pc.debug.w, 0.0, 1.0);
+
+    float leak = clamp(vLeak, 0.0, 1.0);
+    float harm = clamp(vHarmMean, 0.0, 1.0);
+    float flux = clamp(abs(vFluxGrad), 0.0, 1.0);
+    float dens = clamp(vDensity, 0.0, 1.0);
+
+    float base = 0.10 + 1.60 * (0.50 * leak + 0.28 * harm + 0.22 * flux);
+    base = clamp(base, 0.0, 2.0);
+
+    float k = 6.0 + 2.0 * clamp(band, -4.0, 8.0);
+    float p = tri(ph + k * (vUV.x * 0.73 + vUV.y * 0.91) + 3.0 * harm);
+    float q = tri(ph * 0.5 + k * (vUV.x * 1.31 - vUV.y * 0.57) + 2.0 * flux);
+    float speckle = 0.48 + 0.52 * (p * q);
+
+    float radial = length(vUV);
+    float ring_freq = 4.0 + 10.0 * coupling + 1.5 * clamp(band, -2.0, 6.0);
+    float rings = tri(ph * (0.35 + 0.45 * coupling) + radial * ring_freq + 2.5 * harm);
+    rings = pow(rings, mix(2.8, 1.4, coupling));
+
+    float filament_a = tri(ph * 0.75 + (vUV.x + vUV.y) * (5.0 + 5.0 * coupling) + 1.7 * flux);
+    float filament_b = tri(ph * 0.45 + (vUV.x - vUV.y) * (6.0 + 4.0 * harm) + 2.3 * leak);
+    float filaments = pow(max(filament_a, filament_b), 3.0);
+
+    float interior = 0.20 + 0.80 * dens;
+    float shell = smoothstep(0.95, 0.30, radial);
+    float ring_mask = shell * (0.35 + 0.65 * rings);
+    float filament_mask = shell * filaments * (0.25 + 0.75 * coupling);
+    float field = speckle * interior * (0.55 + 0.45 * ring_mask) + filament_mask;
+    float I = clamp(base * field, 0.0, 2.4);
+
+    vec3 gold = vec3(1.0, 0.72, 0.20);
+    vec3 amber = vec3(1.0, 0.58, 0.14);
+    float warm = clamp(0.5 + 0.08 * band + 0.15 * coupling, 0.0, 1.0);
+    vec3 c = mix(amber, gold, warm) * I;
+
+    float core = smoothstep(0.55, 0.0, radial) * (0.18 + 0.42 * harm);
+    c += gold * core * (0.25 + 0.75 * coupling);
+
+    oColor = vec4(c, 1.0);
+    return;
+}
     // Emergent lighting proxy:
     // - Base radiance from emissive + leak density (field leakage -> volumetric glow)
     // - Directional visibility from surface normal & sun vector (geometry only)

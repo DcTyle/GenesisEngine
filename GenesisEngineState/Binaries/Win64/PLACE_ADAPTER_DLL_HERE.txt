@@ -1,0 +1,9 @@
+Place EigenWareUEAdapter.dll in this folder.
+
+Build with clang-cl via CMake from the plugin root:
+  cmake -S . -B build_core -G "Visual Studio 17 2022" -A x64 -T ClangCL
+  cmake --build build_core --config Release --target EigenWareUEAdapter
+
+Then copy:
+  build_core/ue_adapter/Release/EigenWareUEAdapter.dll
+into this directory.

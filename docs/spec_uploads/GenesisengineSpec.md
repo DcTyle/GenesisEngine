@@ -9260,7 +9260,7 @@ Authority rule:
   defined by I.4, using only the allowed operand sources defined below.
 
 Operand sources (allowed, deterministic):
-- Anchor fields: coord9_q63[9], harmonic fingerprint fields, anchor_id_u64
+- Anchor fields: coord9_q63[9], harmonic signature fields, anchor_id_u64
 - State fields: theta_u64, dtheta_transport_u64, coherence R_integer, dispersion_proxy_i64, E_res_q32_32
 - Parameter page fields: param_q32_32[k] (k in [0..param_count-1]) for the bound eq_param_lane_u32
 - Derived constants: lane_count, neighbor_count, word size factors (2^64), log2(cardinality(*))

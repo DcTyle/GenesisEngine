@@ -1,5 +1,6 @@
 #include <cstdint>
 #include <cstdio>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -8,6 +9,7 @@
 #include "GE_corpus_allowlist.hpp"
 #include "GE_corpus_anchor_store.hpp"
 #include "GE_corpus_canonicalizer.hpp"
+#include "GE_corpus_pulse_log.hpp"
 #include "GE_overlap_router.hpp"
 #include "GE_quantity_peeling_trainer.hpp"
 #include "GE_coherence_graph_store.hpp"
@@ -136,7 +138,7 @@ int main(int argc, char** argv) {
         std::string domain = rel;
         const size_t slash = domain.find('/');
         if (slash != std::string::npos) domain = domain.substr(0, slash);
-        domain = ew_ascii_lower(domain);
+        ew::ew_ascii_lower_inplace(domain);
 
         const auto* pol = allow.find_by_domain_ascii(domain);
         if (!pol) {

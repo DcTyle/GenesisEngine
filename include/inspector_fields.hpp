@@ -62,7 +62,7 @@ public:
     // Snapshot artifacts whose rel_path begins with prefix.
     void snapshot_prefix(const std::string& prefix, std::vector<EwInspectorArtifact>& out) const;
 
-    // Clear committed flags after successful hydration.
+    // Clear committed flags after successful workspace projection.
     void clear_commit_ready();
 
     // Monotonic revision counter for deterministic caches.

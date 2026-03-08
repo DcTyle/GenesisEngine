@@ -7,8 +7,8 @@ SubstrateManager ew_substrate_manager_build_default(uint64_t seed_u64) {
     SubstrateManager sm((size_t)0);
     sm.set_projection_seed(seed_u64);
     // Enable deterministic celestial dynamics by default.
-    sm.nbody.enabled_u32 = 1u;
-    sm.nbody.initialized_u32 = 0u;
+    sm.nbody_state.enabled_u32 = 1u;
+    sm.nbody_state.initialized_u32 = 0u;
     return sm;
 }
 

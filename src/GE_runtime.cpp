@@ -24,6 +24,7 @@
 #include "substrate_alu.hpp"
 #include "substrate_harmonics.hpp"
 #include "ew_coherence_analyzer.hpp"
+#include "coherence_graph.hpp"
 
 #include "GE_shell_mesh.hpp"
 #include "GE_object_ancilla.hpp"
@@ -43,6 +44,194 @@ static inline int64_t q32_32_mul(int64_t a_q32_32, int64_t b_q32_32) {
     // (a*b)>>32, no rounding.
     __int128 p = (__int128)a_q32_32 * (__int128)b_q32_32;
     return (int64_t)(p >> 32);
+}
+
+// -----------------------------------------------------------------------------
+// Coherence index v1 helpers (rename propagation + reference highlighting hooks)
+// -----------------------------------------------------------------------------
+// IMPORTANT: These helpers must remain deterministic and bounded. They operate
+// purely on inspector_fields (substrate-resident artifacts) and never touch disk.
+static inline bool ew_is_ident_start_(char c) {
+    return (c == '_') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+}
+static inline bool ew_is_ident_body_(char c) {
+    return ew_is_ident_start_(c) || (c >= '0' && c <= '9');
+}
+
+static bool ew_norm_token_ascii_lower_(const std::string& in, std::string& out) {
+    out.clear();
+    out.reserve(in.size());
+    for (size_t i = 0; i < in.size(); ++i) {
+        const unsigned char uc = (unsigned char)in[i];
+        if (uc >= 0x80) return false;
+        char c = (char)uc;
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        out.push_back(c);
+    }
+    if (out.size() < 3) return false;
+    if (!ew_is_ident_start_(out[0])) return false;
+    for (size_t i = 1; i < out.size(); ++i) {
+        if (!ew_is_ident_body_(out[i])) return false;
+    }
+    // Keep stop list consistent with coherence_graph.cpp.
+    static const char* stop[] = {"the","and","for","with","from","this","that","true","false","uint","int","size"};
+    for (size_t si = 0; si < sizeof(stop)/sizeof(stop[0]); ++si) {
+        if (out == stop[si]) return false;
+    }
+    return true;
+}
+
+// Replace identifier tokens matching old_norm (lowercase) with new_token (verbatim).
+// Returns true if any replacements were made.
+static bool ew_replace_ident_tokens_bounded_(const std::string& in, const std::string& old_norm,
+                                            const std::string& new_token, std::string& out) {
+    out.clear();
+    // Hard cap: never process more than 256KB in this operation.
+    const size_t n = (in.size() < (size_t)262144) ? in.size() : (size_t)262144;
+    out.reserve(n);
+
+    bool changed = false;
+    size_t i = 0;
+    while (i < n) {
+        const unsigned char uc = (unsigned char)in[i];
+        if (uc >= 0x80) {
+            // Non-ASCII byte: copy as-is (future UTF-8-safe renames are a later phase).
+            out.push_back((char)uc);
+            ++i;
+            continue;
+        }
+        const char c = (char)uc;
+        if (!ew_is_ident_start_(c)) {
+            out.push_back(c);
+            ++i;
+            continue;
+        }
+        // Parse identifier span.
+        size_t j = i + 1;
+        while (j < n) {
+            const unsigned char uj = (unsigned char)in[j];
+            if (uj >= 0x80) break;
+            if (!ew_is_ident_body_((char)uj)) break;
+            ++j;
+        }
+        // Normalize to lowercase for compare.
+        bool match = false;
+        if ((j - i) == old_norm.size()) {
+            match = true;
+            for (size_t k = 0; k < old_norm.size(); ++k) {
+                char cc = in[i + k];
+                if (cc >= 'A' && cc <= 'Z') cc = (char)(cc - 'A' + 'a');
+                if (cc != old_norm[k]) { match = false; break; }
+            }
+        }
+        if (match) {
+            out.append(new_token);
+            changed = true;
+        } else {
+            out.append(in.data() + i, j - i);
+        }
+        i = j;
+    }
+    // Copy any remainder beyond cap unchanged.
+    if (n < in.size()) {
+        out.append(in.data() + n, in.size() - n);
+    }
+    return changed;
+}
+
+// Minimal unified diff with a single hunk bounded to 256KB total output.
+static void ew_emit_unified_diff_single_hunk_(const std::string& rel_path,
+                                             const std::string& old_txt,
+                                             const std::string& new_txt,
+                                             std::vector<std::string>& out_lines) {
+    out_lines.clear();
+    out_lines.reserve(256);
+    out_lines.push_back(std::string("diff --git a/") + rel_path + " b/" + rel_path);
+    out_lines.push_back(std::string("--- a/") + rel_path);
+    out_lines.push_back(std::string("+++ b/") + rel_path);
+
+    // Split into lines (bounded).
+    auto split_lines = [](const std::string& s, std::vector<std::string>& lines) {
+        lines.clear();
+        lines.reserve(2048);
+        const size_t cap = (s.size() < (size_t)262144) ? s.size() : (size_t)262144;
+        size_t i = 0;
+        while (i < cap) {
+            size_t j = i;
+            while (j < cap && s[j] != '\n') ++j;
+            std::string ln = s.substr(i, j - i);
+            if (!ln.empty() && ln.back() == '\r') ln.pop_back();
+            lines.push_back(std::move(ln));
+            i = (j < cap) ? (j + 1) : j;
+        }
+    };
+
+    std::vector<std::string> a, b;
+    split_lines(old_txt, a);
+    split_lines(new_txt, b);
+
+    // Find first/last differing lines.
+    size_t p = 0;
+    while (p < a.size() && p < b.size() && a[p] == b[p]) ++p;
+    size_t as = a.size();
+    size_t bs = b.size();
+    size_t qa = as;
+    size_t qb = bs;
+    while (qa > p && qb > p && a[qa - 1] == b[qb - 1]) { --qa; --qb; }
+
+    if (p == as && p == bs) {
+        // No changes.
+        return;
+    }
+
+    const size_t ctx = 3;
+    const size_t a0 = (p > ctx) ? (p - ctx) : 0;
+    const size_t b0 = (p > ctx) ? (p - ctx) : 0;
+    const size_t a1 = ((qa + ctx) < as) ? (qa + ctx) : as;
+    const size_t b1 = ((qb + ctx) < bs) ? (qb + ctx) : bs;
+
+    // Unified hunk header uses 1-based line numbers.
+    const size_t a_len = a1 - a0;
+    const size_t b_len = b1 - b0;
+    {
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), "@@ -%llu,%llu +%llu,%llu @@",
+                      (unsigned long long)(a0 + 1), (unsigned long long)a_len,
+                      (unsigned long long)(b0 + 1), (unsigned long long)b_len);
+        out_lines.push_back(buf);
+    }
+
+    // Emit context and deltas.
+    size_t ia = a0;
+    size_t ib = b0;
+    while (ia < a1 || ib < b1) {
+        if (ia < a1 && ib < b1 && a[ia] == b[ib]) {
+            out_lines.push_back(std::string(" ") + a[ia]);
+            ++ia; ++ib;
+            continue;
+        }
+        if (ia < a1 && ia < qa) {
+            out_lines.push_back(std::string("-") + a[ia]);
+            ++ia;
+            continue;
+        }
+        if (ib < b1 && ib < qb) {
+            out_lines.push_back(std::string("+") + b[ib]);
+            ++ib;
+            continue;
+        }
+        // Tail context (after change region).
+        if (ia < a1 && ib < b1) {
+            out_lines.push_back(std::string(" ") + a[ia]);
+            ++ia; ++ib;
+        } else if (ia < a1) {
+            out_lines.push_back(std::string("-") + a[ia]);
+            ++ia;
+        } else if (ib < b1) {
+            out_lines.push_back(std::string("+") + b[ib]);
+            ++ib;
+        }
+    }
 }
 
 
@@ -436,7 +625,7 @@ static bool ew_synth_emit_cli_tool(SubstrateManager* sm, const std::string& tool
     if (!sm) return false;
     if (tool_name.empty()) return false;
 
-    const std::string base_dir = "Draft Container/GenesisEngine/src/tools/";
+    const std::string base_dir = "src/tools/";
     const std::string cpp_path = base_dir + tool_name + "_main.cpp";
 
     std::string cpp;
@@ -484,7 +673,7 @@ static bool ew_synth_emit_cli_tool(SubstrateManager* sm, const std::string& tool
     a.denial_code_u32 = cr.denial_code_u32;
     sm->inspector_fields.upsert(a);
 
-    const std::string cmake_path = "Draft Container/GenesisEngine/CMakeLists.txt";
+    const std::string cmake_path = "CMakeLists.txt";
     EwPatchSpec ps;
     ps.mode_u16 = EW_PATCH_APPEND_EOF;
     ps.text = "\n# EW_ANCHOR:EW_SYNTH_TOOLS\n";
@@ -500,14 +689,159 @@ static bool ew_synth_emit_cli_tool(SubstrateManager* sm, const std::string& tool
     return true;
 }
 
+static void ew_patch_plan_single_target_(SubstrateManager* sm,
+                                         const std::string& rel_path,
+                                         const std::string& anchor_a,
+                                         const std::string& anchor_b,
+                                         uint16_t patch_mode_u16,
+                                         uint16_t bind_mode_u16,
+                                         const std::string& rationale_utf8,
+                                         const std::string& next_action_utf8) {
+    if (!sm) return;
+    SubstrateManager::EwAiPatchPlanItem items[3];
+    items[0].sequence_u8 = 1u;
+    items[0].patch_mode_u16 = patch_mode_u16;
+    items[0].bind_mode_u16 = bind_mode_u16;
+    items[0].rel_path_utf8 = rel_path;
+    items[0].anchor_a_utf8 = anchor_a;
+    items[0].anchor_b_utf8 = anchor_b;
+    items[0].task_summary_utf8 = "bind canonical target";
+    items[0].rationale_utf8 = rationale_utf8;
+    items[0].validation_step_utf8 = "confirm target anchor/span presence";
+    items[0].completion_criteria_utf8 = "target binding resolved";
+    items[1].sequence_u8 = 2u;
+    items[1].dependency_index_u8 = 0u;
+    items[1].patch_mode_u16 = patch_mode_u16;
+    items[1].bind_mode_u16 = bind_mode_u16;
+    items[1].rel_path_utf8 = rel_path;
+    items[1].anchor_a_utf8 = anchor_a;
+    items[1].anchor_b_utf8 = anchor_b;
+    items[1].task_summary_utf8 = "apply bounded patch";
+    items[1].rationale_utf8 = "reuse canonical workflow state; no parallel patch engine";
+    items[1].validation_step_utf8 = "run coherence gate and conservative artifact checks";
+    items[1].completion_criteria_utf8 = "textual apply succeeds";
+    items[2].sequence_u8 = 3u;
+    items[2].dependency_index_u8 = 1u;
+    items[2].patch_mode_u16 = patch_mode_u16;
+    items[2].bind_mode_u16 = bind_mode_u16;
+    items[2].rel_path_utf8 = rel_path;
+    items[2].anchor_a_utf8 = anchor_a;
+    items[2].anchor_b_utf8 = anchor_b;
+    items[2].task_summary_utf8 = "validate target integrity";
+    items[2].rationale_utf8 = "per-target validation updates canonical workflow";
+    items[2].validation_step_utf8 = "check target integrity, region presence, drift, and retry viability";
+    items[2].completion_criteria_utf8 = "target validation outcome recorded";
+    sm->ai_patch_set_plan(items, 3u, next_action_utf8);
+}
+
+static void ew_patch_plan_emit_artifact_(SubstrateManager* sm,
+                                         const std::string& rel_path,
+                                         const std::string& summary_utf8,
+                                         const std::string& next_action_utf8) {
+    if (!sm) return;
+    SubstrateManager::EwAiPatchPlanItem items[3];
+    items[0].sequence_u8 = 1u;
+    items[0].patch_mode_u16 = 0u;
+    items[0].bind_mode_u16 = (uint16_t)SubstrateManager::EW_AI_PATCH_BIND_FILE;
+    items[0].rel_path_utf8 = rel_path;
+    items[0].task_summary_utf8 = summary_utf8;
+    items[0].rationale_utf8 = "explicit artifact emission path in active repo line";
+    items[0].validation_step_utf8 = "validate emitted artifact under coherence gate";
+    items[0].completion_criteria_utf8 = "artifact is commit-ready in inspector fields";
+    items[1].sequence_u8 = 2u;
+    items[1].dependency_index_u8 = 0u;
+    items[1].patch_mode_u16 = (uint16_t)EW_PATCH_APPEND_EOF;
+    items[1].bind_mode_u16 = (uint16_t)SubstrateManager::EW_AI_PATCH_BIND_FILE;
+    items[1].rel_path_utf8 = "CMakeLists.txt";
+    items[1].task_summary_utf8 = "wire emitted artifact into build surface";
+    items[1].rationale_utf8 = "keep one canonical build path";
+    items[1].validation_step_utf8 = "append bounded build stanza and validate cmake sanity";
+    items[1].completion_criteria_utf8 = "build surface references emitted artifact";
+    items[2].sequence_u8 = 3u;
+    items[2].dependency_index_u8 = 1u;
+    items[2].patch_mode_u16 = 0u;
+    items[2].bind_mode_u16 = (uint16_t)SubstrateManager::EW_AI_PATCH_BIND_FILE;
+    items[2].rel_path_utf8 = rel_path;
+    items[2].task_summary_utf8 = "record validation outcome";
+    items[2].rationale_utf8 = "close workflow loop before later passes";
+    items[2].validation_step_utf8 = "confirm artifact and build wiring are both visible in workflow state";
+    items[2].completion_criteria_utf8 = "session can be finalized";
+    sm->ai_patch_set_plan(items, 3u, next_action_utf8);
+}
+
+static void ew_patch_note_semantic_decision_(SubstrateManager* sm,
+                                             const std::string& request_utf8,
+                                             const EwCoherenceGraph& cg) {
+    if (!sm) return;
+    EwCoherenceGraph::SemanticPatchDecision decision;
+    cg.resolve_semantic_patch_target(request_utf8, 8u, decision);
+    if (decision.resolved_u8 != 0u) {
+        const bool review = decision.human_review_prudent_u8 != 0u;
+        sm->ai_patch_note_binding_report(decision.winner_reason_utf8,
+                                         decision.rejected_candidates_utf8,
+                                         review ? std::string("anchor_bounded_review_prudent") : std::string("anchor_bounded"),
+                                         decision.ambiguity_level_u8,
+                                         review,
+                                         (uint16_t)SubstrateManager::EW_AI_PATCH_BIND_ANCHOR,
+                                         decision.winner.rel_path);
+        ew_patch_plan_single_target_(sm,
+                                     decision.winner.rel_path,
+                                     decision.winner.anchor_a,
+                                     decision.winner.anchor_b,
+                                     decision.winner.patch_mode_u16,
+                                     (uint16_t)SubstrateManager::EW_AI_PATCH_BIND_ANCHOR,
+                                     decision.winner.reason_utf8,
+                                     review ? std::string("review competing anchor regions before apply") : std::string("preview bounded patch for chosen anchor region"));
+        return;
+    }
+    std::vector<EwCoherenceGraph::Match> fallback;
+    cg.query_best(request_utf8, 4u, fallback);
+    if (!fallback.empty()) {
+        std::string rejected;
+        for (size_t i = 1; i < fallback.size() && i < 4u; ++i) {
+            if (!rejected.empty()) rejected += " | ";
+            rejected += fallback[i].rel_path + " score=" + std::to_string((unsigned)fallback[i].score_u32) + " rejected_by=lower_file_score";
+        }
+        const bool review = fallback.size() > 1u && fallback[1].score_u32 + 64u >= fallback[0].score_u32;
+        sm->ai_patch_note_binding_report(std::string("no anchor-bounded target found; fallback file winner path=") + fallback[0].rel_path +
+                                         " score=" + std::to_string((unsigned)fallback[0].score_u32),
+                                         rejected,
+                                         review ? std::string("file_fallback_review_prudent") : std::string("file_fallback"),
+                                         review ? 2u : 1u,
+                                         review,
+                                         (uint16_t)SubstrateManager::EW_AI_PATCH_BIND_FILE,
+                                         fallback[0].rel_path);
+        ew_patch_plan_single_target_(sm,
+                                     fallback[0].rel_path,
+                                     std::string(),
+                                     std::string(),
+                                     (uint16_t)EW_PATCH_APPEND_EOF,
+                                     (uint16_t)SubstrateManager::EW_AI_PATCH_BIND_FILE,
+                                     "fallback file-level placement because no anchor region resolved",
+                                     review ? std::string("review fallback file ranking before apply") : std::string("select file-level placement explicitly before apply"));
+    } else {
+        sm->ai_patch_note_binding_report("no canonical bind candidate resolved from coherence graph",
+                                         std::string(),
+                                         "unresolved",
+                                         3u,
+                                         true,
+                                         (uint16_t)SubstrateManager::EW_AI_PATCH_BIND_NONE,
+                                         std::string());
+    }
+}
+
 static bool ew_synthcode_execute(SubstrateManager* sm, const std::string& request_utf8) {
     if (!sm) return false;
     std::string req = request_utf8;
     ew_trim_left_ws(req);
     if (req.empty()) return false;
+    (void)sm->ai_patch_begin_session(req, "ai_operating_layer", std::string(), 0u);
 
     // Emit deterministic index stats for observability.
     ew_synth_index_rebuild(sm);
+    EwCoherenceGraph synth_cg;
+    synth_cg.rebuild_from_inspector(sm->inspector_fields);
+    ew_patch_note_semantic_decision_(sm, req, synth_cg);
     {
         std::string msg = "SYNTHCODE_INDEX artifacts=";
         msg += std::to_string((unsigned long long)sm->synth_artifacts.size());
@@ -521,7 +855,11 @@ static bool ew_synthcode_execute(SubstrateManager* sm, const std::string& reques
     if (lc.find("create module") != std::string::npos || lc.find("new module") != std::string::npos) {
         std::string name = ew_extract_first_ident_ascii(req);
         if (name.empty()) name = "eigenware_module";
+        ew_patch_plan_emit_artifact_(sm, std::string("Generated/") + name, "emit minimal cpp module artifacts", "emit module artifacts then validate build wiring");
+        sm->ai_patch_note_binding_report("explicit module emission path selected from request classifier", std::string(), "file_emit_explicit", 0u, false, (uint16_t)SubstrateManager::EW_AI_PATCH_BIND_FILE, std::string("Generated/") + name);
         code_emit_minimal_cpp_module(sm, name);
+        sm->ai_patch_note_preview_result("module_emit_ready", "module_emit", std::string("Generated/") + name, 0u, (uint16_t)SubstrateManager::EW_AI_PATCH_BIND_FILE, true, true, std::string());
+        sm->ai_patch_finish_session(true, "artifact_emitted", "not_applicable", "module_created", std::string());
         sm->emit_ui_line(std::string("SYNTHCODE_CREATED_MODULE ") + name);
         return true;
     }
@@ -536,7 +874,11 @@ static bool ew_synthcode_execute(SubstrateManager* sm, const std::string& reques
             if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_') nn.push_back(c);
         }
         if (nn.empty()) nn = "ew_synth_tool";
+        ew_patch_plan_emit_artifact_(sm, std::string("src/tools/") + nn + "_main.cpp", "emit cli tool artifact", "emit tool artifacts then validate build wiring");
+        sm->ai_patch_note_binding_report("explicit tool emission path selected from request classifier", std::string(), "file_emit_explicit", 0u, false, (uint16_t)SubstrateManager::EW_AI_PATCH_BIND_FILE, std::string("src/tools/") + nn + "_main.cpp");
         (void)ew_synth_emit_cli_tool(sm, nn);
+        sm->ai_patch_note_preview_result("tool_emit_ready", "tool_emit", std::string("src/tools/") + nn + "_main.cpp", 0u, (uint16_t)SubstrateManager::EW_AI_PATCH_BIND_FILE, true, true, std::string());
+        sm->ai_patch_finish_session(true, "artifact_emitted", "not_applicable", "tool_created", std::string());
         sm->emit_ui_line(std::string("SYNTHCODE_CREATED_TOOL ") + nn);
         return true;
     }
@@ -544,12 +886,14 @@ static bool ew_synthcode_execute(SubstrateManager* sm, const std::string& reques
     // No stubs. SYNTHCODE only emits complete, coherence-gated artifacts (modules/tools)
     // or fails closed. If the request is not one of the implemented emitters,
     // we refuse deterministically so the repo never accumulates incomplete logic.
+    sm->ai_patch_note_preview_result("synthcode_refused", "ai_operating_layer", sm->patch_workflow_state.canonical_write_targets_utf8, 0u, (uint16_t)SubstrateManager::EW_AI_PATCH_BIND_NONE, false, false, "implemented emitters are module/tool only in this repo line");
+    sm->ai_patch_finish_session(false, "not_applied", "refused_no_implementation", "request_out_of_scope", "implemented emitters are module/tool only in this repo line");
     sm->emit_ui_line("SYNTHCODE_REFUSED_NO_IMPLEMENTATION");
     return false;
 }
 // Game-engine bootstrap request. This is a substrate-managed process that seeds
 // measurable tasks for the "game" curriculum bucket and emits minimal engine
-// scaffolding modules as inspector artifacts for later hydration.
+// scaffolding modules as inspector artifacts for later explicit workspace projection.
 static bool ew_gameboot_execute(SubstrateManager* sm, const std::string& request_utf8) {
     if (!sm) return false;
     std::string req = request_utf8;
@@ -587,7 +931,7 @@ static bool ew_gameboot_execute(SubstrateManager* sm, const std::string& request
     }
 
     // Emit minimal scaffolding modules (no autonomous side-effects).
-    // These are projections only; hydration remains a gated, explicit step.
+    // These are projections only; workspace writes remain gated and explicit.
     code_emit_minimal_cpp_module(sm, "GE_game_stage");
     code_emit_minimal_cpp_module(sm, "GE_game_world");
     code_emit_minimal_cpp_module(sm, "GE_editor_ai_hooks");
@@ -713,15 +1057,15 @@ for (size_t i = 0; i < count; ++i) anchors.emplace_back((uint32_t)i);
     ai_policy.init(projection_seed);
 
     // Initialize canonical N-body integrator state.
-    genesis::ew_nbody_init_default(&nbody);
+    genesis::ew_nbody_init_default(&nbody_state);
 
     // Load project settings (fail closed to defaults if missing, but report).
     {
         std::string err;
         EwProjectSettings loaded;
-        if (ge_project_settings_load(loaded, "Draft Container/ProjectSettings/project_settings.ewcfg", err)) {
+        if (ge_project_settings_load(loaded, "ProjectSettings/project_settings.ewcfg", err)) {
             project_settings = loaded;
-            emit_ui_line(std::string("PROJECT_SETTINGS_LOADED ") + "Draft Container/ProjectSettings/project_settings.ewcfg");
+            emit_ui_line(std::string("PROJECT_SETTINGS_LOADED ") + "ProjectSettings/project_settings.ewcfg");
         } else {
             // Keep defaults; emit observable.
             emit_ui_line(std::string("PROJECT_SETTINGS_DEFAULTS ") + err);
@@ -741,10 +1085,12 @@ for (size_t i = 0; i < count; ++i) anchors.emplace_back((uint32_t)i);
     // ------------------------------------------------------------------
     {
         std::string aerr;
-        const std::string root = "Draft Container/AssetSubstrate";
-        const std::string cache = "Draft Container/AssetSubstrate/_GlobalCache";
-        const bool ok = asset_substrate.init(root, cache, "content_index.gecontent", &aerr);
-        emit_ui_line(ok ? "ASSET_SUBSTRATE_INIT_OK" : (std::string("ASSET_SUBSTRATE_INIT_FAIL ") + aerr));
+        const std::string root = project_settings.assets.project_asset_substrate_root_utf8;
+        const std::string cache = project_settings.assets.global_asset_cache_root_utf8;
+        const std::string index_name = project_settings.assets.content_index_filename_utf8;
+        const bool ok = asset_substrate.init(root, cache, index_name, &aerr);
+        emit_ui_line(ok ? (std::string("ASSET_SUBSTRATE_INIT_OK ") + root)
+                        : (std::string("ASSET_SUBSTRATE_INIT_FAIL ") + aerr));
     }
 
     // Ensure camera anchor exists and is initialized from project settings.
@@ -2503,9 +2849,6 @@ if (have_in) {
     }
 }
 
-
-}
-
 #endif // disabled block for compilation hygiene
 
 bool SubstrateManager::submit_external_api_response_chunk(
@@ -2579,6 +2922,698 @@ void SubstrateManager::observe_text_line(const std::string& utf8_line) {
         std::string("ui:text"),
         utf8_line
     );
+}
+
+
+static uint32_t ew_chat_memory_salience_from_text(const std::string& s) {
+    uint32_t score = 1u;
+    if (s.size() >= 24u) score += 1u;
+    if (s.size() >= 96u) score += 1u;
+    if (s.find("?") != std::string::npos) score += 1u;
+    if (s.find("remember") != std::string::npos || s.find("context") != std::string::npos) score += 1u;
+    if (s.find("patch") != std::string::npos || s.find("diff") != std::string::npos || s.find("code") != std::string::npos) score += 1u;
+    if (score > 7u) score = 7u;
+    return score;
+}
+
+void SubstrateManager::ui_chat_memory_observe(uint32_t chat_slot_u32, uint32_t mode_u32, const std::string& utf8_line) {
+    std::string msg = utf8_line;
+    ew_trim_left_ws(msg);
+    while (!msg.empty() && (msg.back() == '\r' || msg.back() == '\n')) msg.pop_back();
+    if (msg.empty()) return;
+    if (mode_u32 < EW_CHAT_MEMORY_MODE_TALK || mode_u32 > EW_CHAT_MEMORY_MODE_SIM) mode_u32 = EW_CHAT_MEMORY_MODE_TALK;
+
+    EwChatMemoryEntry entry{};
+    entry.tick_u64 = canonical_tick;
+    entry.chat_slot_u32 = chat_slot_u32;
+    entry.mode_u32 = mode_u32;
+    entry.salience_u32 = ew_chat_memory_salience_from_text(msg);
+    if (msg.size() > 320u) msg.resize(320u);
+    entry.text_utf8 = msg;
+
+    const uint32_t slot = chat_memory_head_u32 % CHAT_MEMORY_CAP_U32;
+    chat_memory_ring[slot] = entry;
+    chat_memory_head_u32 = (chat_memory_head_u32 + 1u) % CHAT_MEMORY_CAP_U32;
+    if (chat_memory_count_u32 < CHAT_MEMORY_CAP_U32) ++chat_memory_count_u32;
+    ++chat_memory_revision_u64;
+
+    static const char* mode_names[4] = {"unknown", "talk", "code", "sim"};
+    const char* mode_name = (mode_u32 <= EW_CHAT_MEMORY_MODE_SIM) ? mode_names[mode_u32] : "talk";
+    chat_memory_focus_utf8 = std::string("cortex[") + mode_name + "] chat=" + std::to_string((unsigned long long)chat_slot_u32 + 1ull) + " salience=" + std::to_string((unsigned long long)entry.salience_u32) + " :: " + entry.text_utf8;
+
+    observe_text_line(std::string("chat_cortex:") + mode_name + ":" + entry.text_utf8);
+}
+
+bool SubstrateManager::ui_snapshot_chat_memory(uint32_t prefer_mode_u32, uint32_t max_entries_u32, std::vector<EwChatMemoryEntry>& out_entries, std::string& out_summary_utf8) const {
+    out_entries.clear();
+    out_summary_utf8.clear();
+    if (max_entries_u32 == 0u) max_entries_u32 = 6u;
+    if (chat_memory_count_u32 == 0u) {
+        out_summary_utf8 = "cortex empty";
+        return true;
+    }
+    if (prefer_mode_u32 < EW_CHAT_MEMORY_MODE_TALK || prefer_mode_u32 > EW_CHAT_MEMORY_MODE_SIM) prefer_mode_u32 = EW_CHAT_MEMORY_MODE_TALK;
+
+    uint32_t talk_n = 0u, code_n = 0u, sim_n = 0u;
+    for (uint32_t i = 0u; i < chat_memory_count_u32; ++i) {
+        const uint32_t slot = (chat_memory_head_u32 + CHAT_MEMORY_CAP_U32 - chat_memory_count_u32 + i) % CHAT_MEMORY_CAP_U32;
+        const EwChatMemoryEntry& e = chat_memory_ring[slot];
+        if (e.mode_u32 == EW_CHAT_MEMORY_MODE_TALK) ++talk_n;
+        else if (e.mode_u32 == EW_CHAT_MEMORY_MODE_CODE) ++code_n;
+        else if (e.mode_u32 == EW_CHAT_MEMORY_MODE_SIM) ++sim_n;
+    }
+
+    uint32_t gathered = 0u;
+    for (uint32_t i = 0u; i < chat_memory_count_u32 && gathered < max_entries_u32; ++i) {
+        const uint32_t slot = (chat_memory_head_u32 + CHAT_MEMORY_CAP_U32 - 1u - i) % CHAT_MEMORY_CAP_U32;
+        const EwChatMemoryEntry& e = chat_memory_ring[slot];
+        if (e.mode_u32 != prefer_mode_u32) continue;
+        out_entries.push_back(e);
+        ++gathered;
+    }
+    for (uint32_t i = 0u; i < chat_memory_count_u32 && gathered < max_entries_u32; ++i) {
+        const uint32_t slot = (chat_memory_head_u32 + CHAT_MEMORY_CAP_U32 - 1u - i) % CHAT_MEMORY_CAP_U32;
+        const EwChatMemoryEntry& e = chat_memory_ring[slot];
+        if (e.mode_u32 == prefer_mode_u32) continue;
+        out_entries.push_back(e);
+        ++gathered;
+    }
+
+    out_summary_utf8 = std::string("cortex rev=") + std::to_string((unsigned long long)chat_memory_revision_u64)
+        + " talk=" + std::to_string((unsigned long long)talk_n)
+        + " code=" + std::to_string((unsigned long long)code_n)
+        + " sim=" + std::to_string((unsigned long long)sim_n);
+    if (!chat_memory_focus_utf8.empty()) out_summary_utf8 += " focus=" + chat_memory_focus_utf8;
+    return true;
+}
+
+void SubstrateManager::ui_link_chat_project(uint32_t chat_slot_u32, const std::string& project_root_utf8, const std::vector<std::string>& rel_paths_utf8) {
+    ui_note_active_chat_slot(chat_slot_u32);
+    EwProjectLinkEntry entry{};
+    entry.tick_u64 = canonical_tick;
+    entry.chat_slot_u32 = chat_slot_u32;
+    entry.project_root_utf8 = project_root_utf8;
+    entry.file_count_u32 = (uint32_t)rel_paths_utf8.size();
+    std::string digest;
+    const uint32_t limit = (uint32_t)std::min<size_t>(rel_paths_utf8.size(), 16u);
+    for (uint32_t i = 0u; i < limit; ++i) {
+        const std::string& rel = rel_paths_utf8[(size_t)i];
+        const int32_t f_code = ew_text_utf8_to_frequency_code(rel, (uint8_t)EW_PROFILE_LANGUAGE_INJECTION);
+        if (!digest.empty()) digest += " | ";
+        digest += std::to_string((unsigned long long)(i + 1u));
+        digest += ":f=";
+        digest += std::to_string((long long)f_code);
+        digest += ":";
+        digest += rel;
+    }
+    entry.spectrum_count_u32 = limit;
+    entry.spectrum_summary_utf8 = digest;
+    const uint32_t rel_cap = std::min<uint32_t>((uint32_t)rel_paths_utf8.size(), SubstrateManager::PROJECT_LINK_PATH_CAP_U32);
+    entry.rel_path_count_u32 = rel_cap;
+    for (uint32_t i = 0u; i < rel_cap; ++i) entry.rel_paths_utf8[i] = rel_paths_utf8[(size_t)i];
+    const uint32_t slot = project_link_head_u32 % PROJECT_LINK_CAP_U32;
+    project_link_ring[slot] = entry;
+    project_link_head_u32 = (project_link_head_u32 + 1u) % PROJECT_LINK_CAP_U32;
+    if (project_link_count_u32 < PROJECT_LINK_CAP_U32) ++project_link_count_u32;
+    ++project_link_revision_u64;
+    observe_text_line(std::string("project_cortex:chat=") + std::to_string((unsigned long long)chat_slot_u32 + 1ull) + ":root=" + project_root_utf8 + ":" + digest);
+}
+
+bool SubstrateManager::ui_snapshot_chat_project(uint32_t chat_slot_u32, EwProjectLinkEntry& out_entry) const {
+    for (uint32_t i = 0u; i < project_link_count_u32; ++i) {
+        const uint32_t slot = (project_link_head_u32 + PROJECT_LINK_CAP_U32 - 1u - i) % PROJECT_LINK_CAP_U32;
+        const EwProjectLinkEntry& e = project_link_ring[slot];
+        if (e.chat_slot_u32 == chat_slot_u32) {
+            out_entry = e;
+            return true;
+        }
+    }
+    out_entry = EwProjectLinkEntry{};
+    return false;
+}
+
+
+bool SubstrateManager::ui_snapshot_project_spectrum_lines(uint32_t chat_slot_u32, uint32_t max_lines_u32, std::vector<std::string>& out_lines_utf8) const {
+    out_lines_utf8.clear();
+    EwProjectLinkEntry entry{};
+    if (!ui_snapshot_chat_project(chat_slot_u32, entry)) return false;
+    if (entry.spectrum_summary_utf8.empty()) return true;
+    if (max_lines_u32 == 0u) max_lines_u32 = 4u;
+    size_t start = 0u;
+    while (start < entry.spectrum_summary_utf8.size() && out_lines_utf8.size() < max_lines_u32) {
+        size_t end = entry.spectrum_summary_utf8.find(" | ", start);
+        if (end == std::string::npos) end = entry.spectrum_summary_utf8.size();
+        std::string part = entry.spectrum_summary_utf8.substr(start, end - start);
+        if (!part.empty()) out_lines_utf8.push_back(part);
+        start = (end >= entry.spectrum_summary_utf8.size()) ? entry.spectrum_summary_utf8.size() : (end + 3u);
+    }
+    return true;
+}
+
+static std::string ew_stage_ascii_lower_copy(const std::string& in) {
+    std::string out = in;
+    ew::ew_ascii_lower_inplace(out);
+    return out;
+}
+
+static uint8_t ew_stage_scope_kind_from_export_scope(const std::string& export_scope_utf8) {
+    const std::string s = ew_stage_ascii_lower_copy(export_scope_utf8);
+    if (s.find("single file") != std::string::npos || s.find("file artifact") != std::string::npos) return SubstrateManager::EW_STAGE_EXPORT_FILE_ARTIFACT;
+    if (s.find("repo patch") != std::string::npos || s.find("repo diff") != std::string::npos) return SubstrateManager::EW_STAGE_EXPORT_REPO_PATCH;
+    if (s.find("whole") != std::string::npos || s.find("repository") != std::string::npos) return SubstrateManager::EW_STAGE_EXPORT_WHOLE_REPO;
+    if (s.find("override") != std::string::npos) return SubstrateManager::EW_STAGE_EXPORT_LANGUAGE_OVERRIDE;
+    if (s.find("language planning") != std::string::npos || s.find("auto") != std::string::npos) return SubstrateManager::EW_STAGE_EXPORT_AUTO_LANGUAGE;
+    return SubstrateManager::EW_STAGE_EXPORT_NONE;
+}
+
+static std::string ew_stage_locked_language_for_path(const std::string& rel_path_utf8, bool* out_locked) {
+    const std::string low = ew_stage_ascii_lower_copy(rel_path_utf8);
+    auto tail = [&](const char* ext)->bool {
+        const size_t n = std::strlen(ext);
+        return low.size() >= n && low.compare(low.size() - n, n, ext) == 0;
+    };
+    bool locked = false;
+    std::string lang = "text";
+    if (tail(".cpp") || tail(".cc") || tail(".cxx") || tail(".hpp") || tail(".h") || tail(".cu")) { locked = true; lang = "cpp"; }
+    else if (tail(".c")) { locked = true; lang = "c"; }
+    else if (tail(".cs")) { locked = true; lang = "csharp"; }
+    else if (tail(".py")) { locked = true; lang = "python"; }
+    else if (tail(".json")) { locked = true; lang = "json"; }
+    else if (tail(".md")) { locked = false; lang = "markdown"; }
+    else if (tail(".txt")) { locked = false; lang = "text"; }
+    if (out_locked) *out_locked = locked;
+    return lang;
+}
+
+static std::string ew_stage_suggest_language(const std::string& rel_path_utf8,
+                                             const std::string& language_hint_utf8,
+                                             const std::string& language_policy_utf8,
+                                             bool locked) {
+    bool ext_locked = false;
+    const std::string ext_lang = ew_stage_locked_language_for_path(rel_path_utf8, &ext_locked);
+    if (locked || ext_locked) return ext_lang;
+    const std::string hint = ew_stage_ascii_lower_copy(language_hint_utf8);
+    const std::string policy = ew_stage_ascii_lower_copy(language_policy_utf8);
+    if (hint.find("cpp") != std::string::npos || policy.find("cpp") != std::string::npos) return "cpp";
+    if (hint.find("python") != std::string::npos || policy.find("python") != std::string::npos) return "python";
+    if (hint.find("csharp") != std::string::npos || policy.find("c#") != std::string::npos) return "csharp";
+    if (hint.find("markdown") != std::string::npos || policy.find("markdown") != std::string::npos) return "markdown";
+    return ext_lang;
+}
+static bool ew_stage_path_is_editor_only(const std::string& rel_path_utf8) {
+    const std::string low = ew_stage_ascii_lower_copy(rel_path_utf8);
+    return low.rfind("vulkan_app/", 0u) == 0u ||
+           low.find("/editor/") != std::string::npos ||
+           low.find("editor_only") != std::string::npos;
+}
+
+static const char* ew_stage_operation_label(uint8_t scope_kind_u8) {
+    switch (scope_kind_u8) {
+        case SubstrateManager::EW_STAGE_EXPORT_FILE_ARTIFACT: return "file_artifact_export";
+        case SubstrateManager::EW_STAGE_EXPORT_REPO_PATCH: return "repo_patch_export";
+        case SubstrateManager::EW_STAGE_EXPORT_WHOLE_REPO: return "whole_repo_continuation";
+        case SubstrateManager::EW_STAGE_EXPORT_AUTO_LANGUAGE: return "auto_language_plan";
+        case SubstrateManager::EW_STAGE_EXPORT_LANGUAGE_OVERRIDE: return "per_file_language_override";
+        default: break;
+    }
+    return "unclassified_export";
+}
+
+
+bool SubstrateManager::ui_stage_node_export_bundle(uint32_t chat_slot_u32,
+                                                   const std::string& node_lookup_utf8,
+                                                   const std::string& node_label_utf8,
+                                                   const std::string& export_scope_utf8,
+                                                   const std::string& language_hint_utf8,
+                                                   const std::string& language_policy_utf8,
+                                                   bool language_locked,
+                                                   std::string& out_stage_summary_utf8,
+                                                   std::string* out_err) {
+    out_stage_summary_utf8.clear();
+    if (out_err) out_err->clear();
+    ui_note_active_chat_slot(chat_slot_u32);
+    EwProjectLinkEntry project{};
+    if (!ui_snapshot_chat_project(chat_slot_u32, project) || project.project_root_utf8.empty()) {
+        if (out_err) *out_err = "linked project/work substrate is required before export staging";
+        return false;
+    }
+    EwStagedExportBundle bundle{};
+    bundle.stage_id_u64 = ++staged_export_seq_u64;
+    bundle.tick_u64 = canonical_tick;
+    bundle.chat_slot_u32 = chat_slot_u32;
+    bundle.node_lookup_utf8 = node_lookup_utf8;
+    bundle.node_label_utf8 = node_label_utf8;
+    bundle.export_scope_utf8 = export_scope_utf8;
+    bundle.language_hint_utf8 = language_hint_utf8;
+    bundle.language_policy_utf8 = language_policy_utf8;
+    bundle.language_locked_u8 = language_locked ? 1u : 0u;
+    bundle.linked_project_root_utf8 = project.project_root_utf8;
+    bundle.linked_file_count_u32 = project.file_count_u32;
+    bundle.scope_kind_u8 = ew_stage_scope_kind_from_export_scope(export_scope_utf8);
+    bundle.operation_label_utf8 = ew_stage_operation_label(bundle.scope_kind_u8);
+    bundle.whole_repo_continuation_u8 = (bundle.scope_kind_u8 == EW_STAGE_EXPORT_WHOLE_REPO) ? 1u : 0u;
+    bundle.export_dialect_clean_u8 = 1u;
+    bundle.operation_label_utf8 = ew_stage_operation_label(bundle.scope_kind_u8);
+    bundle.whole_repo_continuation_u8 = (bundle.scope_kind_u8 == EW_STAGE_EXPORT_WHOLE_REPO) ? 1u : 0u;
+    bundle.export_dialect_clean_u8 = 1u;
+    if (bundle.scope_kind_u8 == EW_STAGE_EXPORT_NONE) {
+        bundle.blocked_u8 = 1u;
+        bundle.stage_status_utf8 = "blocked:no_export_scope";
+        bundle.bundle_summary_utf8 = "scope does not map to a materialized export lane";
+    } else {
+        const uint32_t rel_count = std::min<uint32_t>(project.rel_path_count_u32, PROJECT_LINK_PATH_CAP_U32);
+        uint32_t chosen_count = 0u;
+        auto push_target = [&](const std::string& rel, bool selected)->void {
+            if (rel.empty() || bundle.target_count_u32 >= EW_STAGE_EXPORT_TARGET_CAP_U32) return;
+            EwStagedExportTarget& tgt = bundle.targets[bundle.target_count_u32++];
+            tgt.rel_path_utf8 = rel;
+            bool path_locked = false;
+            const std::string locked_lang = ew_stage_locked_language_for_path(rel, &path_locked);
+            const std::string eff = ew_stage_suggest_language(rel, language_hint_utf8, language_policy_utf8, language_locked || path_locked);
+            tgt.language_locked_u8 = (language_locked || path_locked) ? 1u : 0u;
+            tgt.selected_by_policy_u8 = selected ? 1u : 0u;
+            tgt.scope_kind_u8 = bundle.scope_kind_u8;
+            tgt.suggested_language_utf8 = eff;
+            tgt.effective_language_utf8 = (language_locked || path_locked) ? locked_lang : eff;
+            if (language_locked || path_locked) tgt.constraint_reason_utf8 = "language locked by file role/integration";
+            else if (bundle.scope_kind_u8 == EW_STAGE_EXPORT_AUTO_LANGUAGE) tgt.constraint_reason_utf8 = "language chosen from hint/policy and file extension";
+            else if (bundle.scope_kind_u8 == EW_STAGE_EXPORT_LANGUAGE_OVERRIDE) tgt.constraint_reason_utf8 = "per-file override allowed for this unlocked role";
+            else tgt.constraint_reason_utf8 = "export lane inherited current policy";
+            if (ew_stage_path_is_editor_only(rel)) ++bundle.editor_only_target_count_u32;
+            else ++bundle.runtime_target_count_u32;
+        };
+        if (bundle.scope_kind_u8 == EW_STAGE_EXPORT_FILE_ARTIFACT) {
+            for (uint32_t i = 0u; i < rel_count; ++i) {
+                const std::string& rel = project.rel_paths_utf8[i];
+                if (!rel.empty()) { push_target(rel, true); break; }
+            }
+        } else if (bundle.scope_kind_u8 == EW_STAGE_EXPORT_REPO_PATCH) {
+            for (uint32_t i = 0u; i < rel_count && chosen_count < 8u; ++i) {
+                const std::string& rel = project.rel_paths_utf8[i];
+                if (rel.empty()) continue;
+                push_target(rel, true); ++chosen_count;
+            }
+        } else if (bundle.scope_kind_u8 == EW_STAGE_EXPORT_WHOLE_REPO ||
+                   bundle.scope_kind_u8 == EW_STAGE_EXPORT_AUTO_LANGUAGE ||
+                   bundle.scope_kind_u8 == EW_STAGE_EXPORT_LANGUAGE_OVERRIDE) {
+            for (uint32_t i = 0u; i < rel_count && chosen_count < EW_STAGE_EXPORT_TARGET_CAP_U32; ++i) {
+                const std::string& rel = project.rel_paths_utf8[i];
+                if (rel.empty()) continue;
+                push_target(rel, true); ++chosen_count;
+            }
+        }
+        if (bundle.target_count_u32 == 0u) {
+            bundle.blocked_u8 = 1u;
+            bundle.stage_status_utf8 = "blocked:no_targets";
+            bundle.bundle_summary_utf8 = "linked project exists but no targetable files were staged";
+        } else {
+            bundle.stage_status_utf8 = "staged";
+            bundle.bundle_summary_utf8 = std::string("staged ") + std::to_string((unsigned long long)bundle.target_count_u32) +
+                                         " target(s) from linked project substrate";
+            bundle.runtime_editor_split_checked_u8 = 1u;
+            bundle.runtime_split_summary_utf8 = std::string("runtime/editor audit: ") +
+                                                std::to_string((unsigned long long)bundle.runtime_target_count_u32) +
+                                                " runtime-capable path(s), " +
+                                                std::to_string((unsigned long long)bundle.editor_only_target_count_u32) +
+                                                " editor-facing path(s)";
+            if (bundle.editor_only_target_count_u32 > 0u) bundle.runtime_split_summary_utf8 += "; runtime packaging must exclude editor-facing paths";
+            else bundle.runtime_split_summary_utf8 += "; runtime packaging remains editor-clean for the staged target set";
+            if (bundle.scope_kind_u8 == EW_STAGE_EXPORT_WHOLE_REPO) {
+                bundle.continuation_summary_utf8 = "whole-repo continuation staged against the linked canonical repo line; preview/apply remains bounded";
+            } else if (bundle.scope_kind_u8 == EW_STAGE_EXPORT_REPO_PATCH) {
+                bundle.continuation_summary_utf8 = "repo-patch continuation remains surgical and bound to the linked project/work substrate";
+            } else if (bundle.scope_kind_u8 == EW_STAGE_EXPORT_FILE_ARTIFACT) {
+                bundle.continuation_summary_utf8 = "single-file export remains bound to one canonical target";
+            } else if (bundle.scope_kind_u8 == EW_STAGE_EXPORT_AUTO_LANGUAGE) {
+                bundle.continuation_summary_utf8 = "language planning staged without mutating the canonical files";
+            } else if (bundle.scope_kind_u8 == EW_STAGE_EXPORT_LANGUAGE_OVERRIDE) {
+                bundle.continuation_summary_utf8 = "per-file language override staged only for unlocked file roles";
+            }
+        }
+    }
+    const uint32_t slot = staged_export_head_u32 % EW_STAGE_EXPORT_HISTORY_CAP_U32;
+    staged_export_ring[slot] = bundle;
+    staged_export_head_u32 = (staged_export_head_u32 + 1u) % EW_STAGE_EXPORT_HISTORY_CAP_U32;
+    if (staged_export_count_u32 < EW_STAGE_EXPORT_HISTORY_CAP_U32) ++staged_export_count_u32;
+    out_stage_summary_utf8 = bundle.bundle_summary_utf8;
+    if (!bundle.operation_label_utf8.empty()) out_stage_summary_utf8 += std::string(" :: ") + bundle.operation_label_utf8;
+    if (!bundle.continuation_summary_utf8.empty()) out_stage_summary_utf8 += std::string(" :: ") + bundle.continuation_summary_utf8;
+    if (!bundle.stage_status_utf8.empty()) out_stage_summary_utf8 += std::string(" [") + bundle.stage_status_utf8 + "]";
+    return bundle.blocked_u8 == 0u;
+}
+
+bool SubstrateManager::ui_snapshot_latest_export_bundle(uint32_t chat_slot_u32, EwStagedExportBundle& out_bundle) const {
+    for (uint32_t i = 0u; i < staged_export_count_u32; ++i) {
+        const uint32_t slot = (staged_export_head_u32 + EW_STAGE_EXPORT_HISTORY_CAP_U32 - 1u - i) % EW_STAGE_EXPORT_HISTORY_CAP_U32;
+        const EwStagedExportBundle& b = staged_export_ring[slot];
+        if (b.chat_slot_u32 == chat_slot_u32) {
+            out_bundle = b;
+            return true;
+        }
+    }
+    out_bundle = EwStagedExportBundle{};
+    return false;
+}
+
+
+void SubstrateManager::ui_note_active_chat_slot(uint32_t chat_slot_u32) {
+    ai_active_chat_slot_u32 = chat_slot_u32;
+}
+
+static int ew_patch_history_find_index_(const SubstrateManager* sm, uint64_t session_id_u64) {
+    if (!sm || session_id_u64 == 0ull) return -1;
+    for (uint32_t i = 0u; i < sm->patch_history_count_u32; ++i) {
+        const uint32_t slot = (sm->patch_history_head_u32 + SubstrateManager::EW_AI_PATCH_HISTORY_CAP_U32 - 1u - i) % SubstrateManager::EW_AI_PATCH_HISTORY_CAP_U32;
+        if (sm->patch_history_ring[slot].session_id_u64 == session_id_u64) return (int)slot;
+    }
+    return -1;
+}
+
+static uint8_t ew_patch_warning_severity_from_text_(const std::string& warning_utf8) {
+    if (warning_utf8.empty()) return 0u;
+    if (warning_utf8.find("conflict") != std::string::npos ||
+        warning_utf8.find("failed") != std::string::npos ||
+        warning_utf8.find("blocked") != std::string::npos) return 3u;
+    if (warning_utf8.find("retry") != std::string::npos ||
+        warning_utf8.find("drift") != std::string::npos ||
+        warning_utf8.find("warning") != std::string::npos) return 2u;
+    return 1u;
+}
+
+static void ew_patch_update_triage_(SubstrateManager* sm,
+                                    uint8_t triage_state_u8,
+                                    bool retry_needed,
+                                    uint8_t warning_severity_u8,
+                                    const std::string& next_action_utf8) {
+    if (!sm) return;
+    sm->patch_workflow_state.triage_state_u8 = triage_state_u8;
+    sm->patch_workflow_state.retry_needed_u8 = retry_needed ? 1u : 0u;
+    sm->patch_workflow_state.warning_severity_u8 = warning_severity_u8;
+    if (!next_action_utf8.empty()) sm->patch_workflow_state.next_action_guidance_utf8 = next_action_utf8;
+    const int idx = ew_patch_history_find_index_(sm, sm->patch_workflow_state.session_id_u64);
+    if (idx >= 0) {
+        sm->patch_history_ring[idx].triage_state_u8 = triage_state_u8;
+        sm->patch_history_ring[idx].retry_needed_u8 = retry_needed ? 1u : 0u;
+        sm->patch_history_ring[idx].warning_severity_u8 = warning_severity_u8;
+    }
+    sm->emit_ui_line(std::string("AI_PATCH_TRIAGE session=") + std::to_string((unsigned long long)sm->patch_workflow_state.session_id_u64) +
+                     " state=" + std::to_string((unsigned)triage_state_u8) +
+                     " retry=" + (retry_needed ? "1" : "0") +
+                     " severity=" + std::to_string((unsigned)warning_severity_u8) +
+                     " next=" + sm->patch_workflow_state.next_action_guidance_utf8);
+}
+
+bool SubstrateManager::ui_snapshot_patch_workflow_state(EwAiPatchWorkflowState& out_state) const {
+    out_state = patch_workflow_state;
+    return patch_workflow_state.valid_u32 != 0u;
+}
+
+bool SubstrateManager::ui_snapshot_patch_session_history(uint32_t chat_slot_u32, uint32_t max_entries_u32, std::vector<EwAiPatchSessionRecord>& out_entries) const {
+    out_entries.clear();
+    if (max_entries_u32 == 0u) max_entries_u32 = 8u;
+    for (uint32_t i = 0u; i < patch_history_count_u32 && out_entries.size() < max_entries_u32; ++i) {
+        const uint32_t slot = (patch_history_head_u32 + SubstrateManager::EW_AI_PATCH_HISTORY_CAP_U32 - 1u - i) % SubstrateManager::EW_AI_PATCH_HISTORY_CAP_U32;
+        const EwAiPatchSessionRecord& rec = patch_history_ring[slot];
+        if (chat_slot_u32 != UINT32_MAX && rec.chat_slot_u32 != chat_slot_u32) continue;
+        out_entries.push_back(rec);
+    }
+    return true;
+}
+
+bool SubstrateManager::ui_snapshot_editor_state(EwEditorAnchorState& out_state) const {
+    const uint64_t kEditorObjectId = 0x315F524F54494445ULL; // 'EDITOR_1' little-endian
+    for (size_t i = 0; i < anchors.size(); ++i) {
+        const Anchor& a = anchors[i];
+        if (a.kind_u32 == EW_ANCHOR_KIND_EDITOR && a.object_id_u64 == kEditorObjectId) {
+            out_state = a.editor_state;
+            return true;
+        }
+    }
+    out_state = EwEditorAnchorState{};
+    return false;
+}
+
+
+uint64_t SubstrateManager::ai_patch_begin_session(const std::string& goal_utf8,
+                                                  const std::string& scope_utf8,
+                                                  const std::string& canonical_targets_utf8,
+                                                  uint16_t patch_mode_u16) {
+    ++patch_session_seq_u64;
+    patch_workflow_state = EwAiPatchWorkflowState{};
+    patch_workflow_state.valid_u32 = 1u;
+    patch_workflow_state.chat_slot_u32 = ai_active_chat_slot_u32;
+    patch_workflow_state.session_id_u64 = patch_session_seq_u64;
+    patch_workflow_state.start_tick_u64 = canonical_tick;
+    patch_workflow_state.selected_patch_mode_u16 = patch_mode_u16;
+    patch_workflow_state.patch_explanation_utf8 = goal_utf8;
+    patch_workflow_state.current_scope_utf8 = scope_utf8;
+    patch_workflow_state.canonical_write_targets_utf8 = canonical_targets_utf8;
+    patch_workflow_state.validation_outcome_utf8 = "pending";
+    patch_workflow_state.bind_confidence_utf8 = "unresolved";
+    patch_workflow_state.next_action_guidance_utf8 = "inspect plan and preview patch";
+    patch_workflow_state.triage_state_u8 = EW_AI_PATCH_TRIAGE_PENDING;
+    patch_workflow_state.retry_needed_u8 = 0u;
+    patch_workflow_state.warning_severity_u8 = 0u;
+    patch_workflow_state.last_event_utf8 = "session_started";
+    patch_workflow_state.session_history_ref_utf8 = std::string("patch_session:") + std::to_string((unsigned long long)patch_session_seq_u64);
+
+    EwAiPatchSessionRecord rec{};
+    rec.session_id_u64 = patch_workflow_state.session_id_u64;
+    rec.start_tick_u64 = canonical_tick;
+    rec.chat_slot_u32 = ai_active_chat_slot_u32;
+    rec.selected_patch_mode_u16 = patch_mode_u16;
+    rec.patch_goal_summary_utf8 = goal_utf8;
+    rec.selected_scope_utf8 = scope_utf8;
+    rec.canonical_targets_utf8 = canonical_targets_utf8;
+    rec.final_disposition_utf8 = "in_progress";
+    rec.triage_state_u8 = EW_AI_PATCH_TRIAGE_PENDING;
+    const uint32_t slot = patch_history_head_u32 % SubstrateManager::EW_AI_PATCH_HISTORY_CAP_U32;
+    patch_history_ring[slot] = rec;
+    patch_history_head_u32 = (patch_history_head_u32 + 1u) % SubstrateManager::EW_AI_PATCH_HISTORY_CAP_U32;
+    if (patch_history_count_u32 < SubstrateManager::EW_AI_PATCH_HISTORY_CAP_U32) ++patch_history_count_u32;
+    ++patch_history_revision_u64;
+
+    emit_ui_line(std::string("AI_PATCH_SESSION_START id=") + std::to_string((unsigned long long)patch_workflow_state.session_id_u64) +
+                 " chat=" + std::to_string((unsigned long long)patch_workflow_state.chat_slot_u32 + 1ull) +
+                 " mode=" + std::to_string((unsigned)patch_mode_u16) +
+                 " goal=" + goal_utf8);
+    return patch_workflow_state.session_id_u64;
+}
+
+void SubstrateManager::ai_patch_note_preview_result(const std::string& preview_result_utf8,
+                                                    const std::string& current_scope_utf8,
+                                                    const std::string& canonical_targets_utf8,
+                                                    uint16_t patch_mode_u16,
+                                                    uint16_t bind_mode_u16,
+                                                    bool preview_ready,
+                                                    bool apply_ready,
+                                                    const std::string& warning_utf8) {
+    if (patch_workflow_state.valid_u32 == 0u) {
+        (void)ai_patch_begin_session("patch_preview", current_scope_utf8, canonical_targets_utf8, patch_mode_u16);
+    }
+    patch_workflow_state.current_scope_utf8 = current_scope_utf8;
+    patch_workflow_state.canonical_write_targets_utf8 = canonical_targets_utf8;
+    patch_workflow_state.selected_patch_mode_u16 = patch_mode_u16;
+    patch_workflow_state.preview_ready_u8 = preview_ready ? 1u : 0u;
+    patch_workflow_state.apply_ready_u8 = apply_ready ? 1u : 0u;
+    patch_workflow_state.last_bind_mode_u8 = (uint8_t)bind_mode_u16;
+    patch_workflow_state.warning_present_u8 = warning_utf8.empty() ? 0u : 1u;
+    patch_workflow_state.warning_state_utf8 = warning_utf8;
+    patch_workflow_state.last_event_utf8 = preview_result_utf8.empty() ? "preview_updated" : preview_result_utf8;
+    patch_workflow_state.next_action_guidance_utf8 = apply_ready ? "apply patch and run bounded validation" : "resolve warnings before apply";
+    const int idx = ew_patch_history_find_index_(this, patch_workflow_state.session_id_u64);
+    if (idx >= 0) {
+        patch_history_ring[idx].preview_result_utf8 = preview_result_utf8;
+        patch_history_ring[idx].selected_scope_utf8 = current_scope_utf8;
+        patch_history_ring[idx].canonical_targets_utf8 = canonical_targets_utf8;
+        patch_history_ring[idx].selected_patch_mode_u16 = patch_mode_u16;
+        if (!warning_utf8.empty()) {
+            patch_history_ring[idx].warnings_utf8 = warning_utf8;
+            ++patch_history_ring[idx].warning_count_u8;
+        }
+    }
+    ew_patch_update_triage_(this,
+                            apply_ready ? EW_AI_PATCH_TRIAGE_READY : EW_AI_PATCH_TRIAGE_BLOCKED,
+                            false,
+                            ew_patch_warning_severity_from_text_(warning_utf8),
+                            patch_workflow_state.next_action_guidance_utf8);
+    emit_ui_line(std::string("AI_PATCH_PREVIEW session=") + std::to_string((unsigned long long)patch_workflow_state.session_id_u64) +
+                 " ready=" + (preview_ready ? "1" : "0") +
+                 " apply=" + (apply_ready ? "1" : "0") +
+                 " bind=" + std::to_string((unsigned)bind_mode_u16) +
+                 " target=" + canonical_targets_utf8);
+}
+
+void SubstrateManager::ai_patch_note_binding_report(const std::string& binding_reason_utf8,
+                                                 const std::string& rejected_candidates_utf8,
+                                                 const std::string& bind_confidence_utf8,
+                                                 uint8_t ambiguity_level_u8,
+                                                 bool human_review_prudent,
+                                                 uint16_t bind_mode_u16,
+                                                 const std::string& canonical_targets_utf8) {
+    if (patch_workflow_state.valid_u32 == 0u) {
+        (void)ai_patch_begin_session("patch_binding", canonical_targets_utf8, canonical_targets_utf8, 0u);
+    }
+    patch_workflow_state.anchor_binding_reason_utf8 = binding_reason_utf8;
+    patch_workflow_state.rejected_candidate_summary_utf8 = rejected_candidates_utf8;
+    patch_workflow_state.bind_confidence_utf8 = bind_confidence_utf8;
+    patch_workflow_state.ambiguity_level_u8 = ambiguity_level_u8;
+    patch_workflow_state.human_review_prudent_u8 = human_review_prudent ? 1u : 0u;
+    patch_workflow_state.last_bind_mode_u8 = (uint8_t)bind_mode_u16;
+    if (!canonical_targets_utf8.empty()) patch_workflow_state.canonical_write_targets_utf8 = canonical_targets_utf8;
+    patch_workflow_state.last_event_utf8 = "binding_report_updated";
+    if (!human_review_prudent && patch_workflow_state.next_action_guidance_utf8.empty()) {
+        patch_workflow_state.next_action_guidance_utf8 = "inspect plan and preview patch";
+    }
+    emit_ui_line(std::string("AI_PATCH_BIND_REPORT mode=") + std::to_string((unsigned)bind_mode_u16) +
+                 " ambiguity=" + std::to_string((unsigned)ambiguity_level_u8) +
+                 " review=" + (human_review_prudent ? "1" : "0") +
+                 " confidence=" + bind_confidence_utf8 +
+                 " target=" + patch_workflow_state.canonical_write_targets_utf8);
+    if (!binding_reason_utf8.empty()) emit_ui_line(std::string("AI_PATCH_BIND_REASON ") + binding_reason_utf8);
+    if (!rejected_candidates_utf8.empty()) emit_ui_line(std::string("AI_PATCH_BIND_REJECTED ") + rejected_candidates_utf8);
+}
+
+void SubstrateManager::ai_patch_set_plan(const EwAiPatchPlanItem* items,
+                                         uint32_t item_count_u32,
+                                         const std::string& next_action_utf8) {
+    if (patch_workflow_state.valid_u32 == 0u) {
+        (void)ai_patch_begin_session("patch_plan", std::string(), std::string(), 0u);
+    }
+    patch_workflow_state.plan_item_count_u32 = 0u;
+    const uint32_t n = (item_count_u32 < EW_AI_PATCH_PLAN_CAP_U32) ? item_count_u32 : EW_AI_PATCH_PLAN_CAP_U32;
+    for (uint32_t i = 0u; i < n; ++i) {
+        patch_workflow_state.plan_items[i] = items[i];
+    }
+    patch_workflow_state.plan_item_count_u32 = n;
+    patch_workflow_state.planner_ready_u8 = (n > 0u) ? 1u : 0u;
+    if (!next_action_utf8.empty()) patch_workflow_state.next_action_guidance_utf8 = next_action_utf8;
+    patch_workflow_state.last_event_utf8 = "planner_updated";
+    ew_patch_update_triage_(this,
+                            (n > 0u) ? EW_AI_PATCH_TRIAGE_READY : EW_AI_PATCH_TRIAGE_PENDING,
+                            false,
+                            patch_workflow_state.warning_severity_u8,
+                            patch_workflow_state.next_action_guidance_utf8);
+    for (uint32_t i = 0u; i < n; ++i) {
+        const EwAiPatchPlanItem& it = patch_workflow_state.plan_items[i];
+        emit_ui_line(std::string("AI_PATCH_PLAN_STEP ") + std::to_string((unsigned)(i + 1u)) +
+                     " path=" + it.rel_path_utf8 +
+                     " bind=" + std::to_string((unsigned)it.bind_mode_u16) +
+                     " mode=" + std::to_string((unsigned)it.patch_mode_u16) +
+                     " task=" + it.task_summary_utf8);
+    }
+}
+
+void SubstrateManager::ai_patch_note_target_validation(const EwAiPatchTargetValidation& rec,
+                                                       const std::string& validation_outcome_utf8,
+                                                       const std::string& next_action_utf8) {
+    if (patch_workflow_state.valid_u32 == 0u) {
+        (void)ai_patch_begin_session("patch_validation", rec.rel_path_utf8, rec.rel_path_utf8, rec.patch_mode_u16);
+    }
+    if (patch_workflow_state.target_validation_count_u32 < EW_AI_PATCH_TARGET_CAP_U32) {
+        patch_workflow_state.target_validations[patch_workflow_state.target_validation_count_u32++] = rec;
+    } else {
+        for (uint32_t i = 1u; i < EW_AI_PATCH_TARGET_CAP_U32; ++i) patch_workflow_state.target_validations[i - 1u] = patch_workflow_state.target_validations[i];
+        patch_workflow_state.target_validations[EW_AI_PATCH_TARGET_CAP_U32 - 1u] = rec;
+    }
+    patch_workflow_state.validation_outcome_utf8 = validation_outcome_utf8;
+    patch_workflow_state.next_action_guidance_utf8 = next_action_utf8;
+    patch_workflow_state.last_event_utf8 = rec.summary_utf8.empty() ? "validation_updated" : rec.summary_utf8;
+    patch_workflow_state.canonical_write_targets_utf8 = rec.rel_path_utf8;
+    patch_workflow_state.selected_patch_mode_u16 = rec.patch_mode_u16;
+    patch_workflow_state.last_bind_mode_u8 = (uint8_t)rec.bind_mode_u16;
+    patch_workflow_state.apply_ready_u8 = (rec.binding_success_u8 && rec.textual_apply_success_u8) ? 1u : 0u;
+    const uint8_t validation_severity_u8 = rec.conflict_detected_u8 ? 3u : ((!rec.target_integrity_ok_u8 || rec.residual_ambiguity_u8) ? 2u : 0u);
+    ew_patch_update_triage_(this,
+                            rec.retry_viable_u8 ? EW_AI_PATCH_TRIAGE_RETRY_NEEDED : (rec.target_integrity_ok_u8 ? EW_AI_PATCH_TRIAGE_READY : EW_AI_PATCH_TRIAGE_BLOCKED),
+                            rec.retry_viable_u8 != 0u,
+                            validation_severity_u8,
+                            next_action_utf8);
+    const int idx = ew_patch_history_find_index_(this, patch_workflow_state.session_id_u64);
+    if (idx >= 0) {
+        EwAiPatchSessionRecord& hist = patch_history_ring[idx];
+        hist.validation_result_utf8 = validation_outcome_utf8;
+        hist.apply_result_utf8 = (rec.textual_apply_success_u8 ? "apply_ok" : "apply_failed");
+        hist.canonical_targets_utf8 = rec.rel_path_utf8;
+        if (hist.target_validation_count_u8 < EW_AI_PATCH_TARGET_CAP_U32) {
+            hist.target_validations[hist.target_validation_count_u8++] = rec;
+        }
+    }
+    emit_ui_line(std::string("AI_PATCH_TARGET_ARTIFACT session=") + std::to_string((unsigned long long)patch_workflow_state.session_id_u64) +
+                 " target=" + rec.rel_path_utf8 +
+                 " span=" + rec.target_span_utf8 +
+                 " mode=" + std::to_string((unsigned)rec.bind_mode_u16) +
+                 " pre=" + (rec.precondition_match_u8 ? "1" : "0") +
+                 " apply_outcome=" + rec.apply_outcome_utf8 +
+                 " post=" + (rec.postcondition_check_u8 ? "1" : "0") +
+                 " residual=" + rec.residual_note_utf8);
+    emit_ui_line(std::string("AI_PATCH_VALIDATE session=") + std::to_string((unsigned long long)patch_workflow_state.session_id_u64) +
+                 " target=" + rec.rel_path_utf8 +
+                 " bind=" + (rec.binding_success_u8 ? "1" : "0") +
+                 " apply=" + (rec.textual_apply_success_u8 ? "1" : "0") +
+                 " integrity=" + (rec.target_integrity_ok_u8 ? "1" : "0") +
+                 " next=" + next_action_utf8);
+}
+
+void SubstrateManager::ai_patch_finish_session(bool final_success,
+                                               const std::string& apply_result_utf8,
+                                               const std::string& validation_result_utf8,
+                                               const std::string& final_disposition_utf8,
+                                               const std::string& warning_utf8) {
+    if (patch_workflow_state.valid_u32 == 0u) return;
+    patch_workflow_state.warning_present_u8 = warning_utf8.empty() ? 0u : 1u;
+    patch_workflow_state.warning_state_utf8 = warning_utf8;
+    patch_workflow_state.validation_outcome_utf8 = validation_result_utf8;
+    patch_workflow_state.last_event_utf8 = final_disposition_utf8;
+    patch_workflow_state.next_action_guidance_utf8 = final_success ? "session complete" : "inspect warnings and retry with bounded edits";
+    ew_patch_update_triage_(this,
+                            final_success ? EW_AI_PATCH_TRIAGE_COMPLETED : EW_AI_PATCH_TRIAGE_RETRY_NEEDED,
+                            final_success ? false : true,
+                            ew_patch_warning_severity_from_text_(warning_utf8),
+                            patch_workflow_state.next_action_guidance_utf8);
+    const int idx = ew_patch_history_find_index_(this, patch_workflow_state.session_id_u64);
+    if (idx >= 0) {
+        EwAiPatchSessionRecord& hist = patch_history_ring[idx];
+        hist.end_tick_u64 = canonical_tick;
+        hist.final_success_u8 = final_success ? 1u : 0u;
+        hist.apply_result_utf8 = apply_result_utf8;
+        hist.validation_result_utf8 = validation_result_utf8;
+        hist.final_disposition_utf8 = final_disposition_utf8;
+        if (!warning_utf8.empty()) {
+            hist.warnings_utf8 = warning_utf8;
+            ++hist.warning_count_u8;
+        }
+    }
+    ++patch_history_revision_u64;
+    emit_ui_line(std::string("AI_PATCH_SESSION_END id=") + std::to_string((unsigned long long)patch_workflow_state.session_id_u64) +
+                 " ok=" + (final_success ? "1" : "0") +
+                 " apply=" + apply_result_utf8 +
+                 " validation=" + validation_result_utf8 +
+                 " disposition=" + final_disposition_utf8);
+}
+
+void SubstrateManager::ui_submit_chat_message_line(const std::string& utf8_line, uint32_t chat_slot_u32, uint32_t mode_u32) {
+    ui_note_active_chat_slot(chat_slot_u32);
+    std::string msg = utf8_line;
+    ew_trim_left_ws(msg);
+    while (!msg.empty() && (msg.back() == '\r' || msg.back() == '\n')) msg.pop_back();
+    if (msg.empty()) return;
+
+    ui_chat_memory_observe(chat_slot_u32, mode_u32, msg);
+
+    const uint32_t chat_anchor_idx = ui_create_chat_anchor_from_text(msg);
+    if (chat_anchor_idx != 0u) {
+        ui_livecrawl_target_anchor_idx_u32 = chat_anchor_idx;
+    }
+    ui_maybe_enqueue_crawl_seeds_from_text(msg);
+}
+
+void SubstrateManager::ui_observe_system_event_line(const std::string& utf8_line) {
+    std::string line = utf8_line;
+    ew_trim_left_ws(line);
+    while (!line.empty() && (line.back() == '\r' || line.back() == '\n')) line.pop_back();
+    if (line.empty()) return;
+    observe_text_line(line);
 }
 
 
@@ -2730,17 +3765,17 @@ void SubstrateManager::ui_submit_user_text_line(const std::string& utf8_line) {
             EwControlPacket cp{};
             cp.kind = EwControlPacketKind::AiConfigSet;
             cp.source_u16 = 1u;
-            cp.payload.ai_cfg_set.field_u32 = EW_AI_CFG_FIELD_AI_EVENT_LOG_ENABLED_U32;
-            cp.payload.ai_cfg_set.value_u64 = 1ull;
-            control_packets.push_back(cp);
+            cp.payload.ai_config_set.field_u32 = EW_AI_CFG_FIELD_AI_EVENT_LOG_ENABLED_U32;
+            cp.payload.ai_config_set.value_s64 = 1ull;
+            (void)control_packet_push(cp);
             emit_ui_line("AI_LOG: enabled");
         } else if (op == "off" || op == "disable") {
             EwControlPacket cp{};
             cp.kind = EwControlPacketKind::AiConfigSet;
             cp.source_u16 = 1u;
-            cp.payload.ai_cfg_set.field_u32 = EW_AI_CFG_FIELD_AI_EVENT_LOG_ENABLED_U32;
-            cp.payload.ai_cfg_set.value_u64 = 0ull;
-            control_packets.push_back(cp);
+            cp.payload.ai_config_set.field_u32 = EW_AI_CFG_FIELD_AI_EVENT_LOG_ENABLED_U32;
+            cp.payload.ai_config_set.value_s64 = 0ull;
+            (void)control_packet_push(cp);
             emit_ui_line("AI_LOG: disabled");
         } else {
             const EwAiConfigAnchorState* cfg = ai_config_state();
@@ -2845,6 +3880,241 @@ if (utf8_line.rfind("/repo_reader", 0) == 0 || utf8_line.rfind("repo_reader:", 0
         return;
     }
 }
+    // Coherence index v1 (symbol-coherence graph over inspector artifacts).
+    // Commands:
+    //  - /coh_stats
+    //  - /coh_query <free text> [limit=N]
+    //  - /coh_rename_plan <old_ident> <new_ident> [limit=N]
+    //  - /coh_rename_patch <old_ident> <new_ident> [limit=N]
+    //  - /coh_highlight <free text> [limit=N]
+    //  - /coh_selftest
+    if (utf8_line.rfind("/coh_stats", 0) == 0 || utf8_line.rfind("coh_stats:", 0) == 0 ||
+        utf8_line.rfind("/coh_query", 0) == 0 || utf8_line.rfind("coh_query:", 0) == 0 ||
+        utf8_line.rfind("/coh_rename_plan", 0) == 0 || utf8_line.rfind("coh_rename_plan:", 0) == 0 ||
+        utf8_line.rfind("/coh_rename_patch", 0) == 0 || utf8_line.rfind("coh_rename_patch:", 0) == 0 ||
+        utf8_line.rfind("/coh_highlight", 0) == 0 || utf8_line.rfind("coh_highlight:", 0) == 0 ||
+        utf8_line.rfind("/coh_selftest", 0) == 0 || utf8_line.rfind("coh_selftest:", 0) == 0) {
+
+        // Rebuild coherence cache only when inspector_fields has changed.
+        const uint64_t coh_rev = inspector_fields.revision_u64();
+        if (this->coh_index_revision_u64 != coh_rev) {
+            this->coh_graph.rebuild_from_inspector(inspector_fields);
+            this->coh_index_revision_u64 = coh_rev;
+        }
+
+        if (utf8_line.rfind("/coh_stats", 0) == 0 || utf8_line.rfind("coh_stats:", 0) == 0) {
+            emit_ui_line(std::string("COH_STATS ") + this->coh_graph.debug_stats());
+            return;
+        }
+
+        if (utf8_line.rfind("/coh_selftest", 0) == 0 || utf8_line.rfind("coh_selftest:", 0) == 0) {
+            std::string rep;
+            const bool ok = this->coh_graph.selftest(rep);
+            emit_ui_line(std::string("COH_SELFTEST ") + (ok ? "ok " : "fail ") + rep);
+            return;
+        }
+
+
+        if (utf8_line.rfind("/coh_rename_plan", 0) == 0 || utf8_line.rfind("coh_rename_plan:", 0) == 0) {
+            std::vector<std::string> toks;
+            ew::ew_split_shell_ascii(utf8_line, toks);
+            if (toks.size() < 3) {
+                emit_ui_line("COH_RENAME_PLAN usage: /coh_rename_plan <old_ident> <new_ident> [limit=N]");
+                return;
+            }
+            const std::string old_tok = toks.size() >= 2 ? toks[1] : std::string();
+            const std::string new_tok = toks.size() >= 3 ? toks[2] : std::string();
+            uint64_t limit_u64 = 8ull;
+            for (size_t i = 3; i < toks.size(); ++i) {
+                std::string_view k_sv, v_sv;
+                if (ew::ew_split_kv_token_ascii(std::string_view(toks[i]), k_sv, v_sv)) {
+                    if (k_sv == "limit") (void)ew::ew_parse_u64_ascii(v_sv, limit_u64);
+                }
+            }
+            uint32_t limit = (uint32_t)((limit_u64 > 16ull) ? 16ull : limit_u64);
+            if (limit == 0u) limit = 1u;
+            std::vector<EwCoherenceGraph::Match> hits;
+            this->coh_graph.plan_rename_ascii(old_tok, new_tok, limit, hits);
+            {
+                char buf[256];
+                std::snprintf(buf, sizeof(buf), "COH_RENAME_PLAN old=\"%s\" new=\"%s\" hits=%u", old_tok.c_str(), new_tok.c_str(), (unsigned)hits.size());
+                emit_ui_line(buf);
+            }
+            for (size_t hi = 0; hi < hits.size(); ++hi) {
+                char buf[512];
+                std::snprintf(buf, sizeof(buf), "COH_RENAME_HIT idx=%u score=%u path=%s", (unsigned)hi, (unsigned)hits[hi].score_u32, hits[hi].rel_path.c_str());
+                emit_ui_line(buf);
+            }
+            return;
+        }
+
+        if (utf8_line.rfind("/coh_rename_patch", 0) == 0 || utf8_line.rfind("coh_rename_patch:", 0) == 0) {
+            std::vector<std::string> toks;
+            ew::ew_split_shell_ascii(utf8_line, toks);
+            if (toks.size() < 3) {
+                emit_ui_line("COH_RENAME_PATCH usage: /coh_rename_patch <old_ident> <new_ident> [limit=N]");
+                return;
+            }
+            const std::string old_tok = toks.size() >= 2 ? toks[1] : std::string();
+            const std::string new_tok = toks.size() >= 3 ? toks[2] : std::string();
+            uint64_t limit_u64 = 8ull;
+            for (size_t i = 3; i < toks.size(); ++i) {
+                std::string_view k_sv, v_sv;
+                if (ew::ew_split_kv_token_ascii(std::string_view(toks[i]), k_sv, v_sv)) {
+                    if (k_sv == "limit") (void)ew::ew_parse_u64_ascii(v_sv, limit_u64);
+                }
+            }
+            uint32_t limit = (uint32_t)((limit_u64 > 16ull) ? 16ull : limit_u64);
+            if (limit == 0u) limit = 1u;
+
+            std::string old_norm;
+            if (!ew_norm_token_ascii_lower_(old_tok, old_norm)) {
+                emit_ui_line("COH_RENAME_PATCH invalid old_ident (ASCII identifier, len>=3)");
+                return;
+            }
+            std::string new_norm;
+            if (!ew_norm_token_ascii_lower_(new_tok, new_norm)) {
+                emit_ui_line("COH_RENAME_PATCH invalid new_ident (ASCII identifier, len>=3)");
+                return;
+            }
+
+            std::vector<EwCoherenceGraph::Match> hits;
+            this->coh_graph.plan_rename_ascii(old_tok, new_tok, limit, hits);
+
+            {
+                char buf[256];
+                std::snprintf(buf, sizeof(buf), "COH_RENAME_PATCH old=\"%s\" new=\"%s\" files=%u", old_tok.c_str(), new_tok.c_str(), (unsigned)hits.size());
+                emit_ui_line(buf);
+            }
+            if (hits.empty()) return;
+
+            // Emit a bounded unified diff across the hit set.
+            // This is meant to be copied into the AI patch buffer (Use/Preview/Apply) and remains disk-gated.
+            size_t out_bytes = 0;
+            static constexpr size_t OUT_CAP = 262144; // 256KB
+
+            std::vector<std::string> diff_lines;
+            std::string new_payload;
+            for (size_t hi = 0; hi < hits.size(); ++hi) {
+                const EwInspectorArtifact* a = inspector_fields.find_by_path(hits[hi].rel_path);
+                if (!a) continue;
+
+                const bool changed = ew_replace_ident_tokens_bounded_(a->payload, old_norm, new_tok, new_payload);
+                if (!changed) continue;
+
+                ew_emit_unified_diff_single_hunk_(hits[hi].rel_path, a->payload, new_payload, diff_lines);
+                for (const auto& ln : diff_lines) {
+                    if (out_bytes + ln.size() + 1u > OUT_CAP) {
+                        emit_ui_line("COH_RENAME_PATCH (diff output capped at 256KB)");
+                        return;
+                    }
+                    emit_ui_line(ln);
+                    out_bytes += ln.size() + 1u;
+                }
+            }
+            if (out_bytes == 0) {
+                emit_ui_line("COH_RENAME_PATCH no changes (token not found in top hits)");
+            }
+            return;
+        }
+
+        if (utf8_line.rfind("/coh_highlight", 0) == 0 || utf8_line.rfind("coh_highlight:", 0) == 0) {
+            // Sets a derived-only highlight set for future coherence view.
+            std::vector<std::string> toks;
+            ew::ew_split_shell_ascii(utf8_line, toks);
+            uint64_t limit_u64 = 8ull;
+            for (size_t i = 1; i < toks.size(); ++i) {
+                std::string_view k_sv, v_sv;
+                if (ew::ew_split_kv_token_ascii(std::string_view(toks[i]), k_sv, v_sv)) {
+                    if (k_sv == "limit") (void)ew::ew_parse_u64_ascii(v_sv, limit_u64);
+                }
+            }
+            uint32_t limit = (uint32_t)((limit_u64 > 16ull) ? 16ull : limit_u64);
+            if (limit == 0u) limit = 1u;
+
+            // Tail after command.
+            std::string q;
+            {
+                const std::string key1 = "/coh_highlight";
+                const std::string key2 = "coh_highlight:";
+                size_t p = (utf8_line.rfind(key1, 0) == 0) ? key1.size() : key2.size();
+                while (p < utf8_line.size() && (utf8_line[p] == ' ' || utf8_line[p] == '\t')) ++p;
+                q = utf8_line.substr(p);
+                const size_t pl = q.find("limit=");
+                if (pl != std::string::npos) {
+                    if (pl == 0 || q[pl - 1] == ' ' || q[pl - 1] == '\t') q = q.substr(0, pl);
+                }
+                while (!q.empty() && (q.back() == ' ' || q.back() == '\t' || q.back() == '\r' || q.back() == '\n')) q.pop_back();
+            }
+            if (q.empty()) {
+                emit_ui_line("COH_HIGHLIGHT usage: /coh_highlight <text> [limit=N]");
+                return;
+            }
+
+            std::vector<EwCoherenceGraph::Match> ms;
+            this->coh_graph.query_best(q, limit, ms);
+            this->coh_highlight_paths.clear();
+            this->coh_highlight_paths.reserve(ms.size());
+            for (const auto& m : ms) this->coh_highlight_paths.push_back(m.rel_path);
+            this->coh_highlight_revision_u64 = coh_rev;
+
+            emit_ui_line(std::string("COH_HIGHLIGHT_SET q=\"") + q + "\" hits=" + std::to_string((unsigned long long)ms.size()));
+            for (size_t i = 0; i < ms.size(); ++i) {
+                emit_ui_line(std::string("COH_HIGHLIGHT idx=") + std::to_string((unsigned long long)i) +
+                             " score=" + std::to_string((unsigned long long)ms[i].score_u32) +
+                             " path=" + ms[i].rel_path);
+            }
+            return;
+        }
+
+        // /coh_query
+        std::vector<std::string> toks;
+        ew::ew_split_shell_ascii(utf8_line, toks);
+        uint64_t limit_u64 = 8ull;
+        for (size_t i = 1; i < toks.size(); ++i) {
+            std::string_view k_sv, v_sv;
+            if (ew::ew_split_kv_token_ascii(std::string_view(toks[i]), k_sv, v_sv)) {
+                if (k_sv == "limit") (void)ew::ew_parse_u64_ascii(v_sv, limit_u64);
+            }
+        }
+        uint32_t limit = (uint32_t)((limit_u64 > 16ull) ? 16ull : limit_u64);
+        if (limit == 0u) limit = 1u;
+
+        // Reconstruct query tail after the command token.
+        std::string q;
+        {
+            const std::string key1 = "/coh_query";
+            const std::string key2 = "coh_query:";
+            size_t p = (utf8_line.rfind(key1, 0) == 0) ? key1.size() : key2.size();
+            while (p < utf8_line.size() && (utf8_line[p] == ' ' || utf8_line[p] == '\t')) ++p;
+            // Strip any trailing limit=... tokens if user included them at end; keep it simple and deterministic:
+            // if the tail contains " limit=", split at first occurrence.
+            q = utf8_line.substr(p);
+            const size_t pl = q.find("limit=");
+            if (pl != std::string::npos) {
+                // Only strip if "limit=" appears as a token boundary.
+                if (pl == 0 || q[pl - 1] == ' ' || q[pl - 1] == '\t') q = q.substr(0, pl);
+            }
+            while (!q.empty() && (q.back() == ' ' || q.back() == '\t' || q.back() == '\r' || q.back() == '\n')) q.pop_back();
+        }
+
+        if (q.empty()) {
+            emit_ui_line("COH_QUERY usage: /coh_query <text> [limit=N]");
+            return;
+        }
+
+        std::vector<EwCoherenceGraph::Match> ms;
+        this->coh_graph.query_best(q, limit, ms);
+        emit_ui_line(std::string("COH_QUERY q=\"") + q + "\" hits=" + std::to_string((unsigned long long)ms.size()));
+        for (size_t i = 0; i < ms.size(); ++i) {
+            emit_ui_line(std::string("COH_HIT idx=") + std::to_string((unsigned long long)i) +
+                         " score=" + std::to_string((unsigned long long)ms[i].score_u32) +
+                         " path=" + ms[i].rel_path);
+        }
+        return;
+    }
+
+
 
     // Vault + AssetSubstrate exposure (read-only browsing + deterministic import handles).
     // Commands:
@@ -2868,7 +4138,7 @@ if (utf8_line.rfind("/repo_reader", 0) == 0 || utf8_line.rfind("repo_reader:", 0
         uint32_t limit = (uint32_t)((limit_u64 > (uint64_t)UI_VAULT_LIST_CAP) ? (uint64_t)UI_VAULT_LIST_CAP : limit_u64);
         if (limit == 0u) limit = 1u;
 
-        const std::string root = "Draft Container/AI_Vault";
+        const std::string root = "AI_Vault";
         const std::string canonical = root + "/canonical";
         const std::string eph = root + "/_ephemeral";
 
@@ -2933,7 +4203,7 @@ if (utf8_line.rfind("/repo_reader", 0) == 0 || utf8_line.rfind("repo_reader:", 0
             return;
         }
         const std::string rel = ui_last_vault_list_paths_utf8[(size_t)idx_u64];
-        const std::filesystem::path full = std::filesystem::path("Draft Container/AI_Vault") / std::filesystem::path(rel);
+        const std::filesystem::path full = std::filesystem::path("AI_Vault") / std::filesystem::path(rel);
 
         std::ifstream f(full, std::ios::binary);
         if (!f.good()) {
@@ -3005,7 +4275,7 @@ if (utf8_line.rfind("/repo_reader", 0) == 0 || utf8_line.rfind("repo_reader:", 0
         }
 
         const std::string rel = ui_last_vault_list_paths_utf8[(size_t)idx_u64];
-        const std::string full_vault = (std::filesystem::path("Draft Container/AI_Vault") / std::filesystem::path(rel)).string();
+        const std::string full_vault = (std::filesystem::path("AI_Vault") / std::filesystem::path(rel)).string();
 
         std::string cat = "misc";
         if (rel.find("canonical/experiments/metrics/") != std::string::npos) cat = "metrics";
@@ -3024,7 +4294,8 @@ if (utf8_line.rfind("/repo_reader", 0) == 0 || utf8_line.rfind("repo_reader:", 0
         };
         const uint64_t oid = stable_u64(rel);
 
-        const std::filesystem::path dir = std::filesystem::path("Draft Container/AssetSubstrate/Assets/AIImported") / std::filesystem::path(cat);
+        const std::string asset_root = project_settings.assets.project_asset_substrate_root_utf8.empty() ? std::string("AssetSubstrate") : project_settings.assets.project_asset_substrate_root_utf8;
+        const std::filesystem::path dir = std::filesystem::path(asset_root) / std::filesystem::path("Assets/AIImported") / std::filesystem::path(cat);
         std::error_code ec;
         (void)std::filesystem::create_directories(dir, ec);
         ec.clear();
@@ -3056,7 +4327,7 @@ if (utf8_line.rfind("/repo_reader", 0) == 0 || utf8_line.rfind("repo_reader:", 0
                           rel.c_str(),
                           (unsigned long long)tick_u64);
             std::string err;
-            const bool ok = ew_txn_write_file_text(out_path, std::string(buf), tick_u64, &err);
+            const bool ok = genesis::ew_txn_write_file_text(out_path, std::string(buf), tick_u64, &err);
             emit_ui_line(ok ? (std::string("VAULT_IMPORT_OK exists=0 path=") + out_path.string())
                             : (std::string("VAULT_IMPORT_FAIL ") + err));
         }
@@ -3176,7 +4447,7 @@ if (utf8_line.rfind("/repo_reader", 0) == 0 || utf8_line.rfind("repo_reader:", 0
     }
 
     // User-updatable allowlist.
-    //  - /allowlist_reload (loads Draft Container/Corpus/allowlist_user.md if present)
+    //  - /allowlist_reload (loads Corpus/allowlist_user.md if present)
     //  - /allowlist_update <markdown...>  (inline markdown; bounded)
     //  - allowlist_update: <markdown...>
     if (utf8_line.rfind("/allowlist_reload", 0) == 0 || utf8_line.rfind("allowlist_reload:", 0) == 0) {
@@ -3199,7 +4470,13 @@ if (utf8_line.rfind("/repo_reader", 0) == 0 || utf8_line.rfind("repo_reader:", 0
         if (md.empty()) {
             emit_ui_line("ALLOWLIST_UPDATE_EMPTY");
         } else {
-            (void)corpus_allowlist_update_from_user_text(md);
+            bool persist = false;
+            // Optional: /allowlist_update persist=1 <markdown...>
+            // We accept persist=1 only when explicitly requested.
+            if (utf8_line.find("persist=1") != std::string::npos || utf8_line.find("persist=true") != std::string::npos) {
+                persist = true;
+            }
+            (void)corpus_allowlist_update_from_user_text(md, persist);
         }
         return;
     }
@@ -3523,7 +4800,7 @@ void SubstrateManager::emit_ai_ui_panel_lines() {
         // Keep it bounded and deterministic.
         std::vector<std::string> rels;
         rels.reserve(256);
-        const std::string root = "Draft Container/AI_Vault";
+        const std::string root = "AI_Vault";
         const std::filesystem::path dir = std::filesystem::path(root) / "canonical/experiments/metrics";
         std::error_code ec;
         if (std::filesystem::exists(dir, ec) && !ec) {
@@ -3676,7 +4953,7 @@ uint32_t SubstrateManager::ui_create_chat_anchor_from_text(const std::string& ut
 }
 
 
-bool SubstrateManager::corpus_allowlist_update_from_user_text(const std::string& allowlist_md_utf8) {
+bool SubstrateManager::corpus_allowlist_update_from_user_text(const std::string& allowlist_md_utf8, bool persist_to_disk) {
     // Deterministic validation: bounded size + strict parser.
     std::string s = allowlist_md_utf8;
     if (s.size() > (size_t)128 * 1024) s.resize((size_t)128 * 1024);
@@ -3693,21 +4970,22 @@ bool SubstrateManager::corpus_allowlist_update_from_user_text(const std::string&
     corpus_allowlist_user_loaded = true;
     domain_policies.build_from_allowlist(corpus_allowlist);
 
-    // Persist to disk (deterministic relpath under Draft Container).
-    {
-        const std::string rel = "Draft Container/Corpus/allowlist_user.md";
-        std::ofstream f(rel.c_str(), std::ios::binary);
+    // Persist to disk ONLY when explicitly requested.
+    std::string rel_path = "mem://Corpus/allowlist_user.md";
+    if (persist_to_disk) {
+        rel_path = "Corpus/allowlist_user.md";
+        std::ofstream f(rel_path.c_str(), std::ios::binary);
         if (f.good()) {
             f.write(s.data(), (std::streamsize)s.size());
             f.flush();
         }
     }
 
-    // Also persist as an inspector artifact for UI inspection/copy.
+    // Persist as an inspector artifact for UI inspection/copy (substrate-resident).
     EwInspectorArtifact out{};
     out.coord_coord9_u64 = ((uint64_t)canonical_tick << 1) ^ 0x414C4C57U; // 'ALLW'
     out.kind_u32 = EW_ARTIFACT_TEXT;
-    out.rel_path = "Draft Container/Corpus/allowlist_user.md";
+    out.rel_path = rel_path;
     out.producer_tick_u64 = canonical_tick;
     out.payload = s;
     inspector_fields.upsert(out);
@@ -3718,7 +4996,7 @@ bool SubstrateManager::corpus_allowlist_update_from_user_text(const std::string&
 
 
 bool SubstrateManager::corpus_allowlist_load_user_file_if_present() {
-    const std::string rel = "Draft Container/Corpus/allowlist_user.md";
+    const std::string rel = "Corpus/allowlist_user.md";
     std::ifstream f(rel.c_str(), std::ios::binary);
     if (!f.good()) return false;
     std::string s;
@@ -3729,7 +5007,8 @@ bool SubstrateManager::corpus_allowlist_load_user_file_if_present() {
     s.resize((size_t)n);
     if (n > 0) f.read(&s[0], n);
     if (s.empty()) return false;
-    return corpus_allowlist_update_from_user_text(s);
+    // Reloading reads from disk but does not rewrite unless explicitly requested.
+    return corpus_allowlist_update_from_user_text(s, /*persist_to_disk*/false);
 }
 
 
@@ -3765,10 +5044,10 @@ bool SubstrateManager::sim_save_to_file(const std::string& name_ascii) {
         const bool ok = (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_' || b == '-';
         if (!ok) nm[i] = '_';
     }
-    const std::string rel = std::string("Draft Container/Sim/sim_") + nm + ".bin";
+    const std::string rel = std::string("Sim/sim_") + nm + ".bin";
 
     // Ensure directory exists (best-effort; on failure we still keep in-memory snapshot).
-    (void)std::system("mkdir -p \"Draft Container/Sim\" 2>nul");
+    (void)std::system("mkdir -p \"Sim\" 2>nul");
 
     std::ofstream out(rel.c_str(), std::ios::binary);
     if (!out.good()) {
@@ -3894,7 +5173,7 @@ bool SubstrateManager::sim_load_from_file(const std::string& name_ascii, bool pl
         const bool ok = (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_' || b == '-';
         if (!ok) nm[i] = '_';
     }
-    const std::string rel = std::string("Draft Container/Sim/sim_") + nm + ".bin";
+    const std::string rel = std::string("Sim/sim_") + nm + ".bin";
     std::ifstream in(rel.c_str(), std::ios::binary);
     if (!in.good()) {
         emit_ui_line("SIM_LOAD_NOFILE");
@@ -4189,6 +5468,591 @@ void SubstrateManager::emit_ai_event_line(const char* event_name_ascii, const st
     emit_ui_line(line);
 }
 
+
+
+void SubstrateManager::ui_content_reindex() {
+    std::string ierr;
+    const bool ok = asset_substrate.rebuild_project_index(&ierr);
+    emit_ui_line(ok ? "CONTENT_REINDEX_OK" : (std::string("CONTENT_REINDEX_FAIL ") + ierr));
+}
+
+void SubstrateManager::ui_content_list_all(uint32_t limit_u32) {
+    if (limit_u32 == 0u) limit_u32 = 1u;
+    if (limit_u32 > 200u) limit_u32 = 200u;
+
+    std::vector<genesis::GeAssetEntry> entries;
+    std::string err;
+    if (!asset_substrate.list_project_entries(entries, &err)) {
+        emit_ui_line(std::string("CONTENT_LIST_FAIL ") + err);
+        return;
+    }
+    emit_ui_line(std::string("CONTENT_LIST part=all count=") + std::to_string((unsigned long long)entries.size()));
+    uint32_t emitted = 0u;
+    for (const auto& e : entries) {
+        if (emitted >= limit_u32) break;
+        emit_ui_line(std::string("CONTENT_ITEM idx=") + std::to_string((unsigned long long)emitted) +
+                     " rel=" + e.relpath_utf8 + " kind=" + std::to_string((unsigned)e.kind_u32) +
+                     " label=" + (e.label_utf8.empty() ? e.relpath_utf8 : e.label_utf8));
+        ++emitted;
+    }
+}
+
+bool SubstrateManager::ui_snapshot_content_entries(uint32_t limit_u32, std::vector<genesis::GeAssetEntry>& out_entries, std::string* out_err) const {
+    out_entries.clear();
+    std::vector<genesis::GeAssetEntry> entries;
+    std::string err;
+    if (!asset_substrate.list_project_entries(entries, &err)) {
+        if (out_err) *out_err = err;
+        return false;
+    }
+    if (limit_u32 == 0u) limit_u32 = 1u;
+    if (limit_u32 > 200u) limit_u32 = 200u;
+    if (entries.size() > (size_t)limit_u32) entries.resize((size_t)limit_u32);
+    out_entries = std::move(entries);
+    if (out_err) out_err->clear();
+    return true;
+}
+
+static void ew_fill_coherence_hits_(const EwCoherenceGraph& graph, const std::string& query_utf8, uint32_t limit_u32, std::vector<genesis::GeCoherenceHit>& out_hits) {
+    out_hits.clear();
+    std::vector<EwCoherenceGraph::Match> hits;
+    graph.query_best(query_utf8, limit_u32, hits);
+    out_hits.reserve(hits.size());
+    for (const auto& h : hits) {
+        genesis::GeCoherenceHit row{};
+        row.rel_path_utf8 = h.rel_path;
+        row.score_u32 = h.score_u32;
+        out_hits.push_back(std::move(row));
+    }
+}
+
+static void ew_fill_coherence_rename_plan_hits_(const EwCoherenceGraph& graph, const std::string& old_ident_ascii, const std::string& new_ident_ascii, uint32_t limit_u32, std::vector<genesis::GeCoherenceHit>& out_hits) {
+    out_hits.clear();
+    std::vector<EwCoherenceGraph::Match> hits;
+    graph.plan_rename_ascii(old_ident_ascii, new_ident_ascii, limit_u32, hits);
+    out_hits.reserve(hits.size());
+    for (const auto& h : hits) {
+        genesis::GeCoherenceHit row{};
+        row.rel_path_utf8 = h.rel_path;
+        row.score_u32 = h.score_u32;
+        out_hits.push_back(std::move(row));
+    }
+}
+
+static bool ew_build_coherence_rename_patch_(const EwInspectorFields& inspector_fields, const EwCoherenceGraph& graph, const std::string& old_ident_ascii, const std::string& new_ident_ascii, uint32_t limit_u32, std::string& out_patch_utf8, std::string* out_err) {
+    out_patch_utf8.clear();
+    if (old_ident_ascii.empty() || new_ident_ascii.empty()) {
+        if (out_err) *out_err = "missing identifier";
+        return false;
+    }
+    if (limit_u32 == 0u) limit_u32 = 64u;
+    if (limit_u32 > 16u) limit_u32 = 16u;
+    std::string old_norm;
+    if (!ew_norm_token_ascii_lower_(old_ident_ascii, old_norm)) {
+        if (out_err) *out_err = "invalid old_ident (ASCII identifier, len>=3)";
+        return false;
+    }
+    std::string new_norm;
+    if (!ew_norm_token_ascii_lower_(new_ident_ascii, new_norm)) {
+        if (out_err) *out_err = "invalid new_ident (ASCII identifier, len>=3)";
+        return false;
+    }
+    std::vector<EwCoherenceGraph::Match> hits;
+    graph.plan_rename_ascii(old_ident_ascii, new_ident_ascii, limit_u32, hits);
+    size_t out_bytes = 0;
+    static constexpr size_t OUT_CAP = 262144;
+    std::vector<std::string> diff_lines;
+    std::string new_payload;
+    for (size_t hi = 0; hi < hits.size(); ++hi) {
+        const EwInspectorArtifact* a = inspector_fields.find_by_path(hits[hi].rel_path);
+        if (!a) continue;
+        const bool changed = ew_replace_ident_tokens_bounded_(a->payload, old_norm, new_ident_ascii, new_payload);
+        if (!changed) continue;
+        diff_lines.clear();
+        ew_emit_unified_diff_single_hunk_(hits[hi].rel_path, a->payload, new_payload, diff_lines);
+        for (const auto& ln : diff_lines) {
+            if (out_bytes + ln.size() + 1u > OUT_CAP) {
+                if (out_err) *out_err = "diff output capped at 256KB";
+                return false;
+            }
+            out_patch_utf8 += ln;
+            out_patch_utf8.push_back('\n');
+            out_bytes += ln.size() + 1u;
+        }
+    }
+    if (out_patch_utf8.empty()) {
+        if (out_err) *out_err = "no changes (token not found in top hits)";
+        return false;
+    }
+    if (out_err) out_err->clear();
+    return true;
+}
+
+void SubstrateManager::ui_set_repo_reader_enabled(bool enabled) {
+    EwControlPacket cp{};
+    cp.kind = EwControlPacketKind::AiConfigSet;
+    cp.source_u16 = 1u;
+    cp.tick_u64 = canonical_tick_u64();
+    cp.payload.ai_config_set.field_u32 = EW_AI_CFG_FIELD_REPO_READER_ENABLED_U32;
+    cp.payload.ai_config_set.pad_u32 = 0u;
+    cp.payload.ai_config_set.value_s64 = enabled ? 1 : 0;
+    (void)control_packet_push(cp);
+    emit_ui_line(std::string("REPO_READER enabled=") + (enabled ? "1" : "0") + (enabled ? " (stage-gated; read-only)" : ""));
+}
+
+void SubstrateManager::ui_repo_reader_rescan() {
+    repo_reader.scan_repo_root();
+}
+
+bool SubstrateManager::ui_snapshot_repo_reader_status(std::string& out_status_utf8) const {
+    const_cast<SubstrateManager*>(this)->repo_reader.scan_repo_root();
+    out_status_utf8 = repo_reader.status_line();
+    return true;
+}
+
+bool SubstrateManager::ui_snapshot_repo_reader_files(uint32_t limit_u32, std::vector<std::string>& out_rel_paths_utf8, std::string* out_err) {
+    out_rel_paths_utf8.clear();
+    if (limit_u32 == 0u) limit_u32 = 64u;
+    if (limit_u32 > 256u) limit_u32 = 256u;
+    repo_reader.scan_repo_root();
+    const size_t n = repo_reader.files_rel_ascii.size();
+    const size_t cap = n < (size_t)limit_u32 ? n : (size_t)limit_u32;
+    out_rel_paths_utf8.reserve(cap);
+    for (size_t i = 0; i < cap; ++i) out_rel_paths_utf8.push_back(repo_reader.files_rel_ascii[i]);
+    if (out_err) out_err->clear();
+    return true;
+}
+
+bool SubstrateManager::ui_snapshot_repo_file_preview(const std::string& rel_path_utf8, uint32_t max_bytes_u32, std::string& out_preview_utf8, std::string* out_err) {
+    out_preview_utf8.clear();
+    repo_reader.scan_repo_root();
+    bool found = false;
+    for (const auto& rel : repo_reader.files_rel_ascii) {
+        if (rel == rel_path_utf8) { found = true; break; }
+    }
+    if (!found) {
+        if (out_err) *out_err = "repo file not in bounded UI listing";
+        return false;
+    }
+    std::error_code ec;
+    const std::filesystem::path root = std::filesystem::current_path(ec);
+    if (ec || root.empty()) {
+        if (out_err) *out_err = "repo root unavailable";
+        return false;
+    }
+    const std::filesystem::path full = (root / std::filesystem::path(rel_path_utf8)).lexically_normal();
+    std::ifstream in(full, std::ios::binary);
+    if (!in.good()) {
+        if (out_err) *out_err = std::string("open_failed path=") + full.string();
+        return false;
+    }
+    uint32_t cap = max_bytes_u32 == 0u ? 8192u : max_bytes_u32;
+    if (cap > (64u * 1024u)) cap = (64u * 1024u);
+    std::string raw;
+    raw.resize((size_t)cap);
+    in.read(raw.data(), (std::streamsize)raw.size());
+    const size_t got = (size_t)in.gcount();
+    raw.resize(got);
+    out_preview_utf8.reserve(raw.size() + 64u);
+    for (unsigned char c : raw) {
+        if (c == '\n' || c == '\r' || c == '\t' || (c >= 32u && c < 127u)) out_preview_utf8.push_back((char)c);
+        else out_preview_utf8.push_back('.');
+    }
+    if (got == (size_t)cap && in.good()) out_preview_utf8 += "\n... (preview capped)";
+    if (out_err) out_err->clear();
+    return true;
+}
+
+bool SubstrateManager::ui_snapshot_repo_file_coherence_hits(const std::string& rel_path_utf8, uint32_t limit_u32, std::vector<genesis::GeCoherenceHit>& out_hits, std::string* out_err) const {
+    out_hits.clear();
+    if (rel_path_utf8.empty()) {
+        if (out_err) *out_err = "missing repo file path";
+        return false;
+    }
+    if (limit_u32 == 0u) limit_u32 = 16u;
+    if (limit_u32 > 16u) limit_u32 = 16u;
+    const uint64_t coh_rev = inspector_fields.revision_u64();
+    if (this->coh_index_revision_u64 != coh_rev) {
+        const_cast<SubstrateManager*>(this)->coh_graph.rebuild_from_inspector(inspector_fields);
+        const_cast<SubstrateManager*>(this)->coh_index_revision_u64 = coh_rev;
+    }
+    std::vector<EwCoherenceGraph::Match> hits;
+    this->coh_graph.query_best(rel_path_utf8, limit_u32, hits);
+    for (const auto& h : hits) {
+        if (h.rel_path != rel_path_utf8) continue;
+        genesis::GeCoherenceHit row{};
+        row.score_u32 = h.score_u32;
+        row.rel_path_utf8 = h.rel_path;
+        out_hits.push_back(row);
+    }
+    if (out_hits.empty()) {
+        genesis::GeCoherenceHit row{};
+        row.score_u32 = 0u;
+        row.rel_path_utf8 = rel_path_utf8;
+        out_hits.push_back(row);
+    }
+    if (out_err) out_err->clear();
+    return true;
+}
+
+bool SubstrateManager::ui_snapshot_coherence_stats(std::string& out_stats_utf8) const {
+    const uint64_t coh_rev = inspector_fields.revision_u64();
+    if (this->coh_index_revision_u64 != coh_rev) {
+        const_cast<SubstrateManager*>(this)->coh_graph.rebuild_from_inspector(inspector_fields);
+        const_cast<SubstrateManager*>(this)->coh_index_revision_u64 = coh_rev;
+    }
+    out_stats_utf8 = this->coh_graph.debug_stats();
+    return true;
+}
+
+bool SubstrateManager::ui_snapshot_coherence_query(const std::string& query_utf8, uint32_t limit_u32, std::vector<genesis::GeCoherenceHit>& out_hits, std::string* out_err) const {
+    out_hits.clear();
+    if (query_utf8.empty()) {
+        if (out_err) *out_err = "empty query";
+        return false;
+    }
+    if (limit_u32 == 0u) limit_u32 = 32u;
+    if (limit_u32 > 32u) limit_u32 = 32u;
+    const uint64_t coh_rev = inspector_fields.revision_u64();
+    if (this->coh_index_revision_u64 != coh_rev) {
+        const_cast<SubstrateManager*>(this)->coh_graph.rebuild_from_inspector(inspector_fields);
+        const_cast<SubstrateManager*>(this)->coh_index_revision_u64 = coh_rev;
+    }
+    ew_fill_coherence_hits_(this->coh_graph, query_utf8, limit_u32, out_hits);
+    if (out_err) out_err->clear();
+    return true;
+}
+
+bool SubstrateManager::ui_snapshot_coherence_rename_plan(const std::string& old_ident_ascii, const std::string& new_ident_ascii, uint32_t limit_u32, std::vector<genesis::GeCoherenceHit>& out_hits, std::string* out_err) const {
+    out_hits.clear();
+    if (old_ident_ascii.empty() || new_ident_ascii.empty()) {
+        if (out_err) *out_err = "missing identifier";
+        return false;
+    }
+    if (limit_u32 == 0u) limit_u32 = 64u;
+    if (limit_u32 > 32u) limit_u32 = 32u;
+    const uint64_t coh_rev = inspector_fields.revision_u64();
+    if (this->coh_index_revision_u64 != coh_rev) {
+        const_cast<SubstrateManager*>(this)->coh_graph.rebuild_from_inspector(inspector_fields);
+        const_cast<SubstrateManager*>(this)->coh_index_revision_u64 = coh_rev;
+    }
+    ew_fill_coherence_rename_plan_hits_(this->coh_graph, old_ident_ascii, new_ident_ascii, limit_u32, out_hits);
+    if (out_err) out_err->clear();
+    return true;
+}
+
+bool SubstrateManager::ui_snapshot_coherence_rename_patch(const std::string& old_ident_ascii, const std::string& new_ident_ascii, uint32_t limit_u32, std::string& out_patch_utf8, std::string* out_err) const {
+    const uint64_t coh_rev = inspector_fields.revision_u64();
+    if (this->coh_index_revision_u64 != coh_rev) {
+        const_cast<SubstrateManager*>(this)->coh_graph.rebuild_from_inspector(inspector_fields);
+        const_cast<SubstrateManager*>(this)->coh_index_revision_u64 = coh_rev;
+    }
+    return ew_build_coherence_rename_patch_(inspector_fields, this->coh_graph, old_ident_ascii, new_ident_ascii, limit_u32, out_patch_utf8, out_err);
+}
+
+bool SubstrateManager::ui_snapshot_coherence_selftest(bool& out_ok, std::string& out_report_utf8) const {
+    const uint64_t coh_rev = inspector_fields.revision_u64();
+    if (this->coh_index_revision_u64 != coh_rev) {
+        const_cast<SubstrateManager*>(this)->coh_graph.rebuild_from_inspector(inspector_fields);
+        const_cast<SubstrateManager*>(this)->coh_index_revision_u64 = coh_rev;
+    }
+    out_report_utf8.clear();
+    out_ok = this->coh_graph.selftest(out_report_utf8);
+    return true;
+}
+
+void SubstrateManager::ui_emit_coherence_stats() {
+    const uint64_t coh_rev = inspector_fields.revision_u64();
+    if (this->coh_index_revision_u64 != coh_rev) {
+        this->coh_graph.rebuild_from_inspector(inspector_fields);
+        this->coh_index_revision_u64 = coh_rev;
+    }
+    emit_ui_line(std::string("COH_STATS ") + this->coh_graph.debug_stats());
+}
+
+void SubstrateManager::ui_emit_coherence_query(const std::string& query_utf8, uint32_t limit_u32) {
+    if (query_utf8.empty()) {
+        emit_ui_line("COH_QUERY empty query");
+        return;
+    }
+    if (limit_u32 == 0u) limit_u32 = 32u;
+    if (limit_u32 > 16u) limit_u32 = 16u;
+    const uint64_t coh_rev = inspector_fields.revision_u64();
+    if (this->coh_index_revision_u64 != coh_rev) {
+        this->coh_graph.rebuild_from_inspector(inspector_fields);
+        this->coh_index_revision_u64 = coh_rev;
+    }
+    std::vector<EwCoherenceGraph::Match> hits;
+    this->coh_graph.query_best(query_utf8, limit_u32, hits);
+    emit_ui_line(std::string("COH_QUERY text=\"") + query_utf8 + "\" hits=" + std::to_string((unsigned)hits.size()));
+    for (size_t hi = 0; hi < hits.size(); ++hi) {
+        char buf[512];
+        std::snprintf(buf, sizeof(buf), "COH_HIT idx=%u score=%u path=%s", (unsigned)hi, (unsigned)hits[hi].score_u32, hits[hi].rel_path.c_str());
+        emit_ui_line(buf);
+    }
+}
+
+void SubstrateManager::ui_emit_coherence_rename_plan(const std::string& old_ident_ascii, const std::string& new_ident_ascii, uint32_t limit_u32) {
+    if (old_ident_ascii.empty() || new_ident_ascii.empty()) {
+        emit_ui_line("COH_RENAME_PLAN missing identifier");
+        return;
+    }
+    if (limit_u32 == 0u) limit_u32 = 64u;
+    if (limit_u32 > 16u) limit_u32 = 16u;
+    const uint64_t coh_rev = inspector_fields.revision_u64();
+    if (this->coh_index_revision_u64 != coh_rev) {
+        this->coh_graph.rebuild_from_inspector(inspector_fields);
+        this->coh_index_revision_u64 = coh_rev;
+    }
+    std::vector<EwCoherenceGraph::Match> hits;
+    this->coh_graph.plan_rename_ascii(old_ident_ascii, new_ident_ascii, limit_u32, hits);
+    char hdr[256];
+    std::snprintf(hdr, sizeof(hdr), "COH_RENAME_PLAN old=\"%s\" new=\"%s\" hits=%u", old_ident_ascii.c_str(), new_ident_ascii.c_str(), (unsigned)hits.size());
+    emit_ui_line(hdr);
+    for (size_t hi = 0; hi < hits.size(); ++hi) {
+        char buf[512];
+        std::snprintf(buf, sizeof(buf), "COH_RENAME_HIT idx=%u score=%u path=%s", (unsigned)hi, (unsigned)hits[hi].score_u32, hits[hi].rel_path.c_str());
+        emit_ui_line(buf);
+    }
+}
+
+void SubstrateManager::ui_emit_coherence_rename_patch(const std::string& old_ident_ascii, const std::string& new_ident_ascii, uint32_t limit_u32) {
+    const uint64_t coh_rev = inspector_fields.revision_u64();
+    if (this->coh_index_revision_u64 != coh_rev) {
+        this->coh_graph.rebuild_from_inspector(inspector_fields);
+        this->coh_index_revision_u64 = coh_rev;
+    }
+    std::string patch_utf8;
+    std::string err;
+    if (!ew_build_coherence_rename_patch_(inspector_fields, this->coh_graph, old_ident_ascii, new_ident_ascii, limit_u32, patch_utf8, &err)) {
+        emit_ui_line(std::string("COH_RENAME_PATCH ") + err);
+        return;
+    }
+    emit_ui_line(std::string("COH_RENAME_PATCH ok bytes=") + std::to_string((unsigned long long)patch_utf8.size()));
+    size_t start = 0;
+    while (start < patch_utf8.size()) {
+        size_t end = patch_utf8.find('\n', start);
+        std::string line = (end == std::string::npos) ? patch_utf8.substr(start) : patch_utf8.substr(start, end - start);
+        if (!line.empty()) emit_ui_line(line);
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+}
+
+void SubstrateManager::ui_set_coherence_highlight_query(const std::string& query_utf8, uint32_t limit_u32) {
+    if (query_utf8.empty()) {
+        coh_highlight_paths.clear();
+        ++coh_highlight_revision_u64;
+        emit_ui_line("COH_HIGHLIGHT cleared");
+        return;
+    }
+    if (limit_u32 == 0u) limit_u32 = 32u;
+    if (limit_u32 > 16u) limit_u32 = 16u;
+    const uint64_t coh_rev = inspector_fields.revision_u64();
+    if (this->coh_index_revision_u64 != coh_rev) {
+        this->coh_graph.rebuild_from_inspector(inspector_fields);
+        this->coh_index_revision_u64 = coh_rev;
+    }
+    coh_highlight_paths.clear();
+    std::vector<EwCoherenceGraph::Match> hits;
+    this->coh_graph.query_best(query_utf8, limit_u32, hits);
+    for (const auto& h : hits) coh_highlight_paths.push_back(h.rel_path);
+    ++coh_highlight_revision_u64;
+    emit_ui_line(std::string("COH_HIGHLIGHT text=\"") + query_utf8 + "\" count=" + std::to_string((unsigned)coh_highlight_paths.size()));
+    for (size_t i = 0; i < coh_highlight_paths.size(); ++i) {
+        emit_ui_line(std::string("COH_HIGHLIGHT_ITEM idx=") + std::to_string((unsigned long long)i) + " path=" + coh_highlight_paths[i]);
+    }
+}
+
+void SubstrateManager::ui_set_coherence_highlight_path(const std::string& rel_path_utf8) {
+    coh_highlight_paths.clear();
+    if (!rel_path_utf8.empty()) {
+        coh_highlight_paths.push_back(rel_path_utf8);
+    }
+    ++coh_highlight_revision_u64;
+}
+
+void SubstrateManager::ui_emit_coherence_selftest() {
+    const uint64_t coh_rev = inspector_fields.revision_u64();
+    if (this->coh_index_revision_u64 != coh_rev) {
+        this->coh_graph.rebuild_from_inspector(inspector_fields);
+        this->coh_index_revision_u64 = coh_rev;
+    }
+    std::string rep;
+    const bool ok = this->coh_graph.selftest(rep);
+    emit_ui_line(std::string("COH_SELFTEST ") + (ok ? "ok " : "fail ") + rep);
+}
+
+namespace {
+static bool ge_collect_ui_vault_entries(uint32_t limit_u32, std::vector<std::string>& out_rels, std::string* out_err) {
+    namespace fs = std::filesystem;
+    out_rels.clear();
+    if (limit_u32 == 0u) limit_u32 = 20u;
+    if (limit_u32 > 128u) limit_u32 = 128u;
+
+    const std::string root = std::string("AI_Vault");
+    const std::string canonical = root + "/canonical";
+    const std::string eph = root + "/_ephemeral";
+
+    auto add_dir = [&](const std::string& full_dir, const char* rel_prefix) {
+        std::error_code ec;
+        if (!fs::exists(full_dir, ec) || ec) return;
+        std::vector<std::string> names;
+        for (fs::directory_iterator it(full_dir, ec); !ec && it != fs::directory_iterator(); it.increment(ec)) {
+            const fs::directory_entry& de = *it;
+            if (!de.is_regular_file(ec)) { ec.clear(); continue; }
+            const fs::path fp = de.path();
+            names.push_back(fp.filename().string());
+        }
+        ec.clear();
+        std::sort(names.begin(), names.end());
+        for (const auto& n : names) {
+            if (out_rels.size() >= (size_t)limit_u32) break;
+            out_rels.push_back(std::string(rel_prefix) + "/" + n);
+        }
+    };
+
+    add_dir(canonical + "/experiments/metrics", "canonical/experiments/metrics");
+    add_dir(canonical + "/corpus/allowlist_pages", "canonical/corpus/allowlist_pages");
+    add_dir(canonical + "/corpus/resonant_pages", "canonical/corpus/resonant_pages");
+    add_dir(canonical + "/corpus/speech_boot", "canonical/corpus/speech_boot");
+    add_dir(eph + "/experiments/metrics_failures", "_ephemeral/experiments/metrics_failures");
+
+    if (out_err) out_err->clear();
+    return true;
+}
+}
+
+bool SubstrateManager::ui_snapshot_vault_entries(uint32_t limit_u32, std::vector<std::string>& out_rel_paths_utf8, std::string* out_err) const {
+    return ge_collect_ui_vault_entries(limit_u32, out_rel_paths_utf8, out_err);
+}
+
+bool SubstrateManager::ui_snapshot_vault_entry_preview(const std::string& rel_path_utf8, uint32_t max_bytes_u32, std::string& out_preview_utf8, std::string* out_err) const {
+    out_preview_utf8.clear();
+    std::vector<std::string> rels;
+    std::string err;
+    if (!ge_collect_ui_vault_entries(UI_VAULT_LIST_CAP, rels, &err)) {
+        if (out_err) *out_err = err;
+        return false;
+    }
+    bool found = false;
+    for (const auto& rel : rels) {
+        if (rel == rel_path_utf8) { found = true; break; }
+    }
+    if (!found) {
+        if (out_err) *out_err = "vault entry not in bounded UI listing";
+        return false;
+    }
+    const std::filesystem::path full = std::filesystem::path("AI_Vault") / std::filesystem::path(rel_path_utf8);
+    std::ifstream in(full, std::ios::binary);
+    if (!in.good()) {
+        if (out_err) *out_err = std::string("open_failed path=") + full.string();
+        return false;
+    }
+    uint32_t cap = max_bytes_u32 == 0u ? 8192u : max_bytes_u32;
+    std::string raw;
+    raw.resize((size_t)cap);
+    in.read(raw.data(), (std::streamsize)raw.size());
+    const size_t got = (size_t)in.gcount();
+    raw.resize(got);
+    out_preview_utf8.reserve(raw.size() + 64u);
+    for (unsigned char c : raw) {
+        if (c == '\n' || c == '\r' || c == '\t' || (c >= 32u && c < 127u)) out_preview_utf8.push_back((char)c);
+        else out_preview_utf8.push_back('.');
+    }
+    if (got == (size_t)cap && in.good()) {
+        out_preview_utf8 += "\n... (preview capped)";
+    }
+    if (out_err) out_err->clear();
+    return true;
+}
+
+bool SubstrateManager::ui_import_vault_entry(const std::string& rel_path_utf8, std::string& out_written_path_utf8, std::string* out_err) {
+    out_written_path_utf8.clear();
+    std::vector<std::string> rels;
+    std::string err;
+    if (!ge_collect_ui_vault_entries(UI_VAULT_LIST_CAP, rels, &err)) {
+        if (out_err) *out_err = err;
+        return false;
+    }
+    bool found = false;
+    for (const auto& rel : rels) {
+        if (rel == rel_path_utf8) { found = true; break; }
+    }
+    if (!found) {
+        if (out_err) *out_err = "vault entry not in bounded UI listing";
+        return false;
+    }
+    const std::string full_vault = (std::filesystem::path("AI_Vault") / std::filesystem::path(rel_path_utf8)).string();
+    std::string asset_root = project_settings.assets.project_asset_substrate_root_utf8;
+    if (asset_root.empty()) asset_root = "AssetSubstrate";
+    const std::filesystem::path out_dir = std::filesystem::path(asset_root) / std::filesystem::path("Assets") / std::filesystem::path("AIImported");
+    std::error_code ec;
+    std::filesystem::create_directories(out_dir, ec);
+    std::string leaf = std::filesystem::path(rel_path_utf8).stem().string();
+    if (leaf.empty()) leaf = "entry";
+    for (char& ch : leaf) {
+        if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-')) ch = '_';
+    }
+    char out_name[256];
+    std::snprintf(out_name, sizeof(out_name), "vault_%s.geassetref", leaf.c_str());
+    const std::filesystem::path out_path = out_dir / std::filesystem::path(out_name);
+    if (std::filesystem::exists(out_path)) {
+        out_written_path_utf8 = out_path.string();
+        if (out_err) out_err->clear();
+        return true;
+    }
+    std::string body;
+    body += "ref_kind=vault\n";
+    body += std::string("vault_rel=") + rel_path_utf8 + "\n";
+    body += std::string("vault_full=") + full_vault + "\n";
+    body += "source=ai_vault\n";
+    std::ofstream out(out_path, std::ios::binary | std::ios::trunc);
+    if (!out.good()) {
+        if (out_err) *out_err = std::string("open_failed path=") + out_path.string();
+        return false;
+    }
+    out.write(body.data(), (std::streamsize)body.size());
+    out.close();
+    if (!out.good()) {
+        if (out_err) *out_err = std::string("write_failed path=") + out_path.string();
+        return false;
+    }
+    out_written_path_utf8 = out_path.string();
+    if (out_err) out_err->clear();
+    return true;
+}
+
+void SubstrateManager::ui_emit_vault_list_all(uint32_t limit_u32) {
+
+    std::vector<std::string> rels;
+    std::string err;
+    (void)ge_collect_ui_vault_entries(limit_u32, rels, &err);
+    ui_last_vault_list_paths_utf8 = rels;
+    emit_ui_line(std::string("VAULT_LIST cat=all count=") + std::to_string((unsigned long long)rels.size()));
+    for (size_t i = 0; i < rels.size(); ++i) {
+        emit_ui_line(std::string("VAULT_ITEM idx=") + std::to_string((unsigned long long)i) + " rel=" + rels[i]);
+    }
+}
+
+
+void SubstrateManager::ui_request_game_bootstrap(const std::string& request_utf8) {
+    std::string req = request_utf8;
+    ew_trim_left_ws(req);
+    if (req.empty()) req = "editor_bootstrap";
+    (void)ew_gameboot_execute(this, req);
+}
+
+void SubstrateManager::ui_emit_ai_model_train_ready(const std::string& base_name_utf8) {
+    std::string base = base_name_utf8;
+    ew_trim_left_ws(base);
+    if (base.empty()) {
+        emit_ui_line("AI_MODEL_TRAIN missing base name");
+        return;
+    }
+    emit_ai_event_line("ai_model_train_ready", std::string("base=") + base);
+    emit_ui_line(std::string("AI_MODEL_TRAIN queued base=") + base);
+}
 
 bool SubstrateManager::ui_pop_output_text(std::string& out_utf8) {
     if (ui_out_q.empty()) return false;
@@ -5928,13 +7792,13 @@ static inline void ew_execute_operator_packets_v1(SubstrateManager* sm) {
             } else if (req.field_u32 == EW_AI_CFG_FIELD_METRIC_CLAIM_TEXT_CAP_BYTES_U32) {
                 cfg->metric_claim_text_cap_bytes_u32 = clamp_u32((uint32_t)u, 256u, 131072u);
 } else if (req.field_u32 == EW_AI_CFG_FIELD_REPO_READER_ENABLED_U32) {
-    cfg->repo_reader_enabled_u32 = (uint32_t)req.value_u64;
+    cfg->repo_reader_enabled_u32 = (uint32_t)req.value_s64;
 } else if (req.field_u32 == EW_AI_CFG_FIELD_REPO_READER_FILES_PER_TICK_U32) {
-    cfg->repo_reader_files_per_tick_u32 = (uint32_t)req.value_u64;
+    cfg->repo_reader_files_per_tick_u32 = (uint32_t)req.value_s64;
 } else if (req.field_u32 == EW_AI_CFG_FIELD_REPO_READER_BYTES_PER_FILE_U32) {
-    cfg->repo_reader_bytes_per_file_u32 = (uint32_t)req.value_u64;
+    cfg->repo_reader_bytes_per_file_u32 = (uint32_t)req.value_s64;
 } else if (req.field_u32 == EW_AI_CFG_FIELD_AI_EVENT_LOG_ENABLED_U32) {
-    cfg->ai_event_log_enabled_u32 = (uint32_t)(req.value_u64 ? 1ull : 0ull);
+    cfg->ai_event_log_enabled_u32 = (uint32_t)(req.value_s64 ? 1ull : 0ull);
             } else {
                 return; // unknown field: ignore
             }
@@ -6325,7 +8189,7 @@ void SubstrateManager::tick() {
                 }
                 emit_ui_line(ai_crawling_enabled_u32 ? "AI_CRAWLING:ON" : "AI_CRAWLING:OFF");
             } else if (p.kind == EwControlPacketKind::AiConfigSet) {
-                // Stage AI config change and apply via compute-bus (replayable + fingerprinted).
+                // Stage AI config change and apply via compute-bus (replayable + signature-tracked).
                 pending_ai_config_set.valid_u32 = 1u;
                 pending_ai_config_set.tick_u64 = canonical_tick;
                 pending_ai_config_set.source_u16 = p.source_u16;
@@ -6602,7 +8466,7 @@ void SubstrateManager::tick() {
 // RepoReaderAdapter: deterministic self-reading corpus source (opt-in; stage-gated).
 const EwAiConfigAnchorState* cfg_repo = ai_config_state();
 if (cfg_repo != nullptr && cfg_repo->repo_reader_enabled_u32 != 0u) {
-    if (curriculum_stage_u32 < 1u) {
+    if (learning_curriculum_stage_u32 < 1u) {
         if ((canonical_tick_u64() % 360u) == 0u) emit_ui_line("REPO_READER_BLOCKED:STAGE");
         repo_reader.enabled = false;
     } else {
@@ -6618,7 +8482,7 @@ if (ai_enabled_u32 != 0u && ai_learning_enabled_u32 != 0u && ai_crawling_enabled
         if (!speech_boot_done()) {
             if ((canonical_tick_u64() % 360u) == 0u) emit_ui_line("REPO_READER_BLOCKED:SPEECH_BOOT");
             repo_reader.enabled = false;
-        } else if (curriculum_stage_u32 < 1u) {
+        } else if (learning_curriculum_stage_u32 < 1u) {
             if ((canonical_tick_u64() % 360u) == 0u) emit_ui_line("REPO_READER_BLOCKED:STAGE");
             repo_reader.enabled = false;
         } else {
@@ -7057,11 +8921,11 @@ if (ai_enabled_u32 != 0u && ai_learning_enabled_u32 != 0u && ai_crawling_enabled
             const uint32_t dom_id = (doc->domain_anchor_id_u32 != 0u) ? doc->domain_anchor_id_u32 : doc->crawler_anchor_id_u32;
 
             // Create a deterministic inspector artifact carrying a bounded hex payload.
-            // This is substrate storage; hydrator may later project if commit_ready.
+            // This is substrate storage; a later apply-projection step may materialize it if commit_ready.
             EwInspectorArtifact a{};
             a.coord_coord9_u64 = (doc->request_id_u64 ^ (uint64_t)dom_id);
             a.kind_u32 = EW_ARTIFACT_TEXT;
-            a.rel_path = "Draft Container/Corpus/doc_" + std::to_string((unsigned long long)doc->request_id_u64) + ".binhex";
+            a.rel_path = "Corpus/doc_" + std::to_string((unsigned long long)doc->request_id_u64) + ".binhex";
             a.producer_operator_id_u32 = 0u;
             a.producer_tick_u64 = canonical_tick;
             a.coherence_q15 = 0;
@@ -7088,7 +8952,7 @@ const uint32_t doc_kind_u32 = ew_doc_kind_from_bytes(doc->bytes.data(), doc->byt
 EwInspectorArtifact meta{};
 meta.coord_coord9_u64 = a.coord_coord9_u64 ^ 0x4D455441U; // 'META' fold
 meta.kind_u32 = EW_ARTIFACT_TEXT;
-meta.rel_path = "Draft Container/Corpus/doc_" + std::to_string((unsigned long long)doc->request_id_u64) + ".meta.txt";
+meta.rel_path = "Corpus/doc_" + std::to_string((unsigned long long)doc->request_id_u64) + ".meta.txt";
 meta.producer_operator_id_u32 = 0u;
 meta.producer_tick_u64 = canonical_tick;
 meta.coherence_q15 = 0;
@@ -7109,7 +8973,7 @@ inspector_fields.upsert(meta);
 EwInspectorArtifact mf{};
 mf.coord_coord9_u64 = a.coord_coord9_u64 ^ 0x4D414E46U;
 mf.kind_u32 = EW_ARTIFACT_TEXT;
-mf.rel_path = "Draft Container/Corpus/doc_" + std::to_string((unsigned long long)doc->request_id_u64) + ".manifest.txt";
+mf.rel_path = "Corpus/doc_" + std::to_string((unsigned long long)doc->request_id_u64) + ".manifest.txt";
 mf.producer_operator_id_u32 = 0u;
 mf.producer_tick_u64 = canonical_tick;
 mf.coherence_q15 = 0;
@@ -7228,7 +9092,7 @@ if (doc_kind_u32 == EW_DOC_KIND_PDF) {
     EwInspectorArtifact t{};
     t.coord_coord9_u64 = a.coord_coord9_u64 ^ 0x50444654U; // 'PDFT'
     t.kind_u32 = EW_ARTIFACT_TEXT;
-    t.rel_path = "Draft Container/Corpus/doc_" + std::to_string((unsigned long long)doc->request_id_u64) + ".pdf_text.txt";
+    t.rel_path = "Corpus/doc_" + std::to_string((unsigned long long)doc->request_id_u64) + ".pdf_text.txt";
     t.producer_operator_id_u32 = 0u;
     t.producer_tick_u64 = canonical_tick;
     t.coherence_q15 = 0;
@@ -7242,7 +9106,7 @@ if (doc_kind_u32 == EW_DOC_KIND_PDF) {
     EwInspectorArtifact t{};
     t.coord_coord9_u64 = a.coord_coord9_u64 ^ 0x5A49504DU; // 'ZIPM'
     t.kind_u32 = EW_ARTIFACT_TEXT;
-    t.rel_path = "Draft Container/Corpus/doc_" + std::to_string((unsigned long long)doc->request_id_u64) + ".zip_manifest.txt";
+    t.rel_path = "Corpus/doc_" + std::to_string((unsigned long long)doc->request_id_u64) + ".zip_manifest.txt";
     t.producer_operator_id_u32 = 0u;
     t.producer_tick_u64 = canonical_tick;
     t.coherence_q15 = 0;
@@ -7258,7 +9122,7 @@ if (doc_kind_u32 == EW_DOC_KIND_PDF) {
     EwInspectorArtifact k{};
     k.coord_coord9_u64 = a.coord_coord9_u64 ^ 0x4A534B59U; // 'JSKY'
     k.kind_u32 = EW_ARTIFACT_TEXT;
-    k.rel_path = "Draft Container/Corpus/doc_" + std::to_string((unsigned long long)doc->request_id_u64) + ".json_keys.txt";
+    k.rel_path = "Corpus/doc_" + std::to_string((unsigned long long)doc->request_id_u64) + ".json_keys.txt";
     k.producer_operator_id_u32 = 0u;
     k.producer_tick_u64 = canonical_tick;
     k.coherence_q15 = 0;
@@ -7269,7 +9133,7 @@ if (doc_kind_u32 == EW_DOC_KIND_PDF) {
     EwInspectorArtifact t{};
     t.coord_coord9_u64 = a.coord_coord9_u64 ^ 0x4A534E54U; // 'JSNT'
     t.kind_u32 = EW_ARTIFACT_TEXT;
-    t.rel_path = "Draft Container/Corpus/doc_" + std::to_string((unsigned long long)doc->request_id_u64) + ".json_text.txt";
+    t.rel_path = "Corpus/doc_" + std::to_string((unsigned long long)doc->request_id_u64) + ".json_text.txt";
     t.producer_operator_id_u32 = 0u;
     t.producer_tick_u64 = canonical_tick;
     t.coherence_q15 = 0;
@@ -7284,7 +9148,7 @@ if (doc_kind_u32 == EW_DOC_KIND_PDF) {
     EwInspectorArtifact k{};
     k.coord_coord9_u64 = a.coord_coord9_u64 ^ 0x584D4C54U; // 'XMLT'
     k.kind_u32 = EW_ARTIFACT_TEXT;
-    k.rel_path = "Draft Container/Corpus/doc_" + std::to_string((unsigned long long)doc->request_id_u64) + ".xml_tags.txt";
+    k.rel_path = "Corpus/doc_" + std::to_string((unsigned long long)doc->request_id_u64) + ".xml_tags.txt";
     k.producer_operator_id_u32 = 0u;
     k.producer_tick_u64 = canonical_tick;
     k.coherence_q15 = 0;
@@ -7295,7 +9159,7 @@ if (doc_kind_u32 == EW_DOC_KIND_PDF) {
     EwInspectorArtifact t{};
     t.coord_coord9_u64 = a.coord_coord9_u64 ^ 0x584D4C58U; // 'XMLX'
     t.kind_u32 = EW_ARTIFACT_TEXT;
-    t.rel_path = "Draft Container/Corpus/doc_" + std::to_string((unsigned long long)doc->request_id_u64) + ".xml_text.txt";
+    t.rel_path = "Corpus/doc_" + std::to_string((unsigned long long)doc->request_id_u64) + ".xml_text.txt";
     t.producer_operator_id_u32 = 0u;
     t.producer_tick_u64 = canonical_tick;
     t.coherence_q15 = 0;
@@ -7326,7 +9190,7 @@ if (doc_kind_u32 == EW_DOC_KIND_PDF) {
                 EwInspectorArtifact sr{};
                 sr.coord_coord9_u64 = a.coord_coord9_u64 ^ 0x53455243U; // 'SERC'
                 sr.kind_u32 = EW_ARTIFACT_TEXT;
-                sr.rel_path = "Draft Container/Corpus/doc_" + std::to_string((unsigned long long)doc->request_id_u64) + ".search_results.txt";
+                sr.rel_path = "Corpus/doc_" + std::to_string((unsigned long long)doc->request_id_u64) + ".search_results.txt";
                 sr.producer_tick_u64 = canonical_tick;
                 sr.coherence_q15 = 0;
                 sr.commit_ready = false;
@@ -7390,7 +9254,7 @@ if (doc_kind_u32 == EW_DOC_KIND_PDF) {
                         EwInspectorArtifact rq{};
                         rq.coord_coord9_u64 = req.request_id_u64 ^ 0x57454246U; // 'WEBF'
                         rq.kind_u32 = EW_ARTIFACT_TEXT;
-                        rq.rel_path = std::string("Draft Container/Corpus/web_request_") + std::to_string((unsigned long long)req.request_id_u64) + ".txt";
+                        rq.rel_path = std::string("Corpus/web_request_") + std::to_string((unsigned long long)req.request_id_u64) + ".txt";
                         rq.producer_tick_u64 = canonical_tick;
                         rq.payload = std::string("GET ") + req.url_utf8 + "\n";
                         inspector_fields.upsert(rq);
@@ -7451,7 +9315,7 @@ if (!path_utf8.empty() && is_code_path(path_utf8) && !derived_text.empty()) {
         EwInspectorArtifact d{};
         d.coord_coord9_u64 = a.coord_coord9_u64 ^ 0x44455053U;
         d.kind_u32 = EW_ARTIFACT_TEXT;
-        d.rel_path = "Draft Container/Corpus/doc_" + std::to_string((unsigned long long)doc->request_id_u64) + ".code_deps.txt";
+        d.rel_path = "Corpus/doc_" + std::to_string((unsigned long long)doc->request_id_u64) + ".code_deps.txt";
         d.producer_tick_u64 = canonical_tick;
         d.payload = deps;
         inspector_fields.upsert(d);
@@ -7460,7 +9324,7 @@ if (!path_utf8.empty() && is_code_path(path_utf8) && !derived_text.empty()) {
         EwInspectorArtifact s{};
         s.coord_coord9_u64 = a.coord_coord9_u64 ^ 0x53594D53U;
         s.kind_u32 = EW_ARTIFACT_TEXT;
-        s.rel_path = "Draft Container/Corpus/doc_" + std::to_string((unsigned long long)doc->request_id_u64) + ".code_symbols.txt";
+        s.rel_path = "Corpus/doc_" + std::to_string((unsigned long long)doc->request_id_u64) + ".code_symbols.txt";
         s.producer_tick_u64 = canonical_tick;
         s.payload = syms;
         inspector_fields.upsert(s);
@@ -7985,7 +9849,7 @@ if (starts_with("OP:")) {
                     }
 
 					// Web search + fetch (adapter-executed, substrate-scheduled).
-					// Results are ingested into Draft Container/Corpus via the external API ingest path,
+					// Results are ingested into Corpus/ via the external API ingest path,
 					// so subsequent QUERY: calls increasingly hit local grounded data.
 					auto url_encode_utf8 = [&](const std::string& in)->std::string {
 						static const char* H = "0123456789ABCDEF";
@@ -8045,7 +9909,7 @@ if (starts_with("OP:")) {
 						EwInspectorArtifact a{};
 						a.coord_coord9_u64 = artifact_id_u64 ^ 0x57454251u; // 'WEBQ'
 						a.kind_u32 = EW_ARTIFACT_TEXT;
-						a.rel_path = std::string("Draft Container/Corpus/web_request_") + std::to_string((unsigned long long)artifact_id_u64) + ".txt";
+						a.rel_path = std::string("Corpus/web_request_") + std::to_string((unsigned long long)artifact_id_u64) + ".txt";
 						a.producer_tick_u64 = canonical_tick;
 						a.payload = line + "\n";
 						inspector_fields.upsert(a);
@@ -8176,13 +10040,6 @@ if (starts_with("WEBFETCH:")) {
                         }
                         break;
 
-if (starts_with("GAMEBOOT:")) {
-    std::string req = last_observation_text.substr(std::strlen("GAMEBOOT:"));
-    trim_left(req);
-    (void)ew_gameboot_execute(this, req);
-    break;
-}
-
                     }
 
                     if (starts_with("CODEEDIT:")) {
@@ -8208,6 +10065,10 @@ if (starts_with("GAMEBOOT:")) {
                         // PATCH:<rel_path>:INSERT_AFTER:<anchor>:<text>
                         // PATCH:<rel_path>:REPLACE_BETWEEN:<anchorA>:<anchorB>:<text>
                         // PATCH:<rel_path>:DELETE_BETWEEN:<anchorA>:<anchorB>
+                        // PATCH:<rel_path>:REPLACE_EXACT:<needle>:WITH:<text>
+                        // PATCH:<rel_path>:DELETE_EXACT:<needle>
+                        // PATCH:<rel_path>:INSERT_BEFORE_EXACT:<needle>:TEXT:<text>
+                        // PATCH:<rel_path>:INSERT_AFTER_EXACT:<needle>:TEXT:<text>
                         std::string rest = last_observation_text.substr(std::strlen("PATCH:"));
                         const size_t p1 = rest.find(':');
                         if (p1 == std::string::npos) break;
@@ -8243,6 +10104,31 @@ if (starts_with("GAMEBOOT:")) {
                             ps.mode_u16 = EW_PATCH_DELETE_BETWEEN_ANCHORS;
                             if (!take_field(rest, ps.anchor_a)) break;
                             ps.anchor_b = rest;
+                        } else if (op == "REPLACE_EXACT") {
+                            const size_t mid = rest.find(":WITH:");
+                            if (mid == std::string::npos) break;
+                            ps.mode_u16 = EW_PATCH_REPLACE_EXACT;
+                            ps.anchor_a = rest.substr(0, mid);
+                            ps.text = rest.substr(mid + std::strlen(":WITH:"));
+                            if (ps.anchor_a.empty()) break;
+                        } else if (op == "DELETE_EXACT") {
+                            ps.mode_u16 = EW_PATCH_DELETE_EXACT;
+                            ps.anchor_a = rest;
+                            if (ps.anchor_a.empty()) break;
+                        } else if (op == "INSERT_BEFORE_EXACT") {
+                            const size_t mid = rest.find(":TEXT:");
+                            if (mid == std::string::npos) break;
+                            ps.mode_u16 = EW_PATCH_INSERT_BEFORE_EXACT;
+                            ps.anchor_a = rest.substr(0, mid);
+                            ps.text = rest.substr(mid + std::strlen(":TEXT:"));
+                            if (ps.anchor_a.empty()) break;
+                        } else if (op == "INSERT_AFTER_EXACT") {
+                            const size_t mid = rest.find(":TEXT:");
+                            if (mid == std::string::npos) break;
+                            ps.mode_u16 = EW_PATCH_INSERT_AFTER_EXACT;
+                            ps.anchor_a = rest.substr(0, mid);
+                            ps.text = rest.substr(mid + std::strlen(":TEXT:"));
+                            if (ps.anchor_a.empty()) break;
                         } else {
                             break;
                         }
@@ -8251,10 +10137,10 @@ if (starts_with("GAMEBOOT:")) {
                         break;
                     }
 
-                    if (starts_with("HYDRATE:")) {
-                        std::string root = last_observation_text.substr(std::strlen("HYDRATE:"));
+                    if (starts_with("APPLY_TARGET:")) {
+                        std::string root = last_observation_text.substr(std::strlen("APPLY_TARGET:"));
                         trim_left(root);
-                        if (!root.empty()) code_emit_hydration_hint(this, root);
+                        if (!root.empty()) code_emit_apply_target_hint(this, root);
                         break;
                     }
 
@@ -8290,7 +10176,7 @@ if (starts_with("GAMEBOOT:")) {
                 case EW_AI_OP_STORE: {
                     // Inspector fields are the substrate-resident storage surface.
                     // STORE indicates the caller intends artifacts to be committed
-                    // on the next hydration projection.
+                    // on the next workspace projection.
                     // (No filesystem writes occur here.)
                     (void)A_i_q63;
                     break;
@@ -9455,7 +11341,7 @@ if (ap && ap->object_id_u64 != 0u) {
     // workspace artifacts.
     //
     // Mechanism: the AI writes *artifacts* into inspector fields as vector
-    // field state. A separate hydrator projection makes them visible as
+    // field state. A separate apply-projection step makes them visible as
     // functioning files when and only when coherence-gated.
     // ------------------------------------------------------------------
     {
@@ -9537,21 +11423,21 @@ if (ap && ap->object_id_u64 != 0u) {
     }
 
     // ------------------------------------------------------------------
-    // Determinism guardrail: 9D state fingerprint.
+    // Determinism guardrail: 9D state signature.
     // If a reference trace exists, fail closed on first mismatch.
     // ------------------------------------------------------------------
     if (!determinism_ref_loaded) {
-        (void)ge_load_fingerprint_reference("Draft Container/Determinism/fingerprint_ref.txt", determinism_ref_fingerprints);
+        (void)ge_load_signature_reference("Determinism/signature_ref.txt", determinism_ref_signatures);
         determinism_ref_loaded = true;
     }
-    state_fingerprint_u64 = ge_compute_state_fingerprint_9d(this);
-    state_fingerprint_tick_u64 = canonical_tick;
-    if (!determinism_ref_fingerprints.empty()) {
+    state_signature_u64 = ge_compute_state_signature_9d(this);
+    state_signature_tick_u64 = canonical_tick;
+    if (!determinism_ref_signatures.empty()) {
         const uint64_t idx = canonical_tick;
-        if (idx < determinism_ref_fingerprints.size()) {
-            const uint64_t expect = determinism_ref_fingerprints[(size_t)idx];
-            if (expect != 0u && expect != state_fingerprint_u64) {
-                emit_ui_line("DETERMINISM_FINGERPRINT_MISMATCH");
+        if (idx < determinism_ref_signatures.size()) {
+            const uint64_t expect = determinism_ref_signatures[(size_t)idx];
+            if (expect != 0u && expect != state_signature_u64) {
+                emit_ui_line("DETERMINISM_STATE_SIGNATURE_MISMATCH");
                 // Fail closed deterministically.
                 std::abort();
             }
@@ -9748,31 +11634,31 @@ bool SubstrateManager::check_invariants() const {
     return true;
 }
 
-bool SubstrateManager::hydrate_workspace_to(const std::string& root_dir) {
+bool SubstrateManager::project_workspace_to(const std::string& root_dir) {
     std::vector<EwInspectorArtifact> committed;
     inspector_fields.snapshot_committed(committed);
 
     // Nothing to do.
     if (committed.empty()) {
-        last_hydration_receipt.rows.clear();
-        last_hydration_receipt.hydration_tick_u64 = canonical_tick;
-        last_hydration_error_code_u32 = 0;
+        last_projection_receipt.rows.clear();
+        last_projection_receipt.hydration_tick_u64 = canonical_tick;
+        last_projection_error_code_u32 = 0;
         return true;
     }
 
     EwHydrationReceipt receipt;
     std::string err;
     const bool ok = EwHydrator::hydrate_workspace(root_dir, canonical_tick, committed, receipt, err);
-    last_hydration_receipt = receipt;
+    last_projection_receipt = receipt;
     if (!ok) {
         // Deterministic coarse error coding (no strings in state).
-        last_hydration_error_code_u32 = 9001u;
+        last_projection_error_code_u32 = 9001u;
         return false;
     }
 
-    // Clear commit-ready flags on successful hydration.
+    // Clear commit-ready flags on successful workspace projection.
     inspector_fields.clear_commit_ready();
-    last_hydration_error_code_u32 = 0;
+    last_projection_error_code_u32 = 0;
     return true;
 }
 
@@ -9788,7 +11674,7 @@ uint32_t SubstrateManager::corpus_query_best_score(const std::string& query_utf8
     if (qlc.empty()) return 0u;
 
     std::vector<EwInspectorArtifact> corpus;
-    inspector_fields.snapshot_prefix("Draft Container/Corpus/", corpus);
+    inspector_fields.snapshot_prefix("Corpus/", corpus);
 
     auto score_text = [&](std::string s)->uint32_t {
         if (s.size() > 8192) s.resize(8192);
@@ -9839,7 +11725,7 @@ void SubstrateManager::corpus_query_emit_results(const std::string& query_utf8, 
     if (qlc.empty()) return;
 
     std::vector<EwInspectorArtifact> corpus;
-    inspector_fields.snapshot_prefix("Draft Container/Corpus/", corpus);
+    inspector_fields.snapshot_prefix("Corpus/", corpus);
 
     struct Hit { std::string path; uint32_t score; };
     std::vector<Hit> hits;
@@ -9888,7 +11774,7 @@ void SubstrateManager::corpus_query_emit_results(const std::string& query_utf8, 
     EwInspectorArtifact out{};
     out.coord_coord9_u64 = ((uint64_t)canonical_tick << 1) ^ 0x51555259U;
     out.kind_u32 = EW_ARTIFACT_TEXT;
-    out.rel_path = "Draft Container/Corpus/query_results.txt";
+    out.rel_path = "Corpus/query_results.txt";
     out.producer_tick_u64 = canonical_tick;
     out.payload = "QUERY_RESULTS ";
     out.payload += std::to_string((unsigned long long)canonical_tick);
@@ -9899,7 +11785,7 @@ void SubstrateManager::corpus_query_emit_results(const std::string& query_utf8, 
 auto cite_for_rel_path = [&](const std::string& rel_path, std::string& out_cite, std::string& out_link)->bool {
     out_cite.clear();
     out_link.clear();
-    const std::string pre = "Draft Container/Corpus/doc_";
+    const std::string pre = "Corpus/doc_";
     size_t p0 = rel_path.find(pre);
     if (p0 == std::string::npos) return false;
     p0 += pre.size();
@@ -10050,7 +11936,7 @@ void SubstrateManager::corpus_answer_emit(const std::string& query_utf8, uint32_
     if (terms.empty()) return;
 
     std::vector<EwInspectorArtifact> corpus;
-    inspector_fields.snapshot_prefix("Draft Container/Corpus/", corpus);
+    inspector_fields.snapshot_prefix("Corpus/", corpus);
 
     auto is_queryable = [&](const std::string& p)->bool {
         bool ok = false;
@@ -10119,7 +12005,7 @@ void SubstrateManager::corpus_answer_emit(const std::string& query_utf8, uint32_
     EwInspectorArtifact out{};
     out.coord_coord9_u64 = ((uint64_t)canonical_tick << 1) ^ 0x414E5357U; // 'ANSW'
     out.kind_u32 = EW_ARTIFACT_TEXT;
-    out.rel_path = std::string("Draft Container/Corpus/answer_") + std::to_string((unsigned long long)canonical_tick) + ".txt";
+    out.rel_path = std::string("Corpus/answer_") + std::to_string((unsigned long long)canonical_tick) + ".txt";
     out.producer_tick_u64 = canonical_tick;
 
     out.payload = "ANSWER ";
@@ -10139,7 +12025,7 @@ void SubstrateManager::corpus_answer_emit(const std::string& query_utf8, uint32_
     auto cite_for_rel_path = [&](const std::string& rel_path, std::string& out_cite, std::string& out_link)->bool {
         out_cite.clear();
         out_link.clear();
-        const std::string pre = "Draft Container/Corpus/doc_";
+        const std::string pre = "Corpus/doc_";
         size_t p0 = rel_path.find(pre);
         if (p0 == std::string::npos) return false;
         p0 += pre.size();

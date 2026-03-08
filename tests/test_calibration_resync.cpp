@@ -4,6 +4,7 @@
 
 #include "GE_runtime.hpp"
 #include "anchor.hpp"
+#include "ew_id9.hpp"
 
 static uint32_t find_first_spectral_anchor(SubstrateManager& sm) {
     for (uint32_t i = 0u; i < (uint32_t)sm.anchors.size(); ++i) {
@@ -12,12 +13,12 @@ static uint32_t find_first_spectral_anchor(SubstrateManager& sm) {
     return 0u;
 }
 
-static void force_high_leakage_publish(Anchor& a, uint64_t hash_u64) {
+static void force_high_leakage_publish(Anchor& a, uint64_t seed_u64) {
     EwSpectralFieldAnchorState& ss = a.spectral_field_state;
     ss.leakage_pending_u8 = 1u;
     ss.leakage_band_u8 = 7u;
     ss.leakage_q32_32 = (int64_t)(512LL << 32); // extreme
-    ss.leakage_hash_u64 = hash_u64;
+    ss.leakage_id9 = ew_id9_from_u64(seed_u64);
 }
 
 int main() {
@@ -77,8 +78,8 @@ int main() {
 
     {
         const EwSpectralFieldAnchorState& ss = sm.anchors[sid].spectral_field_state;
-        if (ss.resync_cooldown_ticks_u8 == 0u) {
-            std::cerr << "FAIL: expected resync cooldown to be active\n";
+        if (ss.calibration_ticks_remaining_u32 == 0u) {
+            std::cerr << "FAIL: expected calibration throttle to remain active\n";
             return 1;
         }
         // Resync must have zeroed phi_hat[0].

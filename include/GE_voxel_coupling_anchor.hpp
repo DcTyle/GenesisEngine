@@ -99,7 +99,7 @@ struct EwVoxelCouplingAnchorState {
     uint8_t influx_band_u8 = 0;
     uint8_t influx_pending_u8 = 0;
     uint16_t pad1_u16 = 0;
-    uint64_t influx_hash_u64 = 0;
+    EwId9 influx_id9{};
 
     // Learning coupling proxy (Q0.15) derived from influx (used by operators).
     uint16_t learning_coupling_q15 = 0;

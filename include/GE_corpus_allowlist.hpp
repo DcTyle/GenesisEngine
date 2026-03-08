@@ -37,6 +37,7 @@ struct GE_CorpusDomainPolicy {
     // Back-compat fields (kept for older callers; mirrored from q16_16).
     uint32_t rate_tokens_per_sec_u32 = 1;
     uint32_t rate_burst_u32 = 1;
+    uint32_t target_pages_u32 = 0;
 };
 
 struct GE_CorpusAllowlist {

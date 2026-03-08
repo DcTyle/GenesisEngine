@@ -66,7 +66,7 @@ int64_t LearningCheckpointGate::rel_err_q32_32_vec(const std::vector<int64_t>& s
     return worst;
 }
 
-void LearningCheckpointGate::tick(SubstrateMicroprocessor* sm) {
+void LearningCheckpointGate::tick(SubstrateManager* sm) {
     if (!sm) return;
     if (!registry_.has_pending()) return;
 

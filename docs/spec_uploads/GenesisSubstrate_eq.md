@@ -3805,7 +3805,7 @@ Instruction encoding (one word per instruction):
 - inst_u64 = [ opcode_u8 | dst_u8 | src0_u8 | src1_u8 | imm_u32 ]
 
 Operand sources (allowed):
-- Anchor: coord9_q63[9], anchor_id_u64, harmonic fingerprint fields
+- Anchor: coord9_q63[9], anchor_id_u64, harmonic signature fields
 - State: theta_u64, dtheta_transport_u64, R_integer_i64, dispersion_proxy_i64, E_res_q32_32
 - Params: param_q32_32[k] from the bound eq_param_lane_u32
 - Derived: lane_count, log2(cardinality(*)), 2_pow_64

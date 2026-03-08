@@ -1,10 +1,11 @@
-\
 #include <cstdio>
 #include <cstdint>
 #include <vector>
 #include <cstring>
 #include <iostream>
+#include <filesystem>
 #include "GE_runtime.hpp"
+#include "GE_asset_substrate.hpp"
 
 static void append_bytes(std::vector<uint8_t>& out, const void* ptr, size_t n) {
     const uint8_t* p = (const uint8_t*)ptr;
@@ -33,6 +34,52 @@ static std::vector<uint8_t> run_trace(uint64_t seed, int ticks, int anchor_count
     return bytes;
 }
 
+static bool verify_asset_schema() {
+    namespace fs = std::filesystem;
+    genesis::GeAssetSubstrate assets;
+    std::string err;
+    const fs::path root = fs::path("test_asset_substrate_root");
+    const fs::path cache = fs::path("test_asset_substrate_cache");
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    ec.clear();
+    fs::remove_all(cache, ec);
+    ec.clear();
+
+    if (!assets.init(root.generic_string(), cache.generic_string(), "content_index.gecontent", &err)) {
+        std::cerr << "FAIL: asset substrate init failed: " << err << "\n";
+        return false;
+    }
+
+    const fs::path required[] = {
+        root / "Assets/Materials/Mixer",
+        root / "Assets/Materials/Designer",
+        root / "Assets/Materials/Compositions",
+        root / "Assets/Materials/PeriodicTable/Particles",
+        root / "Assets/Materials/PeriodicTable/Atoms",
+        root / "Assets/Materials/PeriodicTable/Compounds",
+        root / "Assets/Materials/PeriodicTable/DNA",
+        root / "Vault/AI/research",
+        root / "Vault/AI/experiments/metrics",
+        root / "Vault/Materials/Compositions",
+        root / "Vault/Materials/PeriodicTable/Particles",
+        root / "Vault/Materials/PeriodicTable/Atoms",
+        root / "Vault/Materials/PeriodicTable/Compounds",
+        root / "Vault/Materials/PeriodicTable/DNA"
+    };
+    for (const auto& p : required) {
+        if (!fs::exists(p, ec) || ec) {
+            std::cerr << "FAIL: required asset schema path missing: " << p.generic_string() << "\n";
+            return false;
+        }
+    }
+
+    fs::remove_all(root, ec);
+    ec.clear();
+    fs::remove_all(cache, ec);
+    return true;
+}
+
 int main() {
     const uint64_t seed = 0xC0FFEEULL;
     const int ticks = 200;
@@ -51,6 +98,7 @@ int main() {
         std::cerr << "FAIL: byte mismatch at index " << idx << "\n";
         return 1;
     }
+    if (!verify_asset_schema()) return 1;
 
     std::FILE* fp = std::fopen("pulse_trace.bin", "wb");
     if (fp) {
@@ -58,6 +106,6 @@ int main() {
         std::fclose(fp);
     }
 
-    std::cout << "PASS: deterministic pulse stream (ticks=" << ticks << ", anchors=" << anchors << ")\n";
+    std::cout << "PASS: deterministic pulse stream + asset schema scaffold (ticks=" << ticks << ", anchors=" << anchors << ")\n";
     return 0;
 }

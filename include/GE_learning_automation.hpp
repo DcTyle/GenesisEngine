@@ -9,7 +9,7 @@
 #include "GE_metric_registry.hpp"
 
 // Forward declaration.
-class SubstrateMicroprocessor;
+class SubstrateManager;
 
 namespace genesis {
 
@@ -76,8 +76,9 @@ struct TrackState {
 
 class LearningAutomation {
 public:
-    void init_once(SubstrateMicroprocessor* sm);
-    void tick(SubstrateMicroprocessor* sm);
+    void init_once(SubstrateManager* sm);
+    void tick(SubstrateManager* sm);
+    void emit_lane_status_lines(SubstrateManager* sm);
 
     void set_enabled(bool on) { enabled_ = on; }
     bool enabled() const { return enabled_; }
@@ -96,17 +97,17 @@ private:
     // Cursor into MetricRegistry::completed() to emit EvalResult artifacts.
     uint32_t completed_cursor_u32_ = 0;
 
-    void emit_eval_results(SubstrateMicroprocessor* sm);
-    void maybe_seed_plans(SubstrateMicroprocessor* sm);
-    void process_one_artifact(SubstrateMicroprocessor* sm, const AutoArtifact& a);
+    void emit_eval_results(SubstrateManager* sm);
+    void maybe_seed_plans(SubstrateManager* sm);
+    void process_one_artifact(SubstrateManager* sm, const AutoArtifact& a);
 
     // Plan expansion
-    void plan_expand_for_stage(SubstrateMicroprocessor* sm, uint32_t stage_u32);
+    void plan_expand_for_stage(SubstrateManager* sm, uint32_t stage_u32);
 
     // Scheduling helpers
-    static bool track_prereqs_satisfied(SubstrateMicroprocessor* sm, LearningTrack t);
+    static bool track_prereqs_satisfied(SubstrateManager* sm, LearningTrack t);
 
-    void schedule_parallel_tasks(SubstrateMicroprocessor* sm, uint32_t stage_u32);
+    void schedule_parallel_tasks(SubstrateManager* sm, uint32_t stage_u32);
 };
 
 } // namespace genesis
