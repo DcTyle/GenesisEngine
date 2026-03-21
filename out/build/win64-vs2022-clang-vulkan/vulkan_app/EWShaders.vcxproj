@@ -1,0 +1,344 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <PreferredToolArchitecture>x64</PreferredToolArchitecture>
+  </PropertyGroup>
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="MinSizeRel|x64">
+      <Configuration>MinSizeRel</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="RelWithDebInfo|x64">
+      <Configuration>RelWithDebInfo</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{1162C764-8942-3ED3-B853-05585F0640EC}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+    <Platform>x64</Platform>
+    <ProjectName>EWShaders</ProjectName>
+    <VCProjectUpgraderObjectName>NoUpgrade</VCProjectUpgraderObjectName>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>ClangCL</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>ClangCL</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>ClangCL</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>ClangCL</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <_ProjectFileVersion>10.0.20506.1</_ProjectFileVersion>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Midl>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Midl>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">
+    <Midl>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">
+    <Midl>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <CustomBuild Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\CMakeFiles\1289a9ae26d779998525edb9ed0c73ca\instanced.frag.spv.rule">
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Generating shaders/instanced.frag.spv</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">setlocal
+C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\Bin\glslc.exe -o D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/shaders/instanced.frag.spv D:/GameCreation/GenesisEngine/vulkan_app/shaders/instanced.frag
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\GameCreation\GenesisEngine\vulkan_app\shaders\instanced.frag;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\instanced.frag.spv</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Generating shaders/instanced.frag.spv</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">setlocal
+C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\Bin\glslc.exe -o D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/shaders/instanced.frag.spv D:/GameCreation/GenesisEngine/vulkan_app/shaders/instanced.frag
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\GameCreation\GenesisEngine\vulkan_app\shaders\instanced.frag;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\instanced.frag.spv</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Generating shaders/instanced.frag.spv</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">setlocal
+C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\Bin\glslc.exe -o D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/shaders/instanced.frag.spv D:/GameCreation/GenesisEngine/vulkan_app/shaders/instanced.frag
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\GameCreation\GenesisEngine\vulkan_app\shaders\instanced.frag;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\instanced.frag.spv</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Generating shaders/instanced.frag.spv</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">setlocal
+C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\Bin\glslc.exe -o D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/shaders/instanced.frag.spv D:/GameCreation/GenesisEngine/vulkan_app/shaders/instanced.frag
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\GameCreation\GenesisEngine\vulkan_app\shaders\instanced.frag;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\instanced.frag.spv</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\CMakeFiles\1289a9ae26d779998525edb9ed0c73ca\instanced.vert.spv.rule">
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Generating shaders/instanced.vert.spv</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">setlocal
+C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\Bin\glslc.exe -o D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/shaders/instanced.vert.spv D:/GameCreation/GenesisEngine/vulkan_app/shaders/instanced.vert
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\GameCreation\GenesisEngine\vulkan_app\shaders\instanced.vert;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\instanced.vert.spv</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Generating shaders/instanced.vert.spv</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">setlocal
+C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\Bin\glslc.exe -o D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/shaders/instanced.vert.spv D:/GameCreation/GenesisEngine/vulkan_app/shaders/instanced.vert
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\GameCreation\GenesisEngine\vulkan_app\shaders\instanced.vert;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\instanced.vert.spv</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Generating shaders/instanced.vert.spv</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">setlocal
+C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\Bin\glslc.exe -o D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/shaders/instanced.vert.spv D:/GameCreation/GenesisEngine/vulkan_app/shaders/instanced.vert
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\GameCreation\GenesisEngine\vulkan_app\shaders\instanced.vert;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\instanced.vert.spv</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Generating shaders/instanced.vert.spv</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">setlocal
+C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\Bin\glslc.exe -o D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/shaders/instanced.vert.spv D:/GameCreation/GenesisEngine/vulkan_app/shaders/instanced.vert
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\GameCreation\GenesisEngine\vulkan_app\shaders\instanced.vert;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\instanced.vert.spv</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\CMakeFiles\7f5fe9c18d48a49daa50ccd38d332a79\EWShaders.rule">
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'"></Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">setlocal
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\instanced.vert.spv;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\instanced.frag.spv;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\CMakeFiles\EWShaders</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
+      <VerifyInputsAndOutputsExist Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</VerifyInputsAndOutputsExist>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'"></Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">setlocal
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\instanced.vert.spv;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\instanced.frag.spv;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\CMakeFiles\EWShaders</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
+      <VerifyInputsAndOutputsExist Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</VerifyInputsAndOutputsExist>
+      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'"></Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">setlocal
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\instanced.vert.spv;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\instanced.frag.spv;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\CMakeFiles\EWShaders</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkObjects>
+      <VerifyInputsAndOutputsExist Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</VerifyInputsAndOutputsExist>
+      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'"></Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">setlocal
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\instanced.vert.spv;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\instanced.frag.spv;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\CMakeFiles\EWShaders</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
+      <VerifyInputsAndOutputsExist Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</VerifyInputsAndOutputsExist>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="D:\GameCreation\GenesisEngine\vulkan_app\CMakeLists.txt">
+      <UseUtf8Encoding>Always</UseUtf8Encoding>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Building Custom Rule D:/GameCreation/GenesisEngine/vulkan_app/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">setlocal
+"D:\Program Files\CMake\bin\cmake.exe" -SD:/GameCreation/GenesisEngine -BD:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan --check-stamp-file D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\GameCreation\GenesisEngine\cmake\EwSpirvTools.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageHandleStandardArgs.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageMessage.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindVulkan.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Building Custom Rule D:/GameCreation/GenesisEngine/vulkan_app/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">setlocal
+"D:\Program Files\CMake\bin\cmake.exe" -SD:/GameCreation/GenesisEngine -BD:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan --check-stamp-file D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\GameCreation\GenesisEngine\cmake\EwSpirvTools.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageHandleStandardArgs.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageMessage.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindVulkan.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Building Custom Rule D:/GameCreation/GenesisEngine/vulkan_app/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">setlocal
+"D:\Program Files\CMake\bin\cmake.exe" -SD:/GameCreation/GenesisEngine -BD:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan --check-stamp-file D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\GameCreation\GenesisEngine\cmake\EwSpirvTools.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageHandleStandardArgs.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageMessage.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindVulkan.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Building Custom Rule D:/GameCreation/GenesisEngine/vulkan_app/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">setlocal
+"D:\Program Files\CMake\bin\cmake.exe" -SD:/GameCreation/GenesisEngine -BD:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan --check-stamp-file D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\GameCreation\GenesisEngine\cmake\EwSpirvTools.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageHandleStandardArgs.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageMessage.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindVulkan.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\CMakeFiles\EWShaders">
+    </None>
+  </ItemGroup>
+  <ItemGroup />
+  <ItemGroup>
+    <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\ZERO_CHECK.vcxproj">
+      <Project>{EF57CC11-CB31-3876-B50D-BE8D6AD98E6D}</Project>
+      <Name>ZERO_CHECK</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

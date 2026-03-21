@@ -1,0 +1,142 @@
+{
+  "run_id": "022_pair_memory_adaptive_closure",
+  "hypothesis": "Exact closure should remain stable if the support window and reserve repayment are shaped by pair-memory and traced-residence proxies rather than fixed uniform transport windows.",
+  "method": {
+    "frozen_region": "all dn_j(t) for t <= onset_j are left unchanged",
+    "support_window_rule": "t in [onset_j+1, onset_j+12], weighted by upstream pair-memory and exponential early decay",
+    "reserve_window_rule": "t in [onset_j+14, end], weighted by late ramp, traced-residence proxy, and positive tail activity",
+    "closure_drive": "incoming_pair_support_j * correlation_deficit_j",
+    "transport_rule": "alpha_j * closure_drive_j * reserve_mass_j with alpha_j modulated by support-window memory concentration",
+    "exact_balance_rule": "mass added to support window equals mass removed from the same band reserve window exactly; final target is renormalized inside the reserve window only"
+  },
+  "transport_ledger": [
+    {
+      "radius_bin": 3,
+      "support_start": 6,
+      "support_end": 17,
+      "reserve_start": 19,
+      "reserve_end": 119,
+      "incoming_support": 0.15899233739180108,
+      "correlation_deficit": 0.018542543448904047,
+      "closure_drive": 0.002948122324130283,
+      "reserve_mass": 0.3169780852961339,
+      "memory_concentration": 0.3149002963773074,
+      "alpha": 0.23111521422611075,
+      "requested_transport": 0.00021597489572118038,
+      "actual_transport": 0.00021597489572118038,
+      "baseline_first_persist": 5,
+      "adaptive_first_persist": 5,
+      "baseline_final_n": 1.831799583084502,
+      "adaptive_final_n": 1.8317995830845017,
+      "post_onset_centroid_baseline": 13.118305244629534,
+      "post_onset_centroid_adaptive": 13.109399431546525
+    },
+    {
+      "radius_bin": 5,
+      "support_start": 19,
+      "support_end": 30,
+      "reserve_start": 32,
+      "reserve_end": 119,
+      "incoming_support": 0.05588230166910839,
+      "correlation_deficit": 0.018767674622368835,
+      "closure_drive": 0.001048780854874885,
+      "reserve_mass": 0.1282072964343951,
+      "memory_concentration": 0.9271545858323519,
+      "alpha": 0.29306634763494704,
+      "requested_transport": 3.94060990741013e-05,
+      "actual_transport": 3.94060990741013e-05,
+      "baseline_first_persist": 18,
+      "adaptive_first_persist": 18,
+      "baseline_final_n": 0.8290027573827758,
+      "adaptive_final_n": 0.829002757382776,
+      "post_onset_centroid_baseline": 26.228190107062623,
+      "post_onset_centroid_adaptive": 26.224689102953867
+    },
+    {
+      "radius_bin": 6,
+      "support_start": 32,
+      "support_end": 43,
+      "reserve_start": 45,
+      "reserve_end": 119,
+      "incoming_support": 0.08341645032626382,
+      "correlation_deficit": 0.025562007073224202,
+      "closure_drive": 0.0021322918932632114,
+      "reserve_mass": 0.07913211397917974,
+      "memory_concentration": 0.9707611090636022,
+      "alpha": 0.3391871887619433,
+      "requested_transport": 5.723199225802926e-05,
+      "actual_transport": 5.723199225802926e-05,
+      "baseline_first_persist": 31,
+      "adaptive_first_persist": 31,
+      "baseline_final_n": 0.6721458801801243,
+      "adaptive_final_n": 0.6721458801801242,
+      "post_onset_centroid_baseline": 38.506650399424124,
+      "post_onset_centroid_adaptive": 38.501166942338386
+    }
+  ],
+  "closure_metrics": {
+    "advanced_mass_total": 0.0003126129870533109,
+    "repaid_mass_total": 0.0003126129870533109,
+    "closure_residual": 0.0,
+    "global_final_total_baseline": 5.519932630413805,
+    "global_final_total_adaptive": 5.5199326304138046
+  },
+  "results": [
+    {
+      "radius_bin": 2,
+      "onset_target": 4,
+      "baseline_first_persist": 4,
+      "adaptive_first_persist": 4,
+      "target_final_n": 2.1869844097664024,
+      "baseline_final_n": 2.1869844097664024,
+      "adaptive_final_n": 2.1869844097664024,
+      "adaptive_minus_target": 0.0,
+      "post_onset_centroid_baseline": 11.692398473348913,
+      "post_onset_centroid_adaptive": 11.692398473348913
+    },
+    {
+      "radius_bin": 3,
+      "onset_target": 5,
+      "baseline_first_persist": 5,
+      "adaptive_first_persist": 5,
+      "target_final_n": 1.831799583084502,
+      "baseline_final_n": 1.831799583084502,
+      "adaptive_final_n": 1.8317995830845017,
+      "adaptive_minus_target": -2.220446049250313e-16,
+      "post_onset_centroid_baseline": 13.118305244629534,
+      "post_onset_centroid_adaptive": 13.10939943154657
+    },
+    {
+      "radius_bin": 5,
+      "onset_target": 18,
+      "baseline_first_persist": 18,
+      "adaptive_first_persist": 18,
+      "target_final_n": 0.8290027573827758,
+      "baseline_final_n": 0.8290027573827758,
+      "adaptive_final_n": 0.829002757382776,
+      "adaptive_minus_target": 1.1102230246251565e-16,
+      "post_onset_centroid_baseline": 26.228190107062623,
+      "post_onset_centroid_adaptive": 26.22468910295386
+    },
+    {
+      "radius_bin": 6,
+      "onset_target": 31,
+      "baseline_first_persist": 31,
+      "adaptive_first_persist": 31,
+      "target_final_n": 0.6721458801801243,
+      "baseline_final_n": 0.6721458801801243,
+      "adaptive_final_n": 0.6721458801801242,
+      "adaptive_minus_target": -1.1102230246251565e-16,
+      "post_onset_centroid_baseline": 38.506650399424124,
+      "post_onset_centroid_adaptive": 38.501166942338386
+    }
+  ],
+  "relative_to_run_021": {
+    "advanced_mass_total": 0.0015218097879503459,
+    "repaid_mass_total": 0.0015218097879503459,
+    "closure_residual": 0.0,
+    "global_final_total_baseline": 5.519932630413805,
+    "global_final_total_closure": 5.519932630413805
+  },
+  "honesty_note": "The archived late-stage pair-temporal/zero-point-localized state is still not fully present byte-for-byte, so this pass continues from the accessible canonical replay plus the structural closure direction rather than claiming a perfect replay of missing transient artifacts."
+}

@@ -1,0 +1,81 @@
+#version 460
+#extension GL_ARB_gpu_shader_int64 : require
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform Push {
+    uint n_u32;
+    uint lane_filter_u32;
+    uint use_domain_u32;
+} pc;
+
+struct EwVkCarrierRecordGpu {
+    int64_t f_q32_32;
+    int64_t phi_q32_32;
+    int64_t a_q32_32;
+    int64_t v_q32_32;
+    int f_code;
+    int a_code;
+    int v_code;
+    int i_code;
+    uint lane_u32;
+    uint domain_lane[9];
+};
+
+layout(std430, binding = 0) readonly buffer QueryBuf {
+    EwVkCarrierRecordGpu query_arr[];
+};
+
+layout(std430, binding = 1) readonly buffer RecordsBuf {
+    EwVkCarrierRecordGpu recs[];
+};
+
+layout(std430, binding = 2) buffer ScoresBuf {
+    int64_t out_scores[];
+};
+
+layout(std430, binding = 3) readonly buffer DomainBuf {
+    uint opt_domain_id9[];
+};
+
+int64_t abs_i64(int64_t x) {
+    return (x < int64_t(0)) ? -x : x;
+}
+
+bool id9_eq(EwVkCarrierRecordGpu r) {
+    for (uint i = 0u; i < 9u; ++i) {
+        if (r.domain_lane[i] != opt_domain_id9[i]) return false;
+    }
+    return true;
+}
+
+int64_t score_record(EwVkCarrierRecordGpu q, EwVkCarrierRecordGpu r) {
+    int64_t base = int64_t(1) << 32;
+    int64_t df = abs_i64(q.f_q32_32 - r.f_q32_32);
+    int64_t dphi = abs_i64(q.phi_q32_32 - r.phi_q32_32);
+    int64_t da = abs_i64(q.a_q32_32 - r.a_q32_32);
+    int64_t dv = abs_i64(q.v_q32_32 - r.v_q32_32);
+
+    int64_t penalty = (df >> 2) + (dphi >> 2) + (da >> 3) + (dv >> 3);
+    int64_t score = base - penalty;
+    if (score < int64_t(0)) score = int64_t(0);
+    return score;
+}
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pc.n_u32) return;
+
+    EwVkCarrierRecordGpu q = query_arr[0];
+    EwVkCarrierRecordGpu r = recs[idx];
+    if (r.lane_u32 != pc.lane_filter_u32) {
+        out_scores[idx] = int64_t(0);
+        return;
+    }
+    if (pc.use_domain_u32 != 0u && !id9_eq(r)) {
+        out_scores[idx] = int64_t(0);
+        return;
+    }
+
+    out_scores[idx] = score_record(q, r);
+}

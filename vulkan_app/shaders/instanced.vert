@@ -1,4 +1,5 @@
 #version 450
+#extension GL_ARB_gpu_shader_int64 : require
 
 layout(push_constant) uniform Push {
     mat4 proj;
@@ -9,12 +10,12 @@ layout(push_constant) uniform Push {
 
 struct Inst {
     uint64_t object_id_u64;
-    uint32_t anchor_id_u32;
-    uint32_t kind_u32;
-    uint32_t albedo_rgba8;
-    uint32_t atmosphere_rgba8;
-    uint32_t _pad_a0_u32;
-    uint32_t _pad_a1_u32;
+    uint anchor_id_u32;
+    uint kind_u32;
+    uint albedo_rgba8;
+    uint atmosphere_rgba8;
+    uint _pad_a0_u32;
+    uint _pad_a1_u32;
     ivec4 rel_pos_q16_16;
     int radius_q16_16;
     int emissive_q16_16;

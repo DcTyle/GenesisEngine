@@ -1,0 +1,9 @@
+{
+	"InstallScripts" : 
+	[
+		"D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/cmake_install.cmake",
+		"D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/cmake_install.cmake",
+		"D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/runtime_cli/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

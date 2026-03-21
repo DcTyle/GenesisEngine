@@ -1,0 +1,12 @@
+run_id,status,hypothesis_or_purpose,key_result
+020_causal_pair_replay,present,causal replay from logged pair channels without shell scaling,exact onset targets preserved in baseline ledger; pair corrections shift corrected local times earlier
+022_pair_memory_adaptive_closure,present,exact closure with pair-memory-guided support and traced-residence reserve repayment,exact closure residual 0.0; onset-safe; final occupancies preserved
+023_parameter_correlation_closure,missing_transient,derive routing from parameter-correlation structure,chat-reported: exact closure residual 0.0; larger transport; dominant support deficit x local slope
+024_correlation_derived_zero_point_closure,missing_transient,derive zero-point redistribution from same correlation tensor as closure,chat-reported: closure residual 0.0; zero-point residual approx -3.25e-19
+025_lag_aware_temporal_tensor_closure,present,lag-aware rolling local temporal tensor,"exact closure and zero-point residual 0.0; support recruitment delayed, reserve repayment immediate"
+026_coherence_gated_lag_tensor_closure,present,coherence-gated lag tensor with lag persistence and margin,exact closure residual 0.0; transport reduced versus run 025
+027_temporal_coupling_collapse_probe,present,collapse proxy from temporal coupling at onset,sharp onset jumps in collapse proxy across outer bands
+028_winner_selection_collapse_operator,present,explicit winner-selection point-vector collapse operator,winner probabilities at onset ~0.998 but threshold crossing lagged a few steps
+029_temporal_alignment_probability_collapse,present,probability collapse from temporal alignments only,all outer bands lock within 1-2 steps after onset; same leader before/at onset
+030_nist_surrogate_projection,present,surrogate projection to NIST D-line scale,current toy step granularity not within NIST uncertainty scale
+031_interpolated_temporal_alignment_collapse,present,interpolated sub-step collapse when coherent branches conflict internally,r5/r6 fractional threshold crossings within about one-third step of onset

@@ -1,0 +1,37 @@
+{
+  "control_hybrid_scalar": {
+    "model": "control",
+    "r6_first_persistent_gt_0p2": 13,
+    "final_n_r2": 1.4384451611235831,
+    "final_n_r6": 0.8811112742573323,
+    "final_r6_over_r2": 0.6125442234927384,
+    "final_radii": [
+      1.7851052945222046,
+      2.3478629025633406,
+      6.301878710262205
+    ],
+    "final_path_mix": 1.0,
+    "final_support_gain_26": 1.0,
+    "final_support_gain_56": 1.0,
+    "final_rep_gain_13": 1.0,
+    "final_rep_gain_23": 1.0
+  },
+  "quartet_projection_hybrid": {
+    "model": "quartet_projected",
+    "r6_first_persistent_gt_0p2": 13,
+    "final_n_r2": 1.438441392811298,
+    "final_n_r6": 0.8811337779740759,
+    "final_r6_over_r2": 0.6125614727006591,
+    "final_radii": [
+      1.785091017539141,
+      2.34785310752793,
+      6.301848153477966
+    ],
+    "final_path_mix": 1.0015439325335584,
+    "final_support_gain_26": 1.0003213211610293,
+    "final_support_gain_56": 1.0001442403284106,
+    "final_rep_gain_13": 1.0008033029025736,
+    "final_rep_gain_23": 1.0003606008210264
+  },
+  "interpretation": "Axis resolution was moved out of the softer nucleus pull and into pair-specific quartet leakage/retention projection. The hybrid split nucleus stayed scalar. This improves final outer/inner balance slightly but does not materially improve outer onset, suggesting the remaining miss is still not solved by directional leakage projection alone."
+}

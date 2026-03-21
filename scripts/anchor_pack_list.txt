@@ -2,7 +2,7 @@
 # Keep this list stable-sorted to preserve deterministic blob ordering.
 
 include/GE_ai_policy.hpp
-include/GE_canonicalize_cuda.hpp
+include/ew_gpu_compute.hpp
 include/GE_coherence_graph_store.hpp
 include/GE_corpus_allowlist.hpp
 include/GE_corpus_anchor_store.hpp
@@ -17,12 +17,10 @@ include/GE_metric_registry.hpp
 include/GE_neural_phase_ai.hpp
 include/GE_object_memory.hpp
 include/GE_operator_registry.hpp
-include/GE_overlap_cuda.hpp
-include/GE_overlap_router.hpp
 include/GE_quantity_peeling_trainer.hpp
 include/GE_rate_limiter.hpp
 include/GE_safety_governor.hpp
-include/GE_topk_cuda.hpp
+include/carrier_bundle_gpu.hpp
 include/ancilla_ops.hpp
 include/ancilla_particle.hpp
 include/bytes_encoder.hpp
@@ -33,11 +31,15 @@ include/hydrator.hpp
 include/operator_validator.hpp
 include/substrate_alu.hpp
 include/substrate_harmonics.hpp
-include/symbol_tokenize_cuda.hpp
+shaders/vkcompute/carrier_bundle.comp
+shaders/vkcompute/ge_canonicalize.comp
+shaders/vkcompute/ge_overlap_scores.comp
+shaders/vkcompute/ge_topk_block.comp
+shaders/vkcompute/ge_topk_merge.comp
 include/text_encoder.hpp
 
 src/GE_ai_policy.cpp
-src/GE_canonicalize_cuda.cpp
+src/ew_gpu_compute.cpp
 src/GE_coherence_graph_store.cpp
 src/GE_corpus_allowlist.cpp
 src/GE_corpus_anchor_store.cpp
@@ -52,12 +54,11 @@ src/GE_metric_registry.cpp
 src/GE_neural_phase_ai.cpp
 src/GE_object_memory.cpp
 src/GE_operator_registry.cpp
-src/GE_overlap_cuda.cpp
-src/GE_overlap_router.cpp
+src/GE_overlap_gpu.cpp
 src/GE_quantity_peeling_trainer.cpp
 src/GE_rate_limiter.cpp
 src/GE_safety_governor.cpp
-src/GE_topk_cuda.cpp
+src/carrier_bundle_gpu.cpp
 src/ancilla_ops.cpp
 src/bytes_encoder.cpp
 src/canonical_ops.cpp
@@ -69,12 +70,8 @@ src/hydrator.cpp
 src/operator_validator.cpp
 src/substrate_alu.cpp
 src/substrate_harmonics.cpp
-src/symbol_tokenize_cuda.cpp
+shaders/vkcompute/symbol_tokenize.comp
 src/text_encoder.cpp
 
-cuda/GE_canonicalize_kernels.cu
-cuda/GE_overlap_kernels.cu
-cuda/GE_topk_select_kernels.cu
 cuda/crawler_encode_kernels.cu
 cuda/learning_gate_kernels.cu
-cuda/symbol_tokenize_kernels.cu

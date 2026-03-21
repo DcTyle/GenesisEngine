@@ -1,0 +1,310 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_runtime.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_camera_anchor.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_pulse_trajectory_bound.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_project_settings.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_g2p_english.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_asset_substrate.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_neural_phase_ai.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_ai_policy.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_ai_anticipation.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_state_signature.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_hilbert_actuation.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_fft_fixed.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_collision_env.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_voxel_coupling.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_coherence_bus.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_fourier_fanout.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_nbody.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_metric_registry.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_metric_claim.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_metric_templates.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_ai_vault.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_language_foundation.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_audio_wav.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_audio_features.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_speech_alignment.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_forced_aligner.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_voice_synth.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_g2p_lexicon.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_voice_predictive_model.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_prosody_planner.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_prosody_priors.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_phrase_priors.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_pause_priors.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_math_foundation.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_experiment_templates.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_domain_policy.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_rate_limiter.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_live_crawler.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_repo_reader.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_curriculum_manager.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_learning_checkpoint_gate.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_learning_automation.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_ai_regression_tests.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\code_artifact_ops.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\inspector_fields.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\coherence_graph.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\anchor_pack.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\ew_id9.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\coherence_gate.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\hydrator.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_operator_registry.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_corpus_allowlist.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_corpus_canonicalizer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_corpus_anchor_store.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_corpus_pulse_log.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_lane_threshold_schedule.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_quantity_peeling_trainer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_coherence_graph_store.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_safety_governor.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_phase_current.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_global_coherence.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\ancilla_ops.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\substrate_alu.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\substrate_harmonics.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\harmonic_signature.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\crawler_subsystem.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\delta_profiles.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\qubit_lanes.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\text_encoder.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\bytes_encoder.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_object_memory.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_uv_unwrap.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_uv_atlas_baker.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_shell_mesh.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_object_ancilla.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_object_local_cuda.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\ew_cordic.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\spec_aux_ops.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\canonical_ops.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\frequency_collapse.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\cmb_bath.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\operator_validator.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\ew_phase_transport.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\ew_substrate_manager.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\ew_runtime.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\ew_eq_exec.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\ew_flow_ir.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\ew_coherence_analyzer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\ewmesh_voxelizer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\field_lattice_cpu.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_planet_ancilla.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\crawler_encode_cuda.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\ew_txn_file.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\generated\anchor_pack_blobs.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\carrier_bundle_gpu.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_overlap_gpu.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\ew_gpu_compute.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\CMakeFiles\cfc47bc8163d49f746c57df1356878b0\anchor_pack_blobs.cpp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\GameCreation\GenesisEngine\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{95687D0A-0D2A-3374-856D-24C043C6D4F1}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{CAD0AF2C-8813-345A-813E-406BE26DC386}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

@@ -7,35 +7,24 @@
   },
   "configurePresets": [
     {
-      "name": "win64-vs2022-cuda",
-      "displayName": "Win64 VS2022 + CUDA (fresh build via script)",
+      "name": "win64-vs2022-clang-vulkan",
+      "displayName": "Win64 VS2022 ClangCL + Vulkan",
       "generator": "Visual Studio 17 2022",
+      "toolset": "ClangCL",
       "binaryDir": "${sourceDir}/out/build/${presetName}",
       "architecture": "x64",
       "cacheVariables": {
-        "CMAKE_CUDA_ARCHITECTURES": "75"
-      }
-    },
-    {
-      "name": "win64-ninja-cuda",
-      "displayName": "Win64 Ninja + CUDA (fresh build via script)",
-      "generator": "Ninja",
-      "binaryDir": "${sourceDir}/out/build/${presetName}",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release",
-        "CMAKE_CUDA_ARCHITECTURES": "75"
+        "EW_ENABLE_CUDA": "OFF",
+        "EW_BUILD_VULKAN_APP": "ON",
+        "GENESIS_BUILD_RUNTIME_APP": "ON",
+        "GENESIS_INSTALL_EDITOR_APP": "ON"
       }
     }
   ],
   "buildPresets": [
     {
-      "name": "win64-vs2022-cuda",
-      "configurePreset": "win64-vs2022-cuda",
-      "configuration": "Release"
-    },
-    {
-      "name": "win64-ninja-cuda",
-      "configurePreset": "win64-ninja-cuda",
+      "name": "win64-vs2022-clang-vulkan",
+      "configurePreset": "win64-vs2022-clang-vulkan",
       "configuration": "Release"
     }
   ]

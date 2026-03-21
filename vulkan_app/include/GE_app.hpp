@@ -19,6 +19,13 @@ struct AppConfig {
     std::string app_title_utf8;
     int initial_width = 1280;
     int initial_height = 720;
+    std::vector<std::string> startup_commands_utf8;
+    std::string output_log_path_utf8;
+    std::string app_user_model_id_utf8;
+    bool start_live_mode = false;
+    bool start_resonance_view = false;
+    bool start_confinement_particles = true;
+    bool start_visualization = true;
 };
 
 class App {
@@ -572,6 +579,8 @@ private:
     // Visualization toggle: when false, the app runs headless (no continuous presentation)
     // but simulation and verification continue.
     bool visualize_enabled_ = true;
+    bool confinement_particles_enabled_ = true;
+    std::wstring output_log_path_w_;
 
 // View modes
     bool immersion_mode_ = false; // Standard vs Immersion
@@ -626,6 +635,10 @@ private:
     void EmitEditorSnap();
     void EmitCameraSetFromRig();
 
+    void SubmitAiChatTextUtf8(uint32_t chat_idx_u32, const std::string& utf8, bool append_user_line);
+    void RequestChatGptResearchReply(uint32_t chat_idx_u32, const std::string& user_utf8);
+    std::string BuildChatGptResearchPromptUtf8(uint32_t chat_idx_u32, const std::string& user_utf8);
+    void ExecuteExternalCommandUtf8(const std::string& line);
     void AppendOutputUtf8(const std::string& line);
 };
 

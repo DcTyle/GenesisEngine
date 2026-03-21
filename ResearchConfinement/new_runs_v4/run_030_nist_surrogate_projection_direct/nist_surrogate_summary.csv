@@ -1,0 +1,16 @@
+quantity,value
+NIST surrogate D1 wavelength (A),6707.926
+NIST surrogate D2 wavelength (A),6707.775
+D-line separation (GHz),10.0607625878125
+Toy onset separation r6-r5 (steps),13.0
+Surrogate frequency scale (MHz/step),773.9048144471154
+NIST relative accuracy used,3e-11
+Approx absolute uncertainty from 3e-11 (kHz),13.407832719496925
+Approx comb tie accuracy from 3e-13 (kHz),0.13407832719496923
+Natural linewidth from NIST news (MHz),5.87
+r5 lock offset after onset (steps),1.0
+r5 lock offset after onset (MHz surrogate),773.9048144471154
+r6 lock offset after onset (steps),2.0
+r6 lock offset after onset (MHz surrogate),1547.8096288942309
+step scale / natural linewidth,131.8406838921832
+step scale / 3e-11 uncertainty,57720.35127808136

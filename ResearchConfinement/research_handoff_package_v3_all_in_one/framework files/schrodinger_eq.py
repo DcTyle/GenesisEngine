@@ -1,0 +1,189 @@
+# Path: core/schrodinger_eq.py
+# Description:
+#   Schrdinger-style time propagation utilities with DMT-effective Hamiltonians.
+#   - Provides small-state propagation drivers, batch evolution, checkpointing to VSD,
+#     and energy/coherence telemetry snapshots for deterministic diagnostics.
+#   - All terms derive from virtual environment data or explicit inputs (no arbitrary outputs).
+#   - ASCII-only implementation; numerically stable via soft renormalization and adaptive stepping.
+#
+#   Exports:
+#     propagate_two_level(...)
+#     propagate_n_level(...)
+#     batch_propagate(...)
+#     checkpoint_to_vsd(...)
+#     energy_proxy(...)
+#     diagnostic_propagation_health(...)
+#
+#   VSD keys (convention):
+#     telemetry/schrodinger/last_energy_proxy
+#     telemetry/schrodinger/last_norm
+#     checkpoints/<tag>/state_text
+#     checkpoints/<tag>/meta
+#
+#   Integration path uses core.hamiltonian_eq.make_propagator_first_order and adaptive integrator.
+
+from typing import List, Dict, Tuple, Optional
+from core import utils
+from core import constants_eq
+from core import hamiltonian_eq
+import hashlib
+
+def _soft_normalize(psi: List[complex]) -> List[complex]:
+    nrm = sum(abs(z) ** 2 for z in psi) ** 0.5
+    if nrm > 0:
+        return [z / nrm for z in psi]
+    return [1.0+0.0j if i == 0 else 0.0+0.0j for i in range(len(psi))]
+
+# -----------------------------
+# Energy proxy (scalar) from environment
+# -----------------------------
+def energy_proxy(field_strength: float = None,
+                 temperature_k: float = None,
+                 velocity_fraction_c: float = None,
+                 flux_factor: float = None,
+                 strain_factor: float = None) -> float:
+    """
+    Uses Hamiltonian norm as an energy-like proxy.
+    """
+    T = float(temperature_k) if temperature_k is not None else utils.env_temperature_k()
+    v = float(velocity_fraction_c) if velocity_fraction_c is not None else utils.env_velocity_fraction_c()
+    f = float(flux_factor) if flux_factor is not None else utils.env_flux_factor()
+    s = float(strain_factor) if strain_factor is not None else utils.env_strain_factor()
+    F = float(field_strength) if field_strength is not None else utils.env_field_strength()
+    return hamiltonian_eq.hamiltonian_norm(F, T, v, f, s)
+
+# -----------------------------
+# Two-level propagation
+# -----------------------------
+def propagate_two_level(state: List[complex],
+                        steps: int,
+                        dt_s: float,
+                        field_strength: float = None,
+                        temperature_k: float = None,
+                        velocity_fraction_c: float = None,
+                        flux_factor: float = None,
+                        strain_factor: float = None,
+                        damping: float = 0.0) -> List[complex]:
+    psi = list(state)
+    for _ in range(max(1, int(steps))):
+        psi = hamiltonian_eq.evolve_state_two_level(
+            psi, dt_s,
+            field_strength=field_strength,
+            temperature_k=temperature_k,
+            velocity_fraction_c=velocity_fraction_c,
+            flux_factor=flux_factor,
+            strain_factor=strain_factor,
+            damping=damping
+        )
+        psi = _soft_normalize(psi)
+    # Telemetry
+    utils.store("telemetry/schrodinger/last_energy_proxy", energy_proxy(field_strength, temperature_k, velocity_fraction_c, flux_factor, strain_factor))
+    utils.store("telemetry/schrodinger/last_norm", sum(abs(z) ** 2 for z in psi) ** 0.5)
+    return psi
+
+# -----------------------------
+# N-level propagation (dense proxy)
+# -----------------------------
+def propagate_n_level(state: List[complex],
+                      steps: int,
+                      dt_s: float,
+                      field_strength: float = None,
+                      temperature_k: float = None,
+                      velocity_fraction_c: float = None,
+                      flux_factor: float = None,
+                      strain_factor: float = None,
+                      damping: float = 0.0,
+                      seed: int = None) -> List[complex]:
+    psi = list(state)
+    for _ in range(max(1, int(steps))):
+        psi = hamiltonian_eq.evolve_state_n_level(
+            psi, dt_s,
+            field_strength=field_strength,
+            temperature_k=temperature_k,
+            velocity_fraction_c=velocity_fraction_c,
+            flux_factor=flux_factor,
+            strain_factor=strain_factor,
+            damping=damping,
+            seed=seed
+        )
+        psi = _soft_normalize(psi)
+    utils.store("telemetry/schrodinger/last_energy_proxy", energy_proxy(field_strength, temperature_k, velocity_fraction_c, flux_factor, strain_factor))
+    utils.store("telemetry/schrodinger/last_norm", sum(abs(z) ** 2 for z in psi) ** 0.5)
+    return psi
+
+# -----------------------------
+# Batch propagation convenience
+# -----------------------------
+def batch_propagate(states: List[List[complex]],
+                    steps: int,
+                    dt_s: float,
+                    mode: str = "two_level",
+                    field_strength: float = None,
+                    temperature_k: float = None,
+                    velocity_fraction_c: float = None,
+                    flux_factor: float = None,
+                    strain_factor: float = None,
+                    damping: float = 0.0,
+                    seed: int = None) -> List[List[complex]]:
+    """
+    Propagates a batch of states with identical parameters.
+    mode: "two_level" or "n_level"
+    """
+    out: List[List[complex]] = []
+    for psi in states:
+        if mode == "n_level":
+            out.append(propagate_n_level(psi, steps, dt_s,
+                                         field_strength, temperature_k, velocity_fraction_c,
+                                         flux_factor, strain_factor, damping, seed))
+        else:
+            out.append(propagate_two_level(psi, steps, dt_s,
+                                           field_strength, temperature_k, velocity_fraction_c,
+                                           flux_factor, strain_factor, damping))
+    return out
+
+# -----------------------------
+# Checkpointing to VSD
+# -----------------------------
+def checkpoint_to_vsd(tag: str, state: List[complex], meta: Dict[str, float]) -> Dict[str, str]:
+    """
+    Saves state and meta to VSD with integrity hash. ASCII-only, deterministic codec.
+    """
+    key_root = f"checkpoints/{tag}"
+    blob = utils.serialize_vector_with_tokens(state)
+    text = blob["text"]
+    h = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    utils.store(key_root + "/state_text", text)
+    utils.store(key_root + "/meta", dict(meta))
+    utils.store(key_root + "/integrity", h)
+    return {"key": key_root, "sha256": h}
+
+# -----------------------------
+# Diagnostics
+# -----------------------------
+def diagnostic_propagation_health(state: List[complex],
+                                  steps: int = 16,
+                                  dt_s: float = 1e-6) -> Dict[str, float]:
+    """
+    Small health-check that runs a brief two-level propagation and reports norm drift
+    and energy variability. Results are stored to VSD telemetry for the console.
+    """
+    base_energy = energy_proxy()
+    psi = list(state)
+    norms = []
+    energies = []
+    for _ in range(max(1, int(steps))):
+        psi = propagate_two_level(psi, 1, dt_s)
+        norms.append(sum(abs(z) ** 2 for z in psi) ** 0.5)
+        energies.append(energy_proxy())
+    drift = abs(norms[-1] - norms[0]) if norms else 0.0
+    varE = 0.0
+    if energies:
+        m = sum(energies) / len(energies)
+        varE = sum((e - m) * (e - m) for e in energies) / len(energies)
+    out = {
+        "norm_drift": float(drift),
+        "energy_var": float(varE),
+        "base_energy": float(base_energy)
+    }
+    utils.store("telemetry/schrodinger/health", out)
+    return out

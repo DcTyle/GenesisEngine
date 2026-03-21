@@ -1,4 +1,5 @@
 #include "GE_app.hpp"
+#include "ew_openai_chat.hpp"
 
 #include <vulkan/vulkan.h>
 #include <shellscalingapi.h>
@@ -17,6 +18,7 @@
 #include <cstring>
 #include <sstream>
 #include <cstdlib>
+#include <thread>
 
 #include "GE_runtime.hpp" // SubstrateManager
 #include "ew_runtime.h"      // ew_runtime_project_points
@@ -25,8 +27,9 @@
 #include "obj_import.hpp"
 #include "GE_render_instance.hpp"
 #include "ewmesh_voxelizer.hpp"
-#include "carrier_bundle_cuda.hpp"
+#include "carrier_bundle_gpu.hpp"
 #include "GE_control_packets.hpp"
+#include "GE_remote_control.hpp"
 
 #include <fstream>
 #include <filesystem>
@@ -38,6 +41,19 @@
 #pragma comment(lib, "Shcore.lib")
 
 namespace ewv {
+
+namespace {
+
+constexpr UINT EW_APPMSG_OPENAI_COMPLETE = WM_APP + 0x51u;
+
+struct EwOpenAiUiResult {
+    uint32_t chat_idx_u32 = 0u;
+    bool ok = false;
+    std::string text_utf8;
+    std::string status_utf8;
+};
+
+} // namespace
 
 // -----------------------------------------------------------------------------
 // UI Theme (Windows native host, Win64 app baseline)
@@ -911,6 +927,103 @@ static bool env_truthy(const char* name) {
     DWORD n = GetEnvironmentVariableA(name, buf, (DWORD)sizeof(buf));
     if (n == 0) return false;
     return (buf[0] == '1' || buf[0] == 'y' || buf[0] == 'Y' || buf[0] == 't' || buf[0] == 'T');
+}
+
+static std::string ew_trim_ascii_copy(std::string s) {
+    while (!s.empty() && (unsigned char)s.front() <= 32u) s.erase(s.begin());
+    while (!s.empty() && (unsigned char)s.back() <= 32u) s.pop_back();
+    return s;
+}
+
+static std::string ew_lower_ascii_copy(std::string s) {
+    for (char& c : s) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    return s;
+}
+
+static bool ew_parse_bool_ascii(const std::string& s, bool fallback) {
+    const std::string v = ew_lower_ascii_copy(ew_trim_ascii_copy(s));
+    if (v == "1" || v == "true" || v == "yes" || v == "on" || v == "enable" || v == "enabled") return true;
+    if (v == "0" || v == "false" || v == "no" || v == "off" || v == "disable" || v == "disabled") return false;
+    return fallback;
+}
+
+static void ew_append_prompt_section(std::string& out_utf8, const char* label_ascii, const std::string& payload_utf8) {
+    if (!label_ascii || payload_utf8.empty()) return;
+    out_utf8 += label_ascii;
+    out_utf8 += "\n";
+    out_utf8 += payload_utf8;
+    if (out_utf8.empty() || out_utf8.back() != '\n') out_utf8 += "\n";
+    out_utf8 += "\n";
+}
+
+static HICON ew_create_genesis_icon(int size_px) {
+    if (size_px <= 0) return nullptr;
+
+    BITMAPV5HEADER bi{};
+    bi.bV5Size = sizeof(bi);
+    bi.bV5Width = size_px;
+    bi.bV5Height = -size_px;
+    bi.bV5Planes = 1;
+    bi.bV5BitCount = 32;
+    bi.bV5Compression = BI_BITFIELDS;
+    bi.bV5RedMask = 0x00FF0000u;
+    bi.bV5GreenMask = 0x0000FF00u;
+    bi.bV5BlueMask = 0x000000FFu;
+    bi.bV5AlphaMask = 0xFF000000u;
+
+    void* bits = nullptr;
+    HDC screen = GetDC(nullptr);
+    HBITMAP color = CreateDIBSection(screen, reinterpret_cast<BITMAPINFO*>(&bi), DIB_RGB_COLORS, &bits, nullptr, 0);
+    ReleaseDC(nullptr, screen);
+    if (!color || !bits) {
+        if (color) DeleteObject(color);
+        return nullptr;
+    }
+
+    uint32_t* px = reinterpret_cast<uint32_t*>(bits);
+    const float size_f = (float)size_px;
+    for (int y = 0; y < size_px; ++y) {
+        for (int x = 0; x < size_px; ++x) {
+            const float fx = ((2.0f * (float)x + 1.0f) - size_f) / size_f;
+            const float fy = ((2.0f * (float)y + 1.0f) - size_f) / size_f;
+            const float rr = std::sqrt(fx * fx + fy * fy);
+            uint8_t r = 0u, g = 0u, b = 0u, a = 0u;
+            if (rr <= 0.94f) {
+                r = 16u; g = 16u; b = 16u; a = 236u;
+                if (rr >= 0.70f) {
+                    r = 212u; g = 175u; b = 55u; a = 255u;
+                }
+                const bool g_ring = (rr >= 0.30f && rr <= 0.58f && !(fx > 0.18f && fy < -0.02f));
+                const bool g_bar = (fy > -0.08f && fy < 0.08f && fx > 0.02f && fx < 0.54f);
+                const bool g_post = (fx > 0.16f && fx < 0.34f && fy > -0.02f && fy < 0.42f);
+                if (g_ring || g_bar || g_post) {
+                    r = 240u; g = 204u; b = 74u; a = 255u;
+                }
+            }
+            px[(size_t)y * (size_t)size_px + (size_t)x] =
+                ((uint32_t)a << 24) | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+        }
+    }
+
+    const size_t mask_stride = ((size_t)size_px + 31u) / 32u * 4u;
+    std::vector<uint8_t> mask_bits(mask_stride * (size_t)size_px, 0u);
+    HBITMAP mask = CreateBitmap(size_px, size_px, 1, 1, mask_bits.data());
+
+    ICONINFO ii{};
+    ii.fIcon = TRUE;
+    ii.hbmColor = color;
+    ii.hbmMask = mask;
+    HICON icon = CreateIconIndirect(&ii);
+
+    DeleteObject(color);
+    DeleteObject(mask);
+    return icon;
+}
+
+static HICON ew_get_genesis_icon(bool small) {
+    static HICON big_icon = ew_create_genesis_icon(64);
+    static HICON small_icon = ew_create_genesis_icon(32);
+    return small ? small_icon : big_icon;
 }
 
 static void vk_check(VkResult r, const char* what) {
@@ -2021,8 +2134,10 @@ void App::CreateMainWindow(HINSTANCE hInst) {
     WNDCLASSW wc{};
     wc.lpfnWndProc = &App::WndProcThunk;
     wc.hInstance = hInst;
-    wc.lpszClassName = L"GenesisEngineVulkanWnd";
+    wc.lpszClassName = GE_REMOTE_WINDOW_CLASS_W;
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    wc.hIcon = ew_get_genesis_icon(false);
+    wc.hIconSm = ew_get_genesis_icon(true);
     RegisterClassW(&wc);
 
     RECT r{0,0,cfg_.initial_width,cfg_.initial_height};
@@ -2035,6 +2150,10 @@ void App::CreateMainWindow(HINSTANCE hInst) {
         CW_USEDEFAULT, CW_USEDEFAULT,
         r.right - r.left, r.bottom - r.top,
         nullptr, nullptr, hInst, this);
+    if (hwnd_main_) {
+        SendMessageW(hwnd_main_, WM_SETICON, ICON_BIG, (LPARAM)ew_get_genesis_icon(false));
+        SendMessageW(hwnd_main_, WM_SETICON, ICON_SMALL, (LPARAM)ew_get_genesis_icon(true));
+    }
 
     // Minimal Unreal-style menu bar. Actions only route through deterministic
     // UI commands/control packets (no new simulation semantics).
@@ -8577,10 +8696,34 @@ int App::Run(HINSTANCE hInst) {
     // Win64 enforcement at runtime too (belt + suspenders)
     static_assert(sizeof(void*) == 8, "Win64 required");
 
+    std::wstring app_id_w = utf8_to_wide(cfg_.app_user_model_id_utf8.empty()
+        ? std::string(ew_editor_build_enabled ? "GenesisEngine.Viewport.Editor" : "GenesisEngine.Viewport.Runtime")
+        : cfg_.app_user_model_id_utf8);
+    if (!app_id_w.empty()) {
+        SetCurrentProcessExplicitAppUserModelID(app_id_w.c_str());
+    }
+
     CreateMainWindow(hInst);
     CreateChildWindows();
 
     scene_ = new Scene();
+    scene_->sm.visualization_headless = !cfg_.start_visualization;
+
+    {
+        std::filesystem::path log_path = cfg_.output_log_path_utf8.empty()
+            ? (std::filesystem::current_path() / "GenesisEngineState" / "Logs" / (ew_editor_build_enabled ? "genesis_viewport.log" : "genesis_runtime.log"))
+            : std::filesystem::path(cfg_.output_log_path_utf8);
+        std::error_code ec;
+        std::filesystem::create_directories(log_path.parent_path(), ec);
+        output_log_path_w_ = log_path.wstring();
+        FILE* f = nullptr;
+        _wfopen_s(&f, output_log_path_w_.c_str(), L"wb");
+        if (f) {
+            const char* hdr = "GENESIS_VIEWPORT_LOG v1\n";
+            fwrite(hdr, 1, std::strlen(hdr), f);
+            fclose(f);
+        }
+    }
 
     if (ew_editor_build_enabled) {
         SetContentBrowserViewMode(0u);
@@ -8610,7 +8753,27 @@ int App::Run(HINSTANCE hInst) {
 
 
     // Headless visualization mode: keep simulation running but skip continuous presentation.
-    visualize_enabled_ = !(env_truthy("GENESIS_HEADLESS") || env_truthy("HEADLESS"));
+    visualize_enabled_ = cfg_.start_visualization && !(env_truthy("GENESIS_HEADLESS") || env_truthy("HEADLESS"));
+    confinement_particles_enabled_ = cfg_.start_confinement_particles;
+    resonance_view_ = cfg_.start_resonance_view;
+    live_mode_enabled_ = cfg_.start_live_mode;
+    SyncLiveModeProjection();
+    if (!output_log_path_w_.empty()) {
+        AppendOutputUtf8(std::string("APP_LOG path=") + wide_to_utf8(output_log_path_w_));
+    }
+    AppendOutputUtf8(std::string("CONFINEMENT_VIEW:") + (confinement_particles_enabled_ ? "ON" : "OFF"));
+    {
+        std::wstring key_file_w;
+        std::string err_utf8;
+        if (ew_openai_chat_available(&key_file_w, &err_utf8)) {
+            AppendOutputUtf8(std::string("CHATGPT_READY model=") + ew_openai_default_model_utf8());
+        } else {
+            AppendOutputUtf8(std::string("CHATGPT_UNAVAILABLE reason=") + err_utf8);
+        }
+    }
+    for (const std::string& cmd : cfg_.startup_commands_utf8) {
+        ExecuteExternalCommandUtf8(cmd);
+    }
 
     vk_ = new VkCtx();
     vk_->enable_validation = env_truthy("EW_VK_VALIDATION");
@@ -9351,7 +9514,7 @@ if (editor_axis_constraint_u8_ == 1) {
 
     // Projection (camera-relative instances)
     scene_->instances.clear();
-    scene_->instances.reserve(scene_->objects.size());
+    scene_->instances.reserve(scene_->objects.size() + 20000u);
 
     auto ew_clamp_i32 = [](int64_t v, int32_t lo, int32_t hi) -> int32_t {
         if (v < (int64_t)lo) return lo;
@@ -9464,12 +9627,12 @@ scene_->instances.push_back(inst);
     {
         const uint32_t max_pts = 20000u;
         const std::vector<EwVizPoint> pts = ew_runtime_project_points(&scene_->sm, max_pts);
-        // Heuristic: if anchor points are returned, there will be very few.
-        // Lattice point clouds will usually be much larger.
-        if (pts.size() > scene_->objects.size()) {
+        if (!pts.empty()) {
             const float viz_scale_m = 50.0f;
             for (const EwVizPoint& p : pts) {
-                // Convert Q16.16 unit cube to meters.
+                const bool is_anchor_particle = (p.anchor_id != 0u);
+                if (is_anchor_particle && !confinement_particles_enabled_) continue;
+
                 const float wx = ((float)p.x_q16_16 / 65536.0f) * viz_scale_m;
                 const float wy = ((float)p.y_q16_16 / 65536.0f) * viz_scale_m;
                 const float wz = ((float)p.z_q16_16 / 65536.0f) * viz_scale_m;
@@ -9479,15 +9642,17 @@ scene_->instances.push_back(inst);
 
                 EwRenderInstance inst{};
                 inst.object_id_u64 = 0;
-                inst.anchor_id_u32 = 0;
+                inst.anchor_id_u32 = p.anchor_id;
                 inst.kind_u32 = 0;
                 inst.rel_pos_q16_16[0] = (int32_t)(cx * 65536.0f);
                 inst.rel_pos_q16_16[1] = (int32_t)(cy * 65536.0f);
                 inst.rel_pos_q16_16[2] = (int32_t)(cz * 65536.0f);
                 inst.rel_pos_q16_16[3] = 0;
 
-                inst.radius_q16_16 = (int32_t)(0.25f * 65536.0f);
-                inst.emissive_q16_16 = (int32_t)(2.0f * 65536.0f);
+                const float point_radius_m = is_anchor_particle ? 0.42f : 0.25f;
+                const float emissive = is_anchor_particle ? 3.25f : 2.0f;
+                inst.radius_q16_16 = (int32_t)(point_radius_m * 65536.0f);
+                inst.emissive_q16_16 = (int32_t)(emissive * 65536.0f);
                 inst.atmosphere_thickness_q16_16 = 0;
                 inst.lod_bias_q16_16 = 0;
                 inst.clarity_q16_16 = (int32_t)(1.0f * 65536.0f);
@@ -10290,13 +10455,8 @@ push.pointSize = 20000.0f;
 void App::OnSend() {
     wchar_t wbuf[4096];
     GetWindowTextW(hwnd_input_, wbuf, 4096);
-    std::string utf8 = wide_to_utf8(wbuf);
-    if (!utf8.empty() && scene_) {
-        // Conversational AI text stays on the dedicated chat path.
-        // Editor/app feature control belongs to GUI widgets, not the chat box.
-        scene_->SubmitAiChatLine(utf8);
-        SetWindowTextW(hwnd_input_, L"");
-    }
+    SubmitAiChatTextUtf8(ai_tab_index_u32_, wide_to_utf8(wbuf), false);
+    SetWindowTextW(hwnd_input_, L"");
 }
 
 void App::OnImportObj() {
@@ -11108,9 +11268,22 @@ void App::AppendOutputUtf8(const std::string& line) {
     std::wstring wline = utf8_to_wide(line);
     wline.append(L"\r\n");
 
-    int len = GetWindowTextLengthW(hwnd_output_);
-    SendMessageW(hwnd_output_, EM_SETSEL, (WPARAM)len, (LPARAM)len);
-    SendMessageW(hwnd_output_, EM_REPLACESEL, FALSE, (LPARAM)wline.c_str());
+    if (hwnd_output_) {
+        int len = GetWindowTextLengthW(hwnd_output_);
+        SendMessageW(hwnd_output_, EM_SETSEL, (WPARAM)len, (LPARAM)len);
+        SendMessageW(hwnd_output_, EM_REPLACESEL, FALSE, (LPARAM)wline.c_str());
+    }
+
+    if (!output_log_path_w_.empty()) {
+        FILE* f = nullptr;
+        _wfopen_s(&f, output_log_path_w_.c_str(), L"ab");
+        if (f) {
+            fwrite(line.data(), 1, line.size(), f);
+            const char nl = '\n';
+            fwrite(&nl, 1, 1, f);
+            fclose(f);
+        }
+    }
 
     // If the runtime emits AI chat lines, mirror them into the AI chat UI.
     // This keeps AI communication substrate-resident and UI-first.
@@ -11146,6 +11319,215 @@ void App::AppendOutputUtf8(const std::string& line) {
     // Content Browser now projects from structured runtime snapshots, not parsed UI text.
 }
 
+void App::SubmitAiChatTextUtf8(uint32_t chat_idx_u32, const std::string& utf8, bool append_user_line) {
+    if (!scene_) return;
+    if (chat_idx_u32 >= AI_CHAT_MAX) chat_idx_u32 = ai_tab_index_u32_;
+
+    const std::string trimmed = ew_trim_ascii_copy(utf8);
+    if (trimmed.empty()) return;
+
+    if (append_user_line) {
+        AiChatAppend(chat_idx_u32, std::wstring(L"You: ") + utf8_to_wide(trimmed));
+        if (chat_idx_u32 == ai_tab_index_u32_) AiChatRenderSelected();
+    }
+
+    scene_->SubmitAiChatLine(trimmed, chat_idx_u32, ai_chat_mode_u32_[chat_idx_u32]);
+    RefreshAiChatCortex(chat_idx_u32);
+    RequestChatGptResearchReply(chat_idx_u32, trimmed);
+}
+
+std::string App::BuildChatGptResearchPromptUtf8(uint32_t chat_idx_u32, const std::string& user_utf8) {
+    std::string prompt;
+    prompt.reserve(8192u);
+    prompt += "USER_QUERY\n";
+    prompt += user_utf8;
+    prompt += "\n\n";
+    prompt += "Treat the project spectrum lines as compressed eigen-spectra identifiers. "
+              "Treat coherence hits and navigation spine details as the repository coherence view. "
+              "Use only the provided repo context and say exactly which file or coherence query should be inspected next if evidence is thin.\n\n";
+
+    if (!scene_) return prompt;
+
+    RefreshAiNavigationSpine(chat_idx_u32);
+
+    std::vector<SubstrateManager::EwChatMemoryEntry> entries;
+    std::string cortex_summary_utf8;
+    (void)scene_->SnapshotAiChatMemory(ai_chat_mode_u32_[chat_idx_u32], 6u, entries, cortex_summary_utf8);
+    ew_append_prompt_section(prompt, "CHAT_CORTEX_SUMMARY", cortex_summary_utf8);
+
+    if (!entries.empty()) {
+        std::string recent_utf8;
+        for (size_t i = 0; i < entries.size(); ++i) {
+            recent_utf8 += std::to_string((unsigned long long)(i + 1u));
+            recent_utf8 += ". ";
+            recent_utf8 += entries[i].text_utf8;
+            recent_utf8 += "\n";
+        }
+        ew_append_prompt_section(prompt, "RECENT_CHAT_MEMORY", recent_utf8);
+    }
+
+    std::vector<std::string> spectrum_lines_utf8;
+    if (scene_->SnapshotAiProjectSpectrumLines(chat_idx_u32, 8u, spectrum_lines_utf8) && !spectrum_lines_utf8.empty()) {
+        std::string spectrum_utf8;
+        for (const std::string& line : spectrum_lines_utf8) {
+            spectrum_utf8 += "- ";
+            spectrum_utf8 += line;
+            spectrum_utf8 += "\n";
+        }
+        ew_append_prompt_section(prompt, "PROJECT_EIGEN_SPECTRA", spectrum_utf8);
+    }
+
+    std::string coherence_stats_utf8;
+    if (scene_->SnapshotCoherenceStats(coherence_stats_utf8)) {
+        ew_append_prompt_section(prompt, "COHERENCE_VIEW_STATS", coherence_stats_utf8);
+    }
+
+    const std::string spine_utf8 = wide_to_utf8(BuildAiNavigationSpineText(chat_idx_u32));
+    ew_append_prompt_section(prompt, "COHERENCE_NAVIGATION_SPINE", spine_utf8);
+
+    const std::string primary_path_utf8 = ResolveAiChatPrimaryPathUtf8(chat_idx_u32);
+    ew_append_prompt_section(prompt, "PRIMARY_PATH", primary_path_utf8);
+
+    if (!primary_path_utf8.empty()) {
+        std::vector<genesis::GeCoherenceHit> hits;
+        std::string err_utf8;
+        if (scene_->SnapshotRepoFileCoherenceHits(primary_path_utf8, 8u, hits, &err_utf8) && !hits.empty()) {
+            std::string hits_utf8;
+            for (size_t i = 0; i < hits.size(); ++i) {
+                hits_utf8 += std::to_string((unsigned long long)(i + 1u));
+                hits_utf8 += ". ";
+                hits_utf8 += hits[i].rel_path_utf8;
+                hits_utf8 += " score=";
+                hits_utf8 += std::to_string((unsigned long long)hits[i].score_u32);
+                hits_utf8 += "\n";
+            }
+            ew_append_prompt_section(prompt, "PRIMARY_PATH_COHERENCE_LINKS", hits_utf8);
+        }
+
+        std::string preview_utf8;
+        if (scene_->SnapshotRepoFilePreview(primary_path_utf8, 2048u, preview_utf8, &err_utf8) && !preview_utf8.empty()) {
+            ew_append_prompt_section(prompt, "PRIMARY_PATH_PREVIEW", preview_utf8);
+        }
+    }
+
+    prompt += "ANSWER_POLICY\n";
+    prompt += "- Be concise and practical.\n";
+    prompt += "- Distinguish facts from inferences.\n";
+    prompt += "- Prefer repo-aware research guidance over generic advice.\n";
+    return prompt;
+}
+
+void App::RequestChatGptResearchReply(uint32_t chat_idx_u32, const std::string& user_utf8) {
+    std::string key_err_utf8;
+    if (!ew_openai_chat_available(nullptr, &key_err_utf8)) return;
+
+    const std::string prompt_utf8 = BuildChatGptResearchPromptUtf8(chat_idx_u32, user_utf8);
+    const std::string instructions_utf8 =
+        "You are ChatGPT embedded inside the Genesis Engine Vulkan application. "
+        "The user wants research and reasoning grounded in the app's existing AI substrate. "
+        "Use the provided chat cortex, project eigen-spectra digest, coherence view, and primary file preview as canonical context. "
+        "Do not invent repository facts. If web research is helpful, use it and clearly separate repo facts from external facts.";
+
+    SetAiChatWorkflowEvent(chat_idx_u32, L"ChatGPT request queued", false);
+    if (hwnd_ai_panel_tool_status_ && chat_idx_u32 == ai_tab_index_u32_) {
+        SetWindowTextW(hwnd_ai_panel_tool_status_, L"ChatGPT: researching with project spectra and coherence context...");
+    }
+
+    const HWND notify_hwnd = hwnd_main_;
+    std::thread([notify_hwnd, chat_idx_u32, instructions_utf8, prompt_utf8]() {
+        EwOpenAiTextRequest request{};
+        request.instructions_utf8 = instructions_utf8;
+        request.input_utf8 = prompt_utf8;
+        request.model_utf8 = ew_openai_default_model_utf8();
+        request.enable_web_search = true;
+        request.max_output_tokens_u32 = 900u;
+
+        EwOpenAiTextResponse response{};
+        EwOpenAiUiResult* result = new EwOpenAiUiResult{};
+        result->chat_idx_u32 = chat_idx_u32;
+        result->ok = ew_openai_send_text_request(request, &response);
+        if (result->ok) {
+            result->text_utf8 = response.output_text_utf8;
+            result->status_utf8 = std::string("http=") + std::to_string((unsigned long long)response.http_status_u32) +
+                                  " model=" + request.model_utf8;
+        } else {
+            result->text_utf8 = response.error_utf8.empty() ? std::string("ChatGPT request failed.") : response.error_utf8;
+            result->status_utf8 = std::string("http=") + std::to_string((unsigned long long)response.http_status_u32);
+        }
+
+        if (!PostMessageW(notify_hwnd, EW_APPMSG_OPENAI_COMPLETE, 0, reinterpret_cast<LPARAM>(result))) {
+            delete result;
+        }
+    }).detach();
+}
+
+void App::ExecuteExternalCommandUtf8(const std::string& line) {
+    if (!scene_) return;
+
+    const std::string trimmed = ew_trim_ascii_copy(line);
+    if (trimmed.empty()) return;
+
+    const std::string lower = ew_lower_ascii_copy(trimmed);
+    if (lower.rfind("bootstrap:", 0) == 0 || lower.rfind("bootstrap ", 0) == 0) {
+        const size_t off = 10u;
+        const std::string payload = ew_trim_ascii_copy(trimmed.substr(off));
+        if (!payload.empty()) {
+            scene_->RequestGameBootstrap(payload);
+            AppendOutputUtf8(std::string("REMOTE_BOOTSTRAP req=") + payload);
+        }
+        return;
+    }
+    if (lower.rfind("chat:", 0) == 0 || lower.rfind("chat ", 0) == 0) {
+        const size_t off = 5u;
+        const std::string payload = ew_trim_ascii_copy(trimmed.substr(off));
+        if (!payload.empty()) {
+            SubmitAiChatTextUtf8(ai_tab_index_u32_, payload, true);
+            AppendOutputUtf8(std::string("REMOTE_CHAT bytes=") + std::to_string((unsigned long long)payload.size()));
+        }
+        return;
+    }
+    if (lower.rfind("viewport ", 0) == 0 || lower.rfind("viewport:", 0) == 0) {
+        const size_t off = 9u;
+        const std::string args = ew_trim_ascii_copy(trimmed.substr(off));
+        const std::string args_lower = ew_lower_ascii_copy(args);
+        if (args_lower.rfind("live ", 0) == 0) {
+            live_mode_enabled_ = ew_parse_bool_ascii(args.substr(5u), live_mode_enabled_);
+            SyncLiveModeProjection();
+            AppendOutputUtf8(std::string("REMOTE_VIEWPORT live=") + (live_mode_enabled_ ? "1" : "0"));
+            return;
+        }
+        if (args_lower.rfind("confinement ", 0) == 0 || args_lower.rfind("particles ", 0) == 0) {
+            const size_t arg_off = (args_lower.rfind("confinement ", 0) == 0) ? 12u : 10u;
+            confinement_particles_enabled_ = ew_parse_bool_ascii(args.substr(arg_off), confinement_particles_enabled_);
+            AppendOutputUtf8(std::string("REMOTE_VIEWPORT confinement=") + (confinement_particles_enabled_ ? "1" : "0"));
+            if (hwnd_viewport_) InvalidateRect(hwnd_viewport_, nullptr, FALSE);
+            return;
+        }
+        if (args_lower.rfind("resonance ", 0) == 0) {
+            resonance_view_ = ew_parse_bool_ascii(args.substr(10u), resonance_view_);
+            AppendOutputUtf8(std::string("REMOTE_VIEWPORT resonance=") + (resonance_view_ ? "1" : "0"));
+            if (hwnd_viewport_) InvalidateRect(hwnd_viewport_, nullptr, FALSE);
+            return;
+        }
+        if (args_lower.rfind("spectrum ", 0) == 0) {
+            spectrum_band_i32_ = std::atoi(args.substr(9u).c_str());
+            AppendOutputUtf8(std::string("REMOTE_VIEWPORT spectrum_band=") + std::to_string((long long)spectrum_band_i32_));
+            if (hwnd_viewport_) InvalidateRect(hwnd_viewport_, nullptr, FALSE);
+            return;
+        }
+        if (args_lower == "status") {
+            AppendOutputUtf8(std::string("REMOTE_VIEWPORT_STATUS live=") + (live_mode_enabled_ ? "1" : "0") +
+                             " confinement=" + (confinement_particles_enabled_ ? "1" : "0") +
+                             " resonance=" + (resonance_view_ ? "1" : "0") +
+                             " tick=" + std::to_string((unsigned long long)scene_->sm.canonical_tick));
+            return;
+        }
+    }
+
+    scene_->sm.ui_submit_user_text_line(trimmed);
+    AppendOutputUtf8(std::string("REMOTE_RUNTIME cmd=") + trimmed);
+}
+
 LRESULT CALLBACK App::WndProcThunk(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     if (msg == WM_NCCREATE) {
         auto cs = (CREATESTRUCTW*)lparam;
@@ -11158,6 +11540,38 @@ LRESULT CALLBACK App::WndProcThunk(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
 
 LRESULT App::WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     switch (msg) {
+        case EW_APPMSG_OPENAI_COMPLETE: {
+            EwOpenAiUiResult* result = reinterpret_cast<EwOpenAiUiResult*>(lparam);
+            if (!result) return 0;
+            const uint32_t chat_idx = (result->chat_idx_u32 < AI_CHAT_MAX) ? result->chat_idx_u32 : ai_tab_index_u32_;
+            if (result->ok) {
+                AiChatAppendAssistant(chat_idx, utf8_to_wide(result->text_utf8));
+                SetAiChatWorkflowEvent(chat_idx, L"ChatGPT response received", false);
+                AppendOutputUtf8(std::string("CHATGPT_REPLY chat=") + std::to_string((unsigned long long)(chat_idx + 1u)) +
+                                 " status=" + result->status_utf8);
+            } else {
+                const std::wstring err_w = utf8_to_wide(result->text_utf8.empty() ? std::string("ChatGPT request failed.") : result->text_utf8);
+                AiChatAppend(chat_idx, std::wstring(L"(ChatGPT error: ") + err_w + L")");
+                SetAiChatWorkflowEvent(chat_idx, L"ChatGPT request failed", false);
+                AppendOutputUtf8(std::string("CHATGPT_ERROR chat=") + std::to_string((unsigned long long)(chat_idx + 1u)) +
+                                 " status=" + result->status_utf8);
+            }
+            if (chat_idx == ai_tab_index_u32_) {
+                AiChatRenderSelected();
+                RefreshAiPanelChrome();
+            }
+            delete result;
+            return 0;
+        }
+        case WM_COPYDATA: {
+            if (hwnd != hwnd_main_ || !scene_) return FALSE;
+            const COPYDATASTRUCT* cds = reinterpret_cast<const COPYDATASTRUCT*>(lparam);
+            if (!cds || cds->dwData != GE_REMOTE_COPYDATA_MAGIC || !cds->lpData || cds->cbData == 0u) return FALSE;
+            std::string cmd(reinterpret_cast<const char*>(cds->lpData), (size_t)cds->cbData);
+            while (!cmd.empty() && cmd.back() == '\0') cmd.pop_back();
+            ExecuteExternalCommandUtf8(cmd);
+            return TRUE;
+        }
         case WM_ERASEBKGND: {
             ew_theme_init_once();
             HDC hdc = (HDC)wparam;
@@ -12053,17 +12467,8 @@ Reason: " + utf8_to_wide(stage_err) + L"
                     const uint32_t chat_idx = ai_tab_index_u32_;
                     // Conversational chat remains free-form text.
                     // Control belongs to dedicated widgets, not slash-command parsing.
-                    AiChatAppend(chat_idx, std::wstring(L"You: ") + ws);
-                    AiChatRenderSelected();
+                    SubmitAiChatTextUtf8(chat_idx, wide_to_utf8(ws), true);
                     SetWindowTextW(hwnd_ai_chat_input_, L"");
-
-                    // Submit into substrate as conversational chat text.
-                    // This bypasses app-surface command parsing so the chat box behaves like chat, not a terminal.
-                    if (scene_) {
-                        std::string utf8 = wide_to_utf8(ws);
-                        scene_->SubmitAiChatLine(utf8, chat_idx, ai_chat_mode_u32_[chat_idx]);
-                        RefreshAiChatCortex(chat_idx);
-                    }
                     return 0;
                 } else if (id == 4065) {
                     const uint32_t chat_idx = ai_tab_index_u32_;

@@ -1,0 +1,303 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <PreferredToolArchitecture>x64</PreferredToolArchitecture>
+  </PropertyGroup>
+  <PropertyGroup>
+    <ResolveNugetPackages>false</ResolveNugetPackages>
+  </PropertyGroup>
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="MinSizeRel|x64">
+      <Configuration>MinSizeRel</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="RelWithDebInfo|x64">
+      <Configuration>RelWithDebInfo</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{5008956B-B31A-3913-B628-88A02E6339D3}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+    <Platform>x64</Platform>
+    <ProjectName>ALL_BUILD</ProjectName>
+    <VCProjectUpgraderObjectName>NoUpgrade</VCProjectUpgraderObjectName>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>ClangCL</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>ClangCL</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>ClangCL</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>ClangCL</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <_ProjectFileVersion>10.0.20506.1</_ProjectFileVersion>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Midl>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Midl>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">
+    <Midl>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">
+    <Midl>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <CustomBuild Include="D:\GameCreation\GenesisEngine\CMakeLists.txt">
+      <UseUtf8Encoding>Always</UseUtf8Encoding>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Building Custom Rule D:/GameCreation/GenesisEngine/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">setlocal
+"D:\Program Files\CMake\bin\cmake.exe" -SD:/GameCreation/GenesisEngine -BD:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan --check-stamp-file D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\GameCreation\GenesisEngine\cmake\EwSpirvTools.cmake;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\CMakeFiles\4.2.3\CMakeCCompiler.cmake;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\CMakeFiles\4.2.3\CMakeCXXCompiler.cmake;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\CMakeFiles\4.2.3\CMakeRCCompiler.cmake;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\CMakeFiles\4.2.3\CMakeSystem.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CMakeCInformation.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CMakeCXXInformation.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CMakeCommonLanguageInclude.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CMakeGenericSystem.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CMakeInitializeConfigs.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CMakeLanguageInformation.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CMakeRCInformation.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CMakeSystemSpecificInformation.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CMakeSystemSpecificInitialize.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CPack.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CPackComponent.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\CMakeCommonCompilerMacros.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\Clang-C.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\Clang-CXX.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\Clang.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageHandleStandardArgs.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageMessage.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindPython\Support.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindPython3.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindVulkan.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Internal\CMakeCLinkerInformation.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Internal\CMakeCXXLinkerInformation.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Internal\CMakeCommonLinkerInformation.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Linker\LLD-C.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Linker\LLD-CXX.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Linker\LLD.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Linker\MSVC.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Linker\Windows-LLD-C.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Linker\Windows-LLD-CXX.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Linker\Windows-LLD.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Linker\Windows-MSVC.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-Clang-C.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-Clang-CXX.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-Clang.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-Initialize.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-MSVC.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\WindowsPaths.cmake;D:\Program Files\CMake\share\cmake-4.2\Templates\CPackConfig.cmake.in;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Building Custom Rule D:/GameCreation/GenesisEngine/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">setlocal
+"D:\Program Files\CMake\bin\cmake.exe" -SD:/GameCreation/GenesisEngine -BD:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan --check-stamp-file D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\GameCreation\GenesisEngine\cmake\EwSpirvTools.cmake;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\CMakeFiles\4.2.3\CMakeCCompiler.cmake;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\CMakeFiles\4.2.3\CMakeCXXCompiler.cmake;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\CMakeFiles\4.2.3\CMakeRCCompiler.cmake;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\CMakeFiles\4.2.3\CMakeSystem.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CMakeCInformation.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CMakeCXXInformation.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CMakeCommonLanguageInclude.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CMakeGenericSystem.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CMakeInitializeConfigs.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CMakeLanguageInformation.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CMakeRCInformation.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CMakeSystemSpecificInformation.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CMakeSystemSpecificInitialize.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CPack.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CPackComponent.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\CMakeCommonCompilerMacros.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\Clang-C.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\Clang-CXX.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\Clang.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageHandleStandardArgs.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageMessage.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindPython\Support.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindPython3.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindVulkan.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Internal\CMakeCLinkerInformation.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Internal\CMakeCXXLinkerInformation.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Internal\CMakeCommonLinkerInformation.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Linker\LLD-C.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Linker\LLD-CXX.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Linker\LLD.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Linker\MSVC.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Linker\Windows-LLD-C.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Linker\Windows-LLD-CXX.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Linker\Windows-LLD.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Linker\Windows-MSVC.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-Clang-C.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-Clang-CXX.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-Clang.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-Initialize.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-MSVC.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\WindowsPaths.cmake;D:\Program Files\CMake\share\cmake-4.2\Templates\CPackConfig.cmake.in;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Building Custom Rule D:/GameCreation/GenesisEngine/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">setlocal
+"D:\Program Files\CMake\bin\cmake.exe" -SD:/GameCreation/GenesisEngine -BD:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan --check-stamp-file D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\GameCreation\GenesisEngine\cmake\EwSpirvTools.cmake;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\CMakeFiles\4.2.3\CMakeCCompiler.cmake;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\CMakeFiles\4.2.3\CMakeCXXCompiler.cmake;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\CMakeFiles\4.2.3\CMakeRCCompiler.cmake;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\CMakeFiles\4.2.3\CMakeSystem.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CMakeCInformation.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CMakeCXXInformation.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CMakeCommonLanguageInclude.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CMakeGenericSystem.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CMakeInitializeConfigs.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CMakeLanguageInformation.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CMakeRCInformation.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CMakeSystemSpecificInformation.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CMakeSystemSpecificInitialize.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CPack.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CPackComponent.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\CMakeCommonCompilerMacros.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\Clang-C.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\Clang-CXX.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\Clang.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageHandleStandardArgs.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageMessage.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindPython\Support.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindPython3.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindVulkan.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Internal\CMakeCLinkerInformation.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Internal\CMakeCXXLinkerInformation.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Internal\CMakeCommonLinkerInformation.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Linker\LLD-C.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Linker\LLD-CXX.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Linker\LLD.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Linker\MSVC.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Linker\Windows-LLD-C.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Linker\Windows-LLD-CXX.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Linker\Windows-LLD.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Linker\Windows-MSVC.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-Clang-C.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-Clang-CXX.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-Clang.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-Initialize.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-MSVC.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\WindowsPaths.cmake;D:\Program Files\CMake\share\cmake-4.2\Templates\CPackConfig.cmake.in;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Building Custom Rule D:/GameCreation/GenesisEngine/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">setlocal
+"D:\Program Files\CMake\bin\cmake.exe" -SD:/GameCreation/GenesisEngine -BD:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan --check-stamp-file D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\GameCreation\GenesisEngine\cmake\EwSpirvTools.cmake;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\CMakeFiles\4.2.3\CMakeCCompiler.cmake;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\CMakeFiles\4.2.3\CMakeCXXCompiler.cmake;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\CMakeFiles\4.2.3\CMakeRCCompiler.cmake;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\CMakeFiles\4.2.3\CMakeSystem.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CMakeCInformation.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CMakeCXXInformation.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CMakeCommonLanguageInclude.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CMakeGenericSystem.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CMakeInitializeConfigs.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CMakeLanguageInformation.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CMakeRCInformation.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CMakeSystemSpecificInformation.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CMakeSystemSpecificInitialize.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CPack.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\CPackComponent.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\CMakeCommonCompilerMacros.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\Clang-C.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\Clang-CXX.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\Clang.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageHandleStandardArgs.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageMessage.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindPython\Support.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindPython3.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindVulkan.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Internal\CMakeCLinkerInformation.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Internal\CMakeCXXLinkerInformation.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Internal\CMakeCommonLinkerInformation.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Linker\LLD-C.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Linker\LLD-CXX.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Linker\LLD.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Linker\MSVC.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Linker\Windows-LLD-C.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Linker\Windows-LLD-CXX.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Linker\Windows-LLD.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Linker\Windows-MSVC.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-Clang-C.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-Clang-CXX.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-Clang.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-Initialize.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-MSVC.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\Platform\WindowsPaths.cmake;D:\Program Files\CMake\share\cmake-4.2\Templates\CPackConfig.cmake.in;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+  </ItemGroup>
+  <ItemGroup />
+  <ItemGroup>
+    <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\ZERO_CHECK.vcxproj">
+      <Project>{EF57CC11-CB31-3876-B50D-BE8D6AD98E6D}</Project>
+      <Name>ZERO_CHECK</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\EWShaders.vcxproj">
+      <Project>{1162C764-8942-3ED3-B853-05585F0640EC}</Project>
+      <Name>EWShaders</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EWVulkanComputeShaders.vcxproj">
+      <Project>{B1FC3847-045B-3C05-BB21-EC5E313F3F21}</Project>
+      <Name>EWVulkanComputeShaders</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.vcxproj">
+      <Project>{FC10132A-C155-390E-8E04-4FD6FD32A7F1}</Project>
+      <Name>EigenWareCore</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\coherence_gate.vcxproj">
+      <Project>{08F98444-8A5B-3FF5-89C4-019F0E53E2A7}</Project>
+      <Name>coherence_gate</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\ew_contract_harness.vcxproj">
+      <Project>{56D2BB27-A894-32ED-B246-48A40080C490}</Project>
+      <Name>ew_contract_harness</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\ew_crawler_loop.vcxproj">
+      <Project>{8B11D43E-4F96-37A6-B36A-AE4A443F1588}</Project>
+      <Name>ew_crawler_loop</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\ew_encode_state.vcxproj">
+      <Project>{3C3EFD58-987E-3E6E-B0A3-3F0A20B06CD3}</Project>
+      <Name>ew_encode_state</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\ew_flow_analyze.vcxproj">
+      <Project>{F9AA9914-BB83-3095-BBC4-B1D8C0EF5880}</Project>
+      <Name>ew_flow_analyze</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\runtime_cli\ew_runtime_cli.vcxproj">
+      <Project>{D2A79424-DA38-30B5-B85F-913A2AF61E48}</Project>
+      <Name>ew_runtime_cli</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\ew_self_patch_loop.vcxproj">
+      <Project>{AECADBC9-5874-3516-88A3-C4657F6B1FBE}</Project>
+      <Name>ew_self_patch_loop</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\ew_toolchain_loop.vcxproj">
+      <Project>{B1442001-E742-37C5-82E1-DF12EB7B8779}</Project>
+      <Name>ew_toolchain_loop</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\ew_verify_proofs.vcxproj">
+      <Project>{4A39B6CE-20DB-33E5-9861-36228CD5C48F}</Project>
+      <Name>ew_verify_proofs</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\ge_ai_determinism_test.vcxproj">
+      <Project>{FAD0649D-B766-3B6E-88CA-DFE667B28898}</Project>
+      <Name>ge_ai_determinism_test</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\ge_corpus_ingest.vcxproj">
+      <Project>{82250FF2-C0A9-3D78-B13D-6CCE82C0884E}</Project>
+      <Name>ge_corpus_ingest</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\ge_corpus_replay.vcxproj">
+      <Project>{10AD365E-977F-32C3-A92D-C764E607CC64}</Project>
+      <Name>ge_corpus_replay</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\ge_force_align.vcxproj">
+      <Project>{4CA7CB3A-5AF0-370F-B714-2A61377CCD05}</Project>
+      <Name>ge_force_align</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\ge_regression_suite.vcxproj">
+      <Project>{7CDD8A9D-734C-3A0E-92B0-56AD51D1481F}</Project>
+      <Name>ge_regression_suite</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\ge_speech_ingest.vcxproj">
+      <Project>{C387DE7F-841C-3CFE-B570-9FEF4FE5325D}</Project>
+      <Name>ge_speech_ingest</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\ge_tts_speak.vcxproj">
+      <Project>{97D0FB51-0672-3D0E-B83D-B22D7A3F2CEE}</Project>
+      <Name>ge_tts_speak</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\ge_vocab_recall_test.vcxproj">
+      <Project>{C64B929F-80B7-31B6-8281-66E8B8ED72D3}</Project>
+      <Name>ge_vocab_recall_test</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\ge_voice_train.vcxproj">
+      <Project>{D0112635-BB5E-3273-993C-A4DFCE61BDCB}</Project>
+      <Name>ge_voice_train</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\ge_wikimedia_dump_extract.vcxproj">
+      <Project>{362204B4-3A38-36F7-83AC-6176D65FEB72}</Project>
+      <Name>ge_wikimedia_dump_extract</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\genesis_app.vcxproj">
+      <Project>{591C5C49-22EB-3476-A582-CF9E0941E4F1}</Project>
+      <Name>genesis_app</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\genesis_remote.vcxproj">
+      <Project>{088D261A-7688-319F-A9EF-EC7612F3F8DD}</Project>
+      <Name>genesis_remote</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\genesis_runtime.vcxproj">
+      <Project>{EEF999DF-2260-34C6-A438-6FBC5A90C356}</Project>
+      <Name>genesis_runtime</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\test_ai_golden.vcxproj">
+      <Project>{C2D66318-7185-3740-B63C-938FA62F9A7E}</Project>
+      <Name>test_ai_golden</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\test_contact_constraint.vcxproj">
+      <Project>{CFF9D31C-CE67-36BA-9E1D-B9597E0A6DD5}</Project>
+      <Name>test_contact_constraint</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\test_determinism.vcxproj">
+      <Project>{2A9FDC9C-AD01-3B33-8771-F9F03979E594}</Project>
+      <Name>test_determinism</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\test_microprocessor.vcxproj">
+      <Project>{9EB91A65-A5A5-32F5-850F-8D2148DA4A3E}</Project>
+      <Name>test_microprocessor</Name>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

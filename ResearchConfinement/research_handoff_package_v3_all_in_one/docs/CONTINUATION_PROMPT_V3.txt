@@ -1,0 +1,37 @@
+Use the attached `research_handoff_package_v3_all_in_one.zip` as the continuation source of truth.
+
+Read first:
+- docs/README_CONTINUATION_V3.md
+- docs/EXPERIMENT_ARCHIVE_V3.md
+- docs/MATH_STACK_AND_RESULTS_V3.md
+- docs/CONTINUATION_PROMPT_V3.txt
+- all files in `framework files/`
+- all folders in `continuation_runs/`
+- original_inputs/research_handoff_package.zip
+- original_inputs/research_handoff_package_full_experiment.zip
+- original_inputs/research_handoff_package_v2.zip
+
+Rules:
+1. Continue from package state. Do not restart from scratch.
+2. Treat this as a toy / analogue DMT-native lithium-at-absolute-zero research program, not validated real-world particle physics.
+3. Preserve identity-preserving vs environment-responsive split.
+4. Treat all `_eff` quantities as derived effective values from relativistic correlation / stochastic dispersion / Doppler-effective channels, never as arbitrary tuning constants.
+5. Do not introduce arbitrary shell-scaling factors.
+6. Prefer structural bookkeeping changes over brute coefficient fitting.
+7. Keep traced residence, pair-channel temporal memory, and zero-point temporal bookkeeping in view.
+8. When you run a new simulation, write the script and CSV/JSON outputs into a new run folder.
+
+Canonical lithium target ledger:
+- onset targets: r2=4, r3=5, r5=18, r6=31
+- final occupancy targets: r2=2.1869844098, r3=1.8317995831, r5=0.8290027574, r6=0.6721458802
+
+Current best late-stage known result from the accessible archive:
+- pair temporal dynamics pass: exact onset targets with tiny uniform under-target amplitudes (~99.98% toy accuracy, per chat ledger)
+- localized zero-point redistribution pass: exact onset targets with tiny under-target amplitudes and approximate zero-point conservation (~99.93% toy accuracy, per chat ledger)
+
+Immediate next task:
+- continue from the best pair-temporal / zero-point-localized state
+- preserve exact onset structure
+- keep zero-point temporal mechanics conserved or near-conserved across the full system
+- improve partitioning closure so temporal budget balances exactly without starving r5 and r6
+- do not throw away traced residence / pair-channel temporal memory machinery

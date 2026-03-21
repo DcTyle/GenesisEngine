@@ -1,0 +1,98 @@
+#version 460
+#extension GL_ARB_gpu_shader_int64 : require
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform Push {
+    uint anchors_n;
+    uint ids_n;
+} pc;
+
+struct EwCarrierTripleGpu {
+    uint x_u32;
+    uint y_u32;
+    uint z_u32;
+};
+
+layout(std430, binding = 0) readonly buffer DopplerBuf {
+    int64_t doppler_q[];
+};
+
+layout(std430, binding = 1) readonly buffer MassBuf {
+    int64_t m_q[];
+};
+
+layout(std430, binding = 2) readonly buffer CurvatureBuf {
+    int64_t curvature_q[];
+};
+
+layout(std430, binding = 3) readonly buffer FluxBuf {
+    uint flux_grad_mean_q15[];
+};
+
+layout(std430, binding = 4) readonly buffer HarmBuf {
+    uint harmonics_mean_q15[];
+};
+
+layout(std430, binding = 5) readonly buffer IdsBuf {
+    uint anchor_ids[];
+};
+
+layout(std430, binding = 6) buffer OutBuf {
+    EwCarrierTripleGpu out_triples[];
+};
+
+int clamp_i32(int64_t v, int lo, int hi) {
+    if (v < int64_t(lo)) return lo;
+    if (v > int64_t(hi)) return hi;
+    return int(v);
+}
+
+int doppler_k_q16_16(int64_t doppler_turns_q) {
+    int64_t absd = (doppler_turns_q < int64_t(0)) ? -doppler_turns_q : doppler_turns_q;
+    int64_t denom = int64_t(1000000000000000000L) + absd;
+    if (denom <= int64_t(0)) return 0;
+    int64_t num = doppler_turns_q << 16;
+    return clamp_i32(num / denom, -65536, 65536);
+}
+
+int leak_density_q16_16(int64_t mass_turns_q) {
+    int64_t d = int64_t(1000000000000000000L) - mass_turns_q;
+    if (d < int64_t(0)) d = int64_t(0);
+    int64_t num = d << 16;
+    return clamp_i32(num / int64_t(1000000000000000000L), 0, 65536);
+}
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pc.ids_n) return;
+
+    uint a0 = anchor_ids[idx];
+    if (pc.anchors_n == 0u || a0 >= pc.anchors_n) {
+        out_triples[idx].x_u32 = 0u;
+        out_triples[idx].y_u32 = 0u;
+        out_triples[idx].z_u32 = 0u;
+        return;
+    }
+
+    uint a1 = (a0 + 1u) % pc.anchors_n;
+    uint a2 = (a0 + 2u) % pc.anchors_n;
+
+    int d0 = doppler_k_q16_16(doppler_q[a0]);
+    int d1 = doppler_k_q16_16(doppler_q[a1]);
+    int d2 = doppler_k_q16_16(doppler_q[a2]);
+    int doppler_bundled = clamp_i32((int64_t(d0) + int64_t(d1) + int64_t(d2)) / 3, -65536, 65536);
+
+    int l0 = leak_density_q16_16(m_q[a0]);
+    int l1 = leak_density_q16_16(m_q[a1]);
+    int l2 = leak_density_q16_16(m_q[a2]);
+    int leak_bundled = clamp_i32((int64_t(l0) + int64_t(l1) + int64_t(l2)) / 3, 0, 65536);
+
+    uint h = ((harmonics_mean_q15[a0] + harmonics_mean_q15[a1] + harmonics_mean_q15[a2]) / 3u) & 65535u;
+    uint g = ((flux_grad_mean_q15[a0] + flux_grad_mean_q15[a1] + flux_grad_mean_q15[a2]) / 3u) & 65535u;
+    uint z = ((g & 65535u) << 16u) | (h & 65535u);
+
+    out_triples[idx].x_u32 = uint(leak_bundled);
+    out_triples[idx].y_u32 = uint(doppler_bundled);
+    out_triples[idx].z_u32 = z;
+}

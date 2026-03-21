@@ -1,0 +1,113 @@
+#version 460
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform Push {
+    uint count_u32;
+    uint max_tokens_u32;
+} pc;
+
+struct EwSymbolToken9Gpu {
+    uint lanes_u32[9];
+    uint len_u32;
+    uint artifact_id_u32;
+    uint reserved_u32;
+};
+
+layout(std430, binding = 0) readonly buffer BytesBuf {
+    uint byte_words[];
+};
+
+layout(std430, binding = 1) readonly buffer OffsetsBuf {
+    uint offsets_u32[];
+};
+
+layout(std430, binding = 2) readonly buffer LensBuf {
+    uint lens_u32[];
+};
+
+layout(std430, binding = 3) readonly buffer IdsBuf {
+    uint artifact_ids_u32[];
+};
+
+layout(std430, binding = 4) buffer TokensBuf {
+    EwSymbolToken9Gpu out_tokens[];
+};
+
+layout(std430, binding = 5) buffer CountsBuf {
+    uint out_counts_u32_per_artifact[];
+};
+
+uint read_byte(uint idx) {
+    uint word = byte_words[idx >> 2];
+    uint shift = (idx & 3u) * 8u;
+    return (word >> shift) & 0xFFu;
+}
+
+bool is_ident_start(uint c) {
+    return c == 95u || (c >= 65u && c <= 90u) || (c >= 97u && c <= 122u);
+}
+
+bool is_ident_body(uint c) {
+    return is_ident_start(c) || (c >= 48u && c <= 57u);
+}
+
+void encode_symbol_9d(uint start, uint len, out uint lanes[9]) {
+    for (uint i = 0u; i < 9u; ++i) lanes[i] = 0u;
+    uint n = min(len, 36u);
+    for (uint i = 0u; i < n; ++i) {
+        uint lane = i >> 2u;
+        uint shift = (i & 3u) * 8u;
+        lanes[lane] |= read_byte(start + i) << shift;
+    }
+}
+
+void main() {
+    uint art_i = gl_GlobalInvocationID.x;
+    if (art_i >= pc.count_u32) return;
+
+    uint off = offsets_u32[art_i];
+    uint len = lens_u32[art_i];
+    uint art_id = artifact_ids_u32[art_i];
+    uint out_count = 0u;
+    uint i = 0u;
+
+    while (i < len) {
+        uint c = read_byte(off + i);
+        if (!is_ident_start(c)) {
+            i += 1u;
+            continue;
+        }
+
+        uint start = i;
+        i += 1u;
+        while (i < len && is_ident_body(read_byte(off + i))) i += 1u;
+        uint tok_len = i - start;
+
+        if (out_count < pc.max_tokens_u32) {
+            uint dst_i = art_i * pc.max_tokens_u32 + out_count;
+            uint lanes[9];
+            encode_symbol_9d(off + start, tok_len, lanes);
+            for (uint lane = 0u; lane < 9u; ++lane) {
+                out_tokens[dst_i].lanes_u32[lane] = lanes[lane];
+            }
+            out_tokens[dst_i].len_u32 = tok_len;
+            out_tokens[dst_i].artifact_id_u32 = art_id;
+            if (tok_len > 36u) {
+                uint sfx = 0u;
+                uint base = tok_len - 4u;
+                for (uint j = 0u; j < 4u; ++j) {
+                    sfx |= read_byte(off + start + base + j) << (j * 8u);
+                }
+                out_tokens[dst_i].reserved_u32 = sfx;
+            } else {
+                out_tokens[dst_i].reserved_u32 = 0u;
+            }
+            out_count += 1u;
+        } else {
+            break;
+        }
+    }
+
+    out_counts_u32_per_artifact[art_i] = out_count;
+}

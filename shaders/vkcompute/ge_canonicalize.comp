@@ -1,0 +1,145 @@
+#version 460
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform Push {
+    uint in_len_u32;
+    uint out_cap_u32;
+} pc;
+
+layout(std430, binding = 0) readonly buffer InBuf {
+    uint in_words[];
+};
+
+layout(std430, binding = 1) buffer OutBuf {
+    uint out_words[];
+};
+
+layout(std430, binding = 2) buffer MetaBuf {
+    uint meta_words[4];
+};
+
+uint read_byte(uint idx) {
+    uint word = in_words[idx >> 2];
+    uint shift = (idx & 3u) * 8u;
+    return (word >> shift) & 0xFFu;
+}
+
+void write_byte(uint idx, uint value) {
+    uint word_i = idx >> 2;
+    uint shift = (idx & 3u) * 8u;
+    uint mask = 0xFFu << shift;
+    out_words[word_i] = (out_words[word_i] & (~mask)) | ((value & 0xFFu) << shift);
+}
+
+bool utf8_next(uint n, inout uint idx) {
+    if (idx >= n) return true;
+    uint c = read_byte(idx);
+    if (c <= 0x7Fu) {
+        idx += 1u;
+        return true;
+    }
+
+    if ((c & 0xE0u) == 0xC0u) {
+        if (idx + 1u >= n) return false;
+        uint c1 = read_byte(idx + 1u);
+        if ((c1 & 0xC0u) != 0x80u) return false;
+        uint cp = ((c & 0x1Fu) << 6u) | (c1 & 0x3Fu);
+        if (cp < 0x80u) return false;
+        idx += 2u;
+        return true;
+    }
+
+    if ((c & 0xF0u) == 0xE0u) {
+        if (idx + 2u >= n) return false;
+        uint c1 = read_byte(idx + 1u);
+        uint c2 = read_byte(idx + 2u);
+        if ((c1 & 0xC0u) != 0x80u || (c2 & 0xC0u) != 0x80u) return false;
+        uint cp = ((c & 0x0Fu) << 12u) | ((c1 & 0x3Fu) << 6u) | (c2 & 0x3Fu);
+        if (cp < 0x800u) return false;
+        if (cp >= 0xD800u && cp <= 0xDFFFu) return false;
+        idx += 3u;
+        return true;
+    }
+
+    if ((c & 0xF8u) == 0xF0u) {
+        if (idx + 3u >= n) return false;
+        uint c1 = read_byte(idx + 1u);
+        uint c2 = read_byte(idx + 2u);
+        uint c3 = read_byte(idx + 3u);
+        if ((c1 & 0xC0u) != 0x80u || (c2 & 0xC0u) != 0x80u || (c3 & 0xC0u) != 0x80u) return false;
+        uint cp = ((c & 0x07u) << 18u) | ((c1 & 0x3Fu) << 12u) | ((c2 & 0x3Fu) << 6u) | (c3 & 0x3Fu);
+        if (cp < 0x10000u) return false;
+        if (cp > 0x10FFFFu) return false;
+        idx += 4u;
+        return true;
+    }
+
+    return false;
+}
+
+void main() {
+    uint i = 0u;
+    uint o = 0u;
+    uint invalid = 0u;
+
+    while (i < pc.in_len_u32) {
+        uint j = i;
+        if (!utf8_next(pc.in_len_u32, j)) {
+            invalid = 1u;
+            break;
+        }
+        i = j;
+    }
+
+    if (invalid != 0u) {
+        meta_words[0] = 0u;
+        meta_words[1] = 1u;
+        meta_words[2] = 0u;
+        meta_words[3] = 0u;
+        return;
+    }
+
+    i = 0u;
+    uint pending_space = 0u;
+    uint pending_lf = 0u;
+    uint paragraph_breaks = 0u;
+
+    while (i < pc.in_len_u32 && o < pc.out_cap_u32) {
+        uint c = read_byte(i++);
+        if (c == 13u) {
+            if (i < pc.in_len_u32 && read_byte(i) == 10u) i += 1u;
+            c = 10u;
+        }
+
+        if (c == 10u) {
+            pending_space = 0u;
+            pending_lf += 1u;
+            if (pending_lf == 1u) {
+                write_byte(o++, 10u);
+            } else if (pending_lf == 2u) {
+                write_byte(o++, 10u);
+                paragraph_breaks += 1u;
+            }
+            continue;
+        }
+
+        if (c == 32u || c == 9u) {
+            pending_space = 1u;
+            continue;
+        }
+
+        pending_lf = 0u;
+        if (pending_space != 0u) {
+            if (o < pc.out_cap_u32) write_byte(o++, 32u);
+            pending_space = 0u;
+        }
+
+        write_byte(o++, c);
+    }
+
+    meta_words[0] = o;
+    meta_words[1] = 0u;
+    meta_words[2] = paragraph_breaks;
+    meta_words[3] = 0u;
+}

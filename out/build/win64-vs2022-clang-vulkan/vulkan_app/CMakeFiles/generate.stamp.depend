@@ -1,0 +1,6 @@
+# CMake generation dependency list for this directory.
+D:/GameCreation/GenesisEngine/cmake/EwSpirvTools.cmake
+D:/GameCreation/GenesisEngine/vulkan_app/CMakeLists.txt
+D:/Program Files/CMake/share/cmake-4.2/Modules/FindPackageHandleStandardArgs.cmake
+D:/Program Files/CMake/share/cmake-4.2/Modules/FindPackageMessage.cmake
+D:/Program Files/CMake/share/cmake-4.2/Modules/FindVulkan.cmake

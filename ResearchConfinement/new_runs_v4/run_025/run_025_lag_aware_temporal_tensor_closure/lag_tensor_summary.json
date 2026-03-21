@@ -1,0 +1,434 @@
+{
+  "run_id": "025_lag_aware_temporal_tensor_closure",
+  "hypothesis": "Exact closure should survive when the correlation tensor is made explicitly temporal and causal by using rolling local neighborhoods with lag selection rather than static same-index correlations.",
+  "method": {
+    "frozen_region": "all dn_j(t) for t <= onset_j are left unchanged",
+    "support_window_rule": "t in [onset_j+1, onset_j+12]",
+    "reserve_window_rule": "t in [onset_j+14, end]",
+    "temporal_tensor_rule": "support, reserve, and zero-point channels are computed from lag-aware rolling local correlations over causal neighborhoods",
+    "support_lags_tested": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "reserve_lags_tested": [
+      0,
+      1,
+      2
+    ],
+    "support_window_size": 5,
+    "reserve_window_size": 7,
+    "support_channels": [
+      "lag-best(pair_memory x upstream_slope)",
+      "lag-best(residence x deficit)",
+      "lag-best(deficit x local_slope)",
+      "lag-best(curvature x deficit)",
+      "lag-best(pair_memory x tail_persistence)",
+      "zero_point_support_drive"
+    ],
+    "reserve_channels": [
+      "lag-best(residence x donor_activity)",
+      "lag-best(tail_persistence x donor_activity)",
+      "lag-best(closure_readiness x donor_activity)",
+      "lag-best(curvature x donor_activity)",
+      "zero_point_reserve_relax"
+    ],
+    "transport_fraction_rule": "pair_support_norm_j * deficit_norm_like_j * support_coherence_j * reserve_coherence_j * causal_alignment_j * reserve_alignment_j * zp_support_factor_j * zp_reserve_factor_j",
+    "exact_balance_rule": "mass added to support equals mass removed from reserve exactly inside each band; final target is reserve-renormalized only"
+  },
+  "transport_ledger": [
+    {
+      "radius_bin": 3,
+      "support_start": 6,
+      "support_end": 17,
+      "reserve_start": 19,
+      "reserve_end": 119,
+      "pair_support_raw": 0.15899233739180108,
+      "pair_support_norm": 1.0,
+      "correlation_deficit_raw": 1.3982780087993374,
+      "support_coherence": 0.6711982757202813,
+      "reserve_coherence": 0.0565897764802376,
+      "causal_alignment": 0.2777777777777778,
+      "reserve_alignment": 0.022277227722772276,
+      "zp_support_coherence": 0.7491346841278577,
+      "zp_reserve_coherence": 0.19819767431087087,
+      "reserve_mass": 0.36444132801943385,
+      "transport_fraction": 0.012321805977767544,
+      "actual_transport": 0.004490575334135403,
+      "zp_added": 0.004490575334135403,
+      "zp_removed": 0.004490575334135403,
+      "baseline_final_n": 1.831799583084502,
+      "lag_tensor_final_n": 1.8317995830845017,
+      "post_onset_centroid_baseline": 13.118305244621798,
+      "post_onset_centroid_lag_tensor": 13.085831280976516,
+      "support_strengths": {
+        "pair_upstream_slope_lagbest": 6.500898075108617,
+        "residence_deficit_lagbest": 0.0,
+        "deficit_local_slope_lagbest": 6.85506673172763,
+        "curvature_deficit_lagbest": 5.978116640296987,
+        "pair_tail_lagbest": 0.0,
+        "zp_drive_support": 4.885798505264472
+      },
+      "reserve_strengths": {
+        "residence_donor_lagbest": 0.0,
+        "tail_donor_lagbest": 19.900978688713323,
+        "closure_donor_lagbest": 0.0,
+        "curvature_donor_lagbest": 20.301282059608567,
+        "zp_relax_reserve": 11.005583784426616
+      },
+      "support_channel_weights": {
+        "pair_upstream_slope_lagbest": 0.26841165554434454,
+        "residence_deficit_lagbest": 0.0,
+        "deficit_local_slope_lagbest": 0.28303471136935643,
+        "curvature_deficit_lagbest": 0.24682684852469394,
+        "pair_tail_lagbest": 0.0,
+        "zp_drive_support": 0.20172678456156382
+      },
+      "reserve_channel_weights": {
+        "residence_donor_lagbest": 0.0,
+        "tail_donor_lagbest": 0.3886314464180548,
+        "closure_donor_lagbest": 0.0,
+        "curvature_donor_lagbest": 0.3964486739258292,
+        "zp_relax_reserve": 0.21491987965609632
+      },
+      "lag_strengths": {
+        "support_pair_upstream": {
+          "lag_0": 15.309907243916,
+          "lag_1": 14.437245373978831,
+          "lag_2": 15.464109316759188,
+          "lag_3": 16.4298834665607
+        },
+        "support_residence_deficit": {
+          "lag_0": 0.0,
+          "lag_1": 0.0,
+          "lag_2": 0.0,
+          "lag_3": 0.0
+        },
+        "support_deficit_slope": {
+          "lag_0": 17.502735945033464,
+          "lag_1": 16.459474902645884,
+          "lag_2": 15.432613522918617,
+          "lag_3": 14.407595751109932
+        },
+        "support_curvature_deficit": {
+          "lag_0": 16.348326439609814,
+          "lag_1": 17.378988539817243,
+          "lag_2": 18.44728735950867,
+          "lag_3": 19.55318666750317
+        },
+        "support_pair_tail": {
+          "lag_0": 3.376303456349625,
+          "lag_1": 4.450451530943809,
+          "lag_2": 5.497695693279226,
+          "lag_3": 6.524048657555948
+        },
+        "reserve_residence_donor": {
+          "lag_0": 9.798754527638305,
+          "lag_1": 6.919598856791313,
+          "lag_2": 7.007436890819041
+        },
+        "reserve_tail_donor": {
+          "lag_0": 27.11552356363223,
+          "lag_1": 25.80928291155479,
+          "lag_2": 24.50369198545426
+        },
+        "reserve_closure_donor": {
+          "lag_0": 10.18999251699278,
+          "lag_1": 7.293926382318264,
+          "lag_2": 7.360382804603774
+        },
+        "reserve_curvature_donor": {
+          "lag_0": 24.69731143836017,
+          "lag_1": 22.27321470463567,
+          "lag_2": 23.448567332859053
+        }
+      }
+    },
+    {
+      "radius_bin": 5,
+      "support_start": 19,
+      "support_end": 30,
+      "reserve_start": 32,
+      "reserve_end": 119,
+      "pair_support_raw": 0.05588230166910839,
+      "pair_support_norm": 0.35147795538975535,
+      "correlation_deficit_raw": 0.42923756680045816,
+      "support_coherence": 0.7163025220925026,
+      "reserve_coherence": 0.08515309428577172,
+      "causal_alignment": 0.08333333333333333,
+      "reserve_alignment": 0.056818181818181816,
+      "zp_support_coherence": 0.7370181583288856,
+      "zp_reserve_coherence": 0.9980221876854719,
+      "reserve_mass": 0.1282072964343951,
+      "transport_fraction": 0.010957457192080225,
+      "actual_transport": 0.001404825962392224,
+      "zp_added": 0.001404825962392224,
+      "zp_removed": 0.001404825962392224,
+      "baseline_final_n": 0.8290027573827758,
+      "lag_tensor_final_n": 0.8290027573827761,
+      "post_onset_centroid_baseline": 26.22819010702453,
+      "post_onset_centroid_lag_tensor": 26.203359719305194,
+      "support_strengths": {
+        "pair_upstream_slope_lagbest": 0.0,
+        "residence_deficit_lagbest": 0.0,
+        "deficit_local_slope_lagbest": 9.80272914724167,
+        "curvature_deficit_lagbest": 7.2332243504723195,
+        "pair_tail_lagbest": 0.0,
+        "zp_drive_support": 3.5356659393812655
+      },
+      "reserve_strengths": {
+        "residence_donor_lagbest": 0.0,
+        "tail_donor_lagbest": 87.98730088312384,
+        "closure_donor_lagbest": 0.0,
+        "curvature_donor_lagbest": 87.39568981494335,
+        "zp_relax_reserve": 48.30427382549104
+      },
+      "support_channel_weights": {
+        "pair_upstream_slope_lagbest": 0.0,
+        "residence_deficit_lagbest": 0.0,
+        "deficit_local_slope_lagbest": 0.4765171345511414,
+        "curvature_deficit_lagbest": 0.35161181027045635,
+        "pair_tail_lagbest": 0.0,
+        "zp_drive_support": 0.1718710551783538
+      },
+      "reserve_channel_weights": {
+        "residence_donor_lagbest": 0.0,
+        "tail_donor_lagbest": 0.3933496217164247,
+        "closure_donor_lagbest": 0.0,
+        "curvature_donor_lagbest": 0.3907048083452183,
+        "zp_relax_reserve": 0.21594556993835262
+      },
+      "lag_strengths": {
+        "support_pair_upstream": {
+          "lag_0": 15.30990724391606,
+          "lag_1": 14.437245373978879,
+          "lag_2": 15.464109316759245,
+          "lag_3": 16.42988346656076
+        },
+        "support_residence_deficit": {
+          "lag_0": 0.0,
+          "lag_1": 0.0,
+          "lag_2": 0.0,
+          "lag_3": 0.0
+        },
+        "support_deficit_slope": {
+          "lag_0": 98.76401600369309,
+          "lag_1": 97.76627524885487,
+          "lag_2": 96.75116368957337,
+          "lag_3": 95.74143982108222
+        },
+        "support_curvature_deficit": {
+          "lag_0": 96.94021001096299,
+          "lag_1": 96.94544212214832,
+          "lag_2": 96.92677849948294,
+          "lag_3": 96.884522032376
+        },
+        "support_pair_tail": {
+          "lag_0": 86.24610601469902,
+          "lag_1": 86.25276803140969,
+          "lag_2": 86.25074834197346,
+          "lag_3": 86.24324768143164
+        },
+        "reserve_residence_donor": {
+          "lag_0": 20.01578212761713,
+          "lag_1": 17.13726838774378,
+          "lag_2": 17.22986041445952
+        },
+        "reserve_tail_donor": {
+          "lag_0": 97.96341867216265,
+          "lag_1": 96.88156338163643,
+          "lag_2": 95.82084551360157
+        },
+        "reserve_closure_donor": {
+          "lag_0": 20.36121983983501,
+          "lag_1": 17.485599520503538,
+          "lag_2": 17.549987810938607
+        },
+        "reserve_curvature_donor": {
+          "lag_0": 109.50111917175467,
+          "lag_1": 105.45523025471257,
+          "lag_2": 105.50621116517107
+        }
+      }
+    },
+    {
+      "radius_bin": 6,
+      "support_start": 32,
+      "support_end": 43,
+      "reserve_start": 45,
+      "reserve_end": 119,
+      "pair_support_raw": 0.08341645032626382,
+      "pair_support_norm": 0.5246570475953356,
+      "correlation_deficit_raw": 0.34433011643195593,
+      "support_coherence": 0.6028335613097652,
+      "reserve_coherence": 0.0867263428665174,
+      "causal_alignment": 0.25,
+      "reserve_alignment": 0.023333333333333334,
+      "zp_support_coherence": 0.5943006443733387,
+      "zp_reserve_coherence": 0.9997586303059658,
+      "reserve_mass": 0.07913211397917974,
+      "transport_fraction": 0.013426449648039782,
+      "actual_transport": 0.0010624633438844017,
+      "zp_added": 0.001062463343884402,
+      "zp_removed": 0.001062463343884402,
+      "baseline_final_n": 0.6721458801801243,
+      "lag_tensor_final_n": 0.6721458801801244,
+      "post_onset_centroid_baseline": 38.506650399355586,
+      "post_onset_centroid_lag_tensor": 38.48520887497887,
+      "support_strengths": {
+        "pair_upstream_slope_lagbest": 4.932401161018913,
+        "residence_deficit_lagbest": 0.0,
+        "deficit_local_slope_lagbest": 9.708914048931423,
+        "curvature_deficit_lagbest": 7.4643084762946685,
+        "pair_tail_lagbest": 5.0676699261459,
+        "zp_drive_support": 5.273215190033675
+      },
+      "reserve_strengths": {
+        "residence_donor_lagbest": 0.0,
+        "tail_donor_lagbest": 74.9999908893023,
+        "closure_donor_lagbest": 0.0,
+        "curvature_donor_lagbest": 74.9336473317715,
+        "zp_relax_reserve": 41.24004345548664
+      },
+      "support_channel_weights": {
+        "pair_upstream_slope_lagbest": 0.1520163907634397,
+        "residence_deficit_lagbest": 0.0,
+        "deficit_local_slope_lagbest": 0.2992283116821992,
+        "curvature_deficit_lagbest": 0.23004966487293277,
+        "pair_tail_lagbest": 0.1561853682627038,
+        "zp_drive_support": 0.16252026441869358
+      },
+      "reserve_channel_weights": {
+        "residence_donor_lagbest": 0.0,
+        "tail_donor_lagbest": 0.39231336777931375,
+        "closure_donor_lagbest": 0.0,
+        "curvature_donor_lagbest": 0.3919663348773527,
+        "zp_relax_reserve": 0.2157202973433284
+      },
+      "lag_strengths": {
+        "support_pair_upstream": {
+          "lag_0": 13.49858371637338,
+          "lag_1": 12.64163673815721,
+          "lag_2": 13.761314121035387,
+          "lag_3": 14.866055370419994
+        },
+        "support_residence_deficit": {
+          "lag_0": 0.0,
+          "lag_1": 0.0,
+          "lag_2": 0.0,
+          "lag_3": 0.0
+        },
+        "support_deficit_slope": {
+          "lag_0": 85.68573755875157,
+          "lag_1": 84.6847431610905,
+          "lag_2": 83.6686412420978,
+          "lag_3": 82.65822548476339
+        },
+        "support_curvature_deficit": {
+          "lag_0": 84.85445351164033,
+          "lag_1": 84.86248846635043,
+          "lag_2": 84.85011735632823,
+          "lag_3": 84.83001965809795
+        },
+        "support_pair_tail": {
+          "lag_0": 80.9765451846738,
+          "lag_1": 80.99223090196452,
+          "lag_2": 81.01683180023504,
+          "lag_3": 81.05462399391354
+        },
+        "reserve_residence_donor": {
+          "lag_0": 33.16173401731709,
+          "lag_1": 30.27392631979723,
+          "lag_2": 30.36055932473149
+        },
+        "reserve_tail_donor": {
+          "lag_0": 84.74488590809304,
+          "lag_1": 83.69239808588418,
+          "lag_2": 82.66541757784591
+        },
+        "reserve_closure_donor": {
+          "lag_0": 33.50851741169596,
+          "lag_1": 30.66799994940277,
+          "lag_2": 30.757434298010686
+        },
+        "reserve_curvature_donor": {
+          "lag_0": 110.6475991978591,
+          "lag_1": 106.51981480456413,
+          "lag_2": 106.61875106943731
+        }
+      }
+    }
+  ],
+  "closure_metrics": {
+    "advanced_mass_total": 0.006957864640412028,
+    "repaid_mass_total": 0.006957864640412028,
+    "closure_residual": 0.0,
+    "zero_point_added_total": 0.006957864640412028,
+    "zero_point_removed_total": 0.006957864640412028,
+    "zero_point_residual": 0.0,
+    "global_final_total_baseline": 5.519932630413805,
+    "global_final_total_lag_tensor": 5.519932630413805
+  },
+  "results": [
+    {
+      "radius_bin": 2,
+      "onset_target": 4,
+      "baseline_first_persist": 4,
+      "lag_tensor_first_persist": 4,
+      "target_final_n": 2.1869844097664024,
+      "baseline_final_n": 2.1869844097664024,
+      "lag_tensor_final_n": 2.1869844097664024,
+      "lag_tensor_minus_target": 0.0,
+      "post_onset_centroid_baseline": 11.692398473343264,
+      "post_onset_centroid_lag_tensor": 11.692398473343264
+    },
+    {
+      "radius_bin": 3,
+      "onset_target": 5,
+      "baseline_first_persist": 5,
+      "lag_tensor_first_persist": 5,
+      "target_final_n": 1.831799583084502,
+      "baseline_final_n": 1.831799583084502,
+      "lag_tensor_final_n": 1.8317995830845017,
+      "lag_tensor_minus_target": -2.220446049250313e-16,
+      "post_onset_centroid_baseline": 13.118305244621798,
+      "post_onset_centroid_lag_tensor": 13.085831280976512
+    },
+    {
+      "radius_bin": 5,
+      "onset_target": 18,
+      "baseline_first_persist": 18,
+      "lag_tensor_first_persist": 18,
+      "target_final_n": 0.8290027573827758,
+      "baseline_final_n": 0.8290027573827758,
+      "lag_tensor_final_n": 0.8290027573827761,
+      "lag_tensor_minus_target": 2.220446049250313e-16,
+      "post_onset_centroid_baseline": 26.22819010702453,
+      "post_onset_centroid_lag_tensor": 26.203359719305194
+    },
+    {
+      "radius_bin": 6,
+      "onset_target": 31,
+      "baseline_first_persist": 31,
+      "lag_tensor_first_persist": 31,
+      "target_final_n": 0.6721458801801243,
+      "baseline_final_n": 0.6721458801801243,
+      "lag_tensor_final_n": 0.6721458801801244,
+      "lag_tensor_minus_target": 1.1102230246251565e-16,
+      "post_onset_centroid_baseline": 38.506650399355586,
+      "post_onset_centroid_lag_tensor": 38.48520887497889
+    }
+  ],
+  "relative_to_run_024": {
+    "advanced_mass_total": 0.0009332787421112803,
+    "repaid_mass_total": 0.0009332787421112803,
+    "closure_residual": 0.0,
+    "zero_point_added_total": 0.0009332787421112803,
+    "zero_point_removed_total": 0.0009332787421112806,
+    "zero_point_residual": -3.2526065174565133e-19,
+    "global_final_total_baseline": 5.519932630413805,
+    "global_final_total_zp_corr": 5.519932630413805
+  },
+  "honesty_note": "This remains a toy/analogue continuation on the accessible replay. Lag selection here is a causal bookkeeping device over local neighborhoods, not an experimentally validated microscopic timing law."
+}

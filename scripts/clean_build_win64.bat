@@ -1,7 +1,7 @@
 @echo off
 setlocal enabledelayedexpansion
 
-set PRESET=win64-vs2022-cuda
+set PRESET=win64-vs2022-clang-vulkan
 set CONFIG=Release
 
 if not "%1"=="" set PRESET=%1

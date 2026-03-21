@@ -1,0 +1,35 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\CMakeFiles\494f13505d6fecd1f47188b7549a2be4\carrier_bundle.comp.spv.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\CMakeFiles\494f13505d6fecd1f47188b7549a2be4\ge_canonicalize.comp.spv.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\CMakeFiles\494f13505d6fecd1f47188b7549a2be4\ge_overlap_scores.comp.spv.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\CMakeFiles\494f13505d6fecd1f47188b7549a2be4\ge_topk_block.comp.spv.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\CMakeFiles\494f13505d6fecd1f47188b7549a2be4\ge_topk_merge.comp.spv.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\CMakeFiles\494f13505d6fecd1f47188b7549a2be4\symbol_tokenize.comp.spv.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\CMakeFiles\9483b0744b3a08c0550a148c75a0ef65\EWVulkanComputeShaders.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\GameCreation\GenesisEngine\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\CMakeFiles\EWVulkanComputeShaders" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{95687D0A-0D2A-3374-856D-24C043C6D4F1}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

@@ -1,0 +1,270 @@
+{
+  "run_id": "026_coherence_gated_lag_tensor_closure",
+  "hypothesis": "Exact closure should remain stable when lag-best routing is coherence-gated so temporally unstable winners lose authority instead of contributing equally with persistent lag structure.",
+  "method": {
+    "frozen_region": "all dn_j(t) for t <= onset_j are left unchanged",
+    "support_window_rule": "t in [onset_j+1, onset_j+12]",
+    "reserve_window_rule": "t in [onset_j+14, end]",
+    "lag_rule": "bounded causal lag search chooses local winners over rolling neighborhoods",
+    "coherence_gate_rule": "each lag-best channel is attenuated by local lag persistence, best-vs-second-best margin, and local strength",
+    "support_lags_tested": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "reserve_lags_tested": [
+      0,
+      1,
+      2
+    ],
+    "support_window_size": 5,
+    "reserve_window_size": 7,
+    "transport_fraction_rule": "pair_support_norm_j * deficit_norm_like_j * support_coherence_j * reserve_coherence_j * support_stability_j * reserve_stability_j * support_margin_j * reserve_margin_j * zp_support_factor_j * zp_reserve_factor_j",
+    "exact_balance_rule": "mass added to support equals mass removed from reserve exactly inside each band; final target is reserve-renormalized only"
+  },
+  "transport_ledger": [
+    {
+      "radius_bin": 3,
+      "support_start": 6,
+      "support_end": 17,
+      "reserve_start": 19,
+      "reserve_end": 119,
+      "pair_support_raw": 0.15899233739180108,
+      "pair_support_norm": 1.0,
+      "support_lag_stability": 0.9277777777777778,
+      "reserve_lag_stability": 0.9834983498349835,
+      "support_margin_mean": 0.052722592496206075,
+      "reserve_margin_mean": 0.0026903886593764303,
+      "correlation_deficit_raw": 1.2388467622783543,
+      "support_coherence": 0.5154530037286404,
+      "reserve_coherence": 0.07033592338153881,
+      "zp_support_coherence": 0.5960010799500325,
+      "zp_reserve_coherence": 0.17614057584862614,
+      "reserve_mass": 0.36444132801943385,
+      "transport_fraction": 0.004291887371749646,
+      "actual_transport": 0.0015641411334702787,
+      "zp_added": 0.0015641411334702787,
+      "zp_removed": 0.0015641411334702787,
+      "baseline_final_n": 1.831799583084502,
+      "coherence_gated_final_n": 1.8317995830845024,
+      "post_onset_centroid_baseline": 13.118305244621798,
+      "post_onset_centroid_coherence_gated": 13.107067776415118,
+      "support_strengths": {
+        "pair_upstream_slope_gated": 4.244020418355337,
+        "residence_deficit_gated": 0.0,
+        "deficit_local_slope_gated": 4.81998621984621,
+        "curvature_deficit_gated": 2.8248242587493353,
+        "pair_tail_gated": 0.0,
+        "zp_drive_support": 3.1141273401983205
+      },
+      "reserve_strengths": {
+        "residence_donor_gated": 0.0,
+        "tail_donor_gated": 12.352778421205548,
+        "closure_donor_gated": 0.0,
+        "curvature_donor_gated": 12.68238670998188,
+        "zp_relax_reserve": 6.843469374979501
+      },
+      "support_channel_weights": {
+        "pair_upstream_slope_gated": 0.2828789063643681,
+        "residence_deficit_gated": 0.0,
+        "deficit_local_slope_gated": 0.3212690553194369,
+        "curvature_deficit_gated": 0.18828448457281768,
+        "pair_tail_gated": 0.0,
+        "zp_drive_support": 0.20756755374331068
+      },
+      "reserve_channel_weights": {
+        "residence_donor_gated": 0.0,
+        "tail_donor_gated": 0.3874939630433516,
+        "closure_donor_gated": 0.0,
+        "curvature_donor_gated": 0.397833436295023,
+        "zp_relax_reserve": 0.21467260066159408
+      }
+    },
+    {
+      "radius_bin": 5,
+      "support_start": 19,
+      "support_end": 30,
+      "reserve_start": 32,
+      "reserve_end": 119,
+      "pair_support_raw": 0.05588230166910839,
+      "pair_support_norm": 0.35147795538975535,
+      "support_lag_stability": 0.9333333333333332,
+      "reserve_lag_stability": 0.9715909090909091,
+      "support_margin_mean": 0.0172261633424905,
+      "reserve_margin_mean": 0.0,
+      "correlation_deficit_raw": 0.3980946159800234,
+      "support_coherence": 0.5981757386330139,
+      "reserve_coherence": 0.09381787174533146,
+      "zp_support_coherence": 0.6402723171440438,
+      "zp_reserve_coherence": 0.9547957422238201,
+      "reserve_mass": 0.1282072964343951,
+      "transport_fraction": 0.003831694681007908,
+      "actual_transport": 0.0004912512158140759,
+      "zp_added": 0.000491251215814076,
+      "zp_removed": 0.0004912512158140759,
+      "baseline_final_n": 0.8290027573827758,
+      "coherence_gated_final_n": 0.8290027573827756,
+      "post_onset_centroid_baseline": 26.22819010702453,
+      "post_onset_centroid_coherence_gated": 26.21861952179367,
+      "support_strengths": {
+        "pair_upstream_slope_gated": 0.0,
+        "residence_deficit_gated": 0.0,
+        "deficit_local_slope_gated": 6.041080827225897,
+        "curvature_deficit_gated": 4.094506561614404,
+        "pair_tail_gated": 0.0,
+        "zp_drive_support": 2.1244461910486345
+      },
+      "reserve_strengths": {
+        "residence_donor_gated": 0.0,
+        "tail_donor_gated": 58.757232041994826,
+        "closure_donor_gated": 0.0,
+        "curvature_donor_gated": 58.970579178040836,
+        "zp_relax_reserve": 32.34847969350406
+      },
+      "support_channel_weights": {
+        "pair_upstream_slope_gated": 0.0,
+        "residence_deficit_gated": 0.0,
+        "deficit_local_slope_gated": 0.4927458630402977,
+        "curvature_deficit_gated": 0.3339718879996055,
+        "pair_tail_gated": 0.0,
+        "zp_drive_support": 0.17328224896001523
+      },
+      "reserve_channel_weights": {
+        "residence_donor_gated": 0.0,
+        "tail_donor_gated": 0.3915157529835609,
+        "closure_donor_gated": 0.0,
+        "curvature_donor_gated": 0.3929373441939202,
+        "zp_relax_reserve": 0.2155469028225124
+      }
+    },
+    {
+      "radius_bin": 6,
+      "support_start": 32,
+      "support_end": 43,
+      "reserve_start": 45,
+      "reserve_end": 119,
+      "pair_support_raw": 0.08341645032626382,
+      "pair_support_norm": 0.5246570475953356,
+      "support_lag_stability": 0.961111111111111,
+      "reserve_lag_stability": 0.9866666666666668,
+      "support_margin_mean": 0.027460190885300835,
+      "reserve_margin_mean": 0.0,
+      "correlation_deficit_raw": 0.31839206049126184,
+      "support_coherence": 0.5934385431222299,
+      "reserve_coherence": 0.07789830908626498,
+      "zp_support_coherence": 0.5875769776305912,
+      "zp_reserve_coherence": 0.9806469885998296,
+      "reserve_mass": 0.07913211397917974,
+      "transport_fraction": 0.004770164952154882,
+      "actual_transport": 0.0003774732366934086,
+      "zp_added": 0.0003774732366934086,
+      "zp_removed": 0.00037747323669340866,
+      "baseline_final_n": 0.6721458801801243,
+      "coherence_gated_final_n": 0.6721458801801247,
+      "post_onset_centroid_baseline": 38.506650399355586,
+      "post_onset_centroid_coherence_gated": 38.49904378943712,
+      "support_strengths": {
+        "pair_upstream_slope_gated": 3.3090102962514925,
+        "residence_deficit_gated": 0.0,
+        "deficit_local_slope_gated": 6.961402173438785,
+        "curvature_deficit_gated": 4.903593070702396,
+        "pair_tail_gated": 3.4134334007225156,
+        "zp_drive_support": 3.6340431076530786
+      },
+      "reserve_strengths": {
+        "residence_donor_gated": 0.0,
+        "tail_donor_gated": 51.49999155862793,
+        "closure_donor_gated": 0.0,
+        "curvature_donor_gated": 51.44123423123243,
+        "zp_relax_reserve": 28.31618175813603
+      },
+      "support_channel_weights": {
+        "pair_upstream_slope_gated": 0.148910423210713,
+        "residence_deficit_gated": 0.0,
+        "deficit_local_slope_gated": 0.31327353225858945,
+        "curvature_deficit_gated": 0.2206690381829857,
+        "pair_tail_gated": 0.15360961943182222,
+        "zp_drive_support": 0.1635373869158448
+      },
+      "reserve_channel_weights": {
+        "residence_donor_gated": 0.0,
+        "tail_donor_gated": 0.39235874394209513,
+        "closure_donor_gated": 0.0,
+        "curvature_donor_gated": 0.3919110943313559,
+        "zp_relax_reserve": 0.2157301617265414
+      }
+    }
+  ],
+  "closure_metrics": {
+    "advanced_mass_total": 0.002432865585977763,
+    "repaid_mass_total": 0.002432865585977763,
+    "closure_residual": 0.0,
+    "zero_point_added_total": 0.002432865585977763,
+    "zero_point_removed_total": 0.002432865585977763,
+    "zero_point_residual": 0.0,
+    "global_final_total_baseline": 5.519932630413805,
+    "global_final_total_coherence_gated": 5.519932630413805
+  },
+  "results": [
+    {
+      "radius_bin": 2,
+      "onset_target": 4,
+      "baseline_first_persist": 4,
+      "coherence_gated_first_persist": 4,
+      "target_final_n": 2.1869844097664024,
+      "baseline_final_n": 2.1869844097664024,
+      "coherence_gated_final_n": 2.1869844097664024,
+      "coherence_gated_minus_target": 0.0,
+      "post_onset_centroid_baseline": 11.692398473343264,
+      "post_onset_centroid_coherence_gated": 11.692398473343264
+    },
+    {
+      "radius_bin": 3,
+      "onset_target": 5,
+      "baseline_first_persist": 5,
+      "coherence_gated_first_persist": 5,
+      "target_final_n": 1.8317995830845024,
+      "baseline_final_n": 1.831799583084502,
+      "coherence_gated_final_n": 1.8317995830845024,
+      "coherence_gated_minus_target": 0.0,
+      "post_onset_centroid_baseline": 13.118305244621798,
+      "post_onset_centroid_coherence_gated": 13.10706777641512
+    },
+    {
+      "radius_bin": 5,
+      "onset_target": 18,
+      "baseline_first_persist": 18,
+      "coherence_gated_first_persist": 18,
+      "target_final_n": 0.8290027573827758,
+      "baseline_final_n": 0.8290027573827758,
+      "coherence_gated_final_n": 0.8290027573827756,
+      "coherence_gated_minus_target": -2.220446049250313e-16,
+      "post_onset_centroid_baseline": 26.22819010702453,
+      "post_onset_centroid_coherence_gated": 26.21861952179365
+    },
+    {
+      "radius_bin": 6,
+      "onset_target": 31,
+      "baseline_first_persist": 31,
+      "coherence_gated_first_persist": 31,
+      "target_final_n": 0.6721458801801243,
+      "baseline_final_n": 0.6721458801801243,
+      "coherence_gated_final_n": 0.6721458801801247,
+      "coherence_gated_minus_target": 3.3306690738754696e-16,
+      "post_onset_centroid_baseline": 38.506650399355586,
+      "post_onset_centroid_coherence_gated": 38.49904378943717
+    }
+  ],
+  "relative_to_run_025": {
+    "advanced_mass_total": 0.006957864640412028,
+    "repaid_mass_total": 0.006957864640412028,
+    "closure_residual": 0.0,
+    "zero_point_added_total": 0.006957864640412028,
+    "zero_point_removed_total": 0.006957864640412028,
+    "zero_point_residual": 0.0,
+    "global_final_total_baseline": 5.519932630413805,
+    "global_final_total_lag_tensor": 5.519932630413805
+  },
+  "honesty_note": "This remains a toy/analogue continuation on the accessible replay. The coherence gate is a bookkeeping stabilizer over causal lag assignments, not a claim of experimentally established microscopic temporal selection."
+}

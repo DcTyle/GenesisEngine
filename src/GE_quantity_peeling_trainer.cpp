@@ -51,7 +51,7 @@ bool GE_trainer_epoch(GE_CorpusAnchorStore& store,
             accept_rel = lane->rel_err_limit_for_epoch_q32_32(params.epoch_u32, accept_rel);
         }
 
-        const auto hits = GE_retrieve_topk_cuda(store, q, q.lane_u8, &q.domain_id9, topk_eff);
+        const auto hits = GE_retrieve_topk_gpu(store, q, q.lane_u8, &q.domain_id9, topk_eff);
 
         if (hits.empty()) continue;
 

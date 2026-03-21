@@ -18,7 +18,7 @@
 #include "fixed_point.hpp"
 #include "learning_gate_cuda.hpp"
 #include "crawler_encode_cuda.hpp"
-#include "symbol_tokenize_cuda.hpp"
+#include "ew_gpu_compute.hpp"
 #include "code_artifact_ops.hpp"
 #include <map>
 #include "substrate_alu.hpp"
@@ -498,8 +498,8 @@ static void ew_synth_index_rebuild(SubstrateManager* sm) {
 
     if (sm->synth_artifacts.empty()) return;
 
-#if defined(EW_ENABLE_CUDA) && (EW_ENABLE_CUDA==1)
-    // CUDA backend: emits fixed-width 9D lane codes per symbol (no hashing).
+#if defined(EW_ENABLE_GPU_COMPUTE) && (EW_ENABLE_GPU_COMPUTE==1)
+    // Canonical GPU backend: emits fixed-width 9D lane codes per symbol (no hashing).
     uint32_t max_symbols_per_art = 16u;
     for (uint32_t i = 0u; i < (uint32_t)lens.size(); ++i) {
         uint32_t cap = (lens[i] / 4u);
@@ -510,7 +510,7 @@ static void ew_synth_index_rebuild(SubstrateManager* sm) {
     std::vector<EwSymbolToken9> symbols((size_t)sm->synth_artifacts.size() * (size_t)max_symbols_per_art);
     std::vector<uint32_t> counts(sm->synth_artifacts.size(), 0u);
 
-    const bool ok = ew_cuda_tokenize_symbols_batch(
+    const bool ok = ew_gpu_tokenize_symbols_batch(
         (const uint8_t*)concat.data(),
         offsets.data(),
         lens.data(),
@@ -11538,6 +11538,19 @@ void SubstrateManager::inject_audio_pcm16(const int16_t* pcm, int samples, int c
 void SubstrateManager::build_viz_points(std::vector<EwVizPoint>& out) const {
     out.clear();
 
+    auto clamp01 = [](double v) -> double {
+        if (v < 0.0) return 0.0;
+        if (v > 1.0) return 1.0;
+        return v;
+    };
+    auto abs_norm = [&](int64_t q, double scale) -> double {
+        const int64_t mag = (q < 0) ? -q : q;
+        return clamp01((scale > 0.0) ? ((double)mag / scale) : 0.0);
+    };
+    auto pack_rgba = [](uint8_t r, uint8_t g, uint8_t b, uint8_t a) -> uint32_t {
+        return (uint32_t)r | ((uint32_t)g << 8) | ((uint32_t)b << 16) | ((uint32_t)a << 24);
+    };
+
     // If a lattice projection tag is enabled and the GPU lattice exists, project
     // a deterministic point cloud from a radiance slice. This is read-only.
     EwFieldLatticeGpu* viz_lat = nullptr;
@@ -11615,11 +11628,59 @@ void SubstrateManager::build_viz_points(std::vector<EwVizPoint>& out) const {
         p.y_q16_16 = q16_16_mul_q32_32(y0, boundary_scale_q32_32);
         p.z_q16_16 = q16_16_mul_q32_32(z0, boundary_scale_q32_32);
 
-        // Color: map chi_q and theta_q deterministically.
-        const uint8_t r = (uint8_t)((a.chi_q / 1024) & 0xFF);
-        const uint8_t g = (uint8_t)((a.theta_q / 1024) & 0xFF);
-        const uint8_t b = (uint8_t)((a.m_q / 1024) & 0xFF);
-        p.rgba8 = (uint32_t)r | ((uint32_t)g << 8) | ((uint32_t)b << 16) | (0xFFu << 24);
+        const double mass_n = abs_norm(a.m_q, (double)TURN_SCALE * 1.5);
+        const double bind_n = clamp01(
+            0.50 * abs_norm(a.curvature_q, (double)TURN_SCALE * 0.65) +
+            0.28 * abs_norm(a.chi_q, (double)TURN_SCALE * 0.80) +
+            0.22 * ((double)a.world_flux_grad_mean_q15 / 32767.0));
+        const double flow_n = abs_norm(a.doppler_q, (double)TURN_SCALE * 0.75);
+        const double temporal_n = abs_norm(a.tau_turns_q, (double)TURN_SCALE * 1.5);
+        const double bridge_n = clamp01(
+            0.55 * ((double)a.world_flux_grad_mean_q15 / 32767.0) +
+            0.20 * temporal_n +
+            0.25 * ((a.neighbors.size() >= 2u) ? 1.0 : 0.0));
+        const double potential_n = clamp01(0.48 * flow_n + 0.34 * temporal_n + 0.18 * (1.0 - bind_n));
+
+        double base_r = 0.0;
+        double base_g = 0.0;
+        double base_b = 0.0;
+        uint8_t alpha = 255u;
+
+        if (a.kind_u32 == EW_ANCHOR_KIND_CAMERA ||
+            a.kind_u32 == EW_ANCHOR_KIND_EDITOR ||
+            a.kind_u32 == EW_ANCHOR_KIND_AI_CONFIG ||
+            a.kind_u32 == EW_ANCHOR_KIND_CONTEXT_ROOT ||
+            a.kind_u32 == EW_ANCHOR_KIND_SYLLABUS_ROOT ||
+            a.kind_u32 == EW_ANCHOR_KIND_CRAWLER_ROOT ||
+            a.kind_u32 == EW_ANCHOR_KIND_DOMAIN_ROOT ||
+            a.kind_u32 == EW_ANCHOR_KIND_DOC_ROOT) {
+            base_r = 0.58; base_g = 0.58; base_b = 0.60; alpha = 168u;
+        } else if (bridge_n > 0.66 && bind_n > 0.30) {
+            base_r = 0.98; base_g = 0.86; base_b = 0.16;
+        } else if (mass_n < 0.14 && flow_n > 0.26 && bind_n < 0.28) {
+            base_r = 0.18; base_g = 0.44; base_b = 1.00;
+        } else if (mass_n < 0.26 && bind_n < 0.40) {
+            base_r = 0.14; base_g = 0.92; base_b = 0.86;
+        } else if (bind_n > 0.74 && mass_n > 0.52 && flow_n < 0.34) {
+            base_r = 0.96; base_g = 0.30; base_b = 0.18;
+        } else if (bind_n > 0.52 || mass_n > 0.34) {
+            base_r = 0.98; base_g = 0.52; base_b = 0.12;
+        } else {
+            base_r = 0.18; base_g = 0.82; base_b = 0.66;
+        }
+
+        const double energy_r = clamp01(0.18 + 0.82 * bind_n);
+        const double energy_g = clamp01(0.10 + 0.90 * bridge_n);
+        const double energy_b = clamp01(0.22 + 0.78 * potential_n);
+        const double final_r = clamp01(base_r * 0.62 + energy_r * 0.38);
+        const double final_g = clamp01(base_g * 0.62 + energy_g * 0.38);
+        const double final_b = clamp01(base_b * 0.62 + energy_b * 0.38);
+
+        p.rgba8 = pack_rgba(
+            (uint8_t)(final_r * 255.0 + 0.5),
+            (uint8_t)(final_g * 255.0 + 0.5),
+            (uint8_t)(final_b * 255.0 + 0.5),
+            alpha);
         out.push_back(p);
     }
 }

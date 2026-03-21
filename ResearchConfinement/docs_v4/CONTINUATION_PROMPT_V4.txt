@@ -1,0 +1,40 @@
+Use the attached `research_handoff_package_v4_consolidated.zip` as the sole continuation source of truth for this research program.
+
+You must read the package contents first, especially:
+- `docs_v4/README_CONTINUATION_V4.md`
+- `docs_v4/MATH_STACK_AND_RESULTS_V4.md`
+- `docs_v4/EXPERIMENT_ARCHIVE_V4.md`
+- `docs_v4/RUN_LEDGER_V4.csv`
+- the original V3 docs under `research_handoff_package_v3_all_in_one/docs/`
+- everything in `research_handoff_package_v3_all_in_one/framework files/`
+- everything in `research_handoff_package_v3_all_in_one/continuation_runs/`
+- everything in `new_runs_v4/`
+- `raw_run_archives_v4/` only as raw archive backup, not as a substitute for the extracted run folders
+- `engine_inputs/` and `original_inputs/` only as supporting context, not as replacements for the active lithium target ledger
+
+Research rules:
+1. Do not restart from scratch. Continue directly from the package state.
+2. This is a toy / analogue DMT-native research program for lithium at absolute zero, not validated real-world particle physics.
+3. Preserve the identity-preserving vs environment-responsive split.
+4. Treat all `_eff` quantities as derived effective values from relativistic correlation / stochastic dispersion / Doppler-effective channels, never as arbitrary tuning constants.
+5. Do not introduce arbitrary shell-scaling factors.
+6. Stay DMT-native unless a comparison/control run is explicitly useful.
+7. Use the uploaded lithium absolute-zero handoff artifacts as the canonical target ledger.
+8. Respect the latest structural lesson from the archive: timing and persistence improved when temporal dynamics were applied not only to local exposures but also to pair channels, traced residence, zero-point temporal bookkeeping, temporal coupling, and finally interpolated collapse of coherent temporal branches.
+9. Prefer structural bookkeeping changes over brute coefficient fitting.
+10. Whenever you run a new simulation, write the script, logs, CSV/JSON outputs, and a concise summary file into a new run folder.
+11. Be explicit about what is directly evidenced by the accessible files versus what is preserved only from the conversation ledger because the artifact is missing.
+
+Canonical target ledger:
+- onset targets: r2=4, r3=5, r5=18, r6=31
+- final occupancy targets: r2=2.1869844098, r3=1.8317995831, r5=0.8290027574, r6=0.6721458802
+
+Current frontier:
+- continue from the interpolated temporal-alignment collapse state described in run 031
+- temporal coupling is not textbook measurement; treat it as alignment / flux-lock / retro-alignment structure
+- when two temporal alignments are off but coherent and coherence climbs while internal consistency fails, the internal particle structure should collapse to an interpolated structure of the affected points
+- preserve onset structure and occupancy targets while testing sub-step collapse and improved projection resolution
+- do not throw away traced residence, pair-channel temporal memory, or prior closure machinery
+- remember run 030: current toy step granularity is not within NIST uncertainty scale, so sub-step or continuous interpolation is necessary before any serious comparison to NIST-like observables
+
+When you respond, do not give a superficial package summary. Explain what you are testing next and why, then run the next simulation pass.

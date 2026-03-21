@@ -55,18 +55,14 @@ def _copy_tree_sorted(src: Path, dst: Path) -> None:
             shutil.copy2(s, d)
 
 
-def _copy_runtime_binary(build_dir: Path, out_dir: Path) -> None:
-    # Try a few likely locations.
+def _copy_runtime_artifacts(build_dir: Path, out_dir: Path) -> None:
     candidates = [
-        build_dir / "runtime_cli" / "genesis_runtime_cli",
-        build_dir / "runtime_cli" / "genesis_runtime_cli.exe",
-        build_dir / "vulkan_app" / "genesis_vulkan_app",
-        build_dir / "vulkan_app" / "genesis_vulkan_app.exe",
+        build_dir / "GenesisEngineState" / "Binaries" / "Win64" / "Runtime",
+        build_dir / "vulkan_app" / "GenesisEngineState" / "Binaries" / "Win64" / "Runtime",
     ]
-    for c in candidates:
-        if c.exists() and c.is_file():
-            _safe_mkdir(out_dir / "Binaries")
-            shutil.copy2(c, out_dir / "Binaries" / c.name)
+    for runtime_dir in candidates:
+        if runtime_dir.exists() and runtime_dir.is_dir():
+            _copy_tree_sorted(runtime_dir, out_dir / "GenesisEngineState" / "Binaries" / "Win64" / "Runtime")
             return
 
 
@@ -93,8 +89,8 @@ def main() -> int:
     for rel in ALLOWLIST_CONTENT_ROOTS:
         _copy_tree_sorted(repo_root / rel, out_dir / rel)
 
-    # Copy runtime binary if present.
-    _copy_runtime_binary(build_dir, out_dir)
+    # Copy runtime artifacts if present.
+    _copy_runtime_artifacts(build_dir, out_dir)
 
     return 0
 

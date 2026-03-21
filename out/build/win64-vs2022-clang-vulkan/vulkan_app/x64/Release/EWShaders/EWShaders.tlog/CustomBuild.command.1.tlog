@@ -1,0 +1,38 @@
+^D:\GAMECREATION\GENESISENGINE\OUT\BUILD\WIN64-VS2022-CLANG-VULKAN\CMAKEFILES\1289A9AE26D779998525EDB9ED0C73CA\INSTANCED.FRAG.SPV.RULE
+setlocal
+C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\Bin\glslc.exe -o D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/shaders/instanced.frag.spv D:/GameCreation/GenesisEngine/vulkan_app/shaders/instanced.frag
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^D:\GAMECREATION\GENESISENGINE\OUT\BUILD\WIN64-VS2022-CLANG-VULKAN\CMAKEFILES\1289A9AE26D779998525EDB9ED0C73CA\INSTANCED.VERT.SPV.RULE
+setlocal
+C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\Bin\glslc.exe -o D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/shaders/instanced.vert.spv D:/GameCreation/GenesisEngine/vulkan_app/shaders/instanced.vert
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^D:\GAMECREATION\GENESISENGINE\OUT\BUILD\WIN64-VS2022-CLANG-VULKAN\CMAKEFILES\7F5FE9C18D48A49DAA50CCD38D332A79\EWSHADERS.RULE
+setlocal
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^D:\GAMECREATION\GENESISENGINE\VULKAN_APP\CMAKELISTS.TXT
+setlocal
+"D:\Program Files\CMake\bin\cmake.exe" -SD:/GameCreation/GenesisEngine -BD:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan --check-stamp-file D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

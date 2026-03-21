@@ -1,0 +1,29 @@
+{
+  "run_id": "030_nist_surrogate_projection",
+  "purpose": "Project the toy temporal-alignment collapse outputs onto a surrogate NIST-like D-line frequency scale and test whether the current internal step resolution could honestly be considered within NIST experimental calibration/uncertainty scale.",
+  "inputs": {
+    "source_run": "029_temporal_alignment_probability_collapse",
+    "toy_mapping": "Use r5 and r6 onset separation (13 steps) as a surrogate image of the neutral lithium D1-D2 separation; this is explicitly a dimensional calibration convenience, not a physical derivation.",
+    "nist_surrogate_values": {
+      "D1_air_wavelength_A": 6707.926,
+      "D2_air_wavelength_A": 6707.775,
+      "Dline_separation_GHz": 10.0607625878125,
+      "natural_linewidth_MHz": 5.87,
+      "relative_accuracy_assumed": 3e-11,
+      "absolute_uncertainty_kHz": 13.407832719496925,
+      "comb_tie_accuracy_kHz_surrogate": 0.13407832719496923
+    }
+  },
+  "results": {
+    "onset_step_spacing": 13,
+    "surrogate_frequency_scale_MHz_per_step": 773.9048144471154,
+    "r5_threshold_cross_offset_steps": 1,
+    "r5_threshold_cross_offset_MHz": 773.9048144471154,
+    "r6_threshold_cross_offset_steps": 2,
+    "r6_threshold_cross_offset_MHz": 1547.8096288942309,
+    "step_to_linewidth_ratio": 131.8406838921832,
+    "step_to_abs_uncertainty_ratio": 57720.35127808136,
+    "verdict": "not_within_nist_uncertainty_scale"
+  },
+  "honesty_note": "This is a surrogate dimensional comparison, not a real spectroscopic prediction. It tells us whether the current toy time-step/lock-step granularity is even remotely fine enough to talk about NIST-level uncertainty. It does not validate the model against lithium spectroscopy."
+}

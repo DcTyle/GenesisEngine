@@ -1,6 +1,6 @@
 Param(
-  [ValidateSet("win64-vs2022-cuda","win64-ninja-cuda")]
-  [string]$Preset = "win64-vs2022-cuda",
+  [ValidateSet("win64-vs2022-clang-vulkan")]
+  [string]$Preset = "win64-vs2022-clang-vulkan",
   [ValidateSet("Release","RelWithDebInfo","Debug")]
   [string]$Config = "Release"
 )

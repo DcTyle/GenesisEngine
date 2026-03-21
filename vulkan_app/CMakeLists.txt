@@ -2,16 +2,23 @@ cmake_minimum_required(VERSION 3.18)
 
 # Vulkan native viewport application (replaces UE adapter).
 
+include("${CMAKE_SOURCE_DIR}/cmake/EwSpirvTools.cmake")
+
 set(GENESIS_APP_SOURCES
     src/main.cpp
     src/GE_app.cpp
     src/camera_controller.cpp
     src/ai_ui.cpp
+    src/ew_openai_chat.cpp
     src/openxr_runtime.cpp
     src/obj_import.cpp
     src/scene.cpp
     src/scene_api.cpp
 )
+
+if (WIN32)
+    list(APPEND GENESIS_APP_SOURCES resources/genesis_icon.rc)
+endif()
 
 add_executable(genesis_app ${GENESIS_APP_SOURCES})
 target_include_directories(genesis_app PRIVATE include)
@@ -24,6 +31,14 @@ if (GENESIS_BUILD_RUNTIME_APP)
     target_include_directories(genesis_runtime PRIVATE include)
     target_link_libraries(genesis_runtime PRIVATE EigenWareCore)
     target_compile_definitions(genesis_runtime PRIVATE GENESIS_EDITOR_BUILD=0 GENESIS_RUNTIME_BUILD=1)
+endif()
+
+if (WIN32)
+    # Launch as a normal Windows application when started from Explorer or an installer.
+    target_link_options(genesis_app PRIVATE /SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup)
+    if (TARGET genesis_runtime)
+        target_link_options(genesis_runtime PRIVATE /SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup)
+    endif()
 endif()
 
 # -----------------------------------------------------------------------------
@@ -67,9 +82,9 @@ if (WIN32)
     endif()
     # Vulkan loader is provided by the Vulkan SDK.
     find_package(Vulkan REQUIRED)
-    target_link_libraries(genesis_app PRIVATE Vulkan::Vulkan user32 gdi32 shell32 comdlg32)
+    target_link_libraries(genesis_app PRIVATE Vulkan::Vulkan user32 gdi32 shell32 comdlg32 winhttp)
     if (TARGET genesis_runtime)
-        target_link_libraries(genesis_runtime PRIVATE Vulkan::Vulkan user32 gdi32 shell32 comdlg32)
+        target_link_libraries(genesis_runtime PRIVATE Vulkan::Vulkan user32 gdi32 shell32 comdlg32 winhttp)
     endif()
 else()
     find_package(Vulkan REQUIRED)
@@ -90,19 +105,7 @@ set(EW_SHADER_OUT "${CMAKE_CURRENT_BINARY_DIR}/shaders")
 file(MAKE_DIRECTORY "${EW_SHADER_OUT}")
 
 if (WIN32)
-    # Require glslc (Vulkan SDK).
-    find_program(EW_GLSLC glslc HINTS ENV VULKAN_SDK PATH_SUFFIXES Bin)
-    find_program(EW_GLSLANG glslangValidator HINTS ENV VULKAN_SDK PATH_SUFFIXES Bin)
-
-    if (EW_GLSLC)
-        set(EW_SHADER_COMPILER "${EW_GLSLC}")
-        set(EW_COMP_MODE "glslc")
-    elseif(EW_GLSLANG)
-        set(EW_SHADER_COMPILER "${EW_GLSLANG}")
-        set(EW_COMP_MODE "glslang")
-    else()
-        message(FATAL_ERROR "Shader compiler not found. Install Vulkan SDK (glslc or glslangValidator).")
-    endif()
+    ew_find_spirv_compiler(EW_SHADER_COMPILER EW_COMP_MODE)
 endif()
 
 set(EW_SHADERS
@@ -116,19 +119,17 @@ set(EW_SPV
 )
 
 if (WIN32)
-    add_custom_command(
-        OUTPUT "${EW_SHADER_OUT}/instanced.vert.spv"
-        COMMAND "${EW_SHADER_COMPILER}" $<$<STREQUAL:${EW_COMP_MODE},glslc>:-o> "${EW_SHADER_OUT}/instanced.vert.spv" "${EW_SHADER_DIR}/instanced.vert"
-        COMMAND "${EW_SHADER_COMPILER}" $<$<STREQUAL:${EW_COMP_MODE},glslang>:-V> "${EW_SHADER_DIR}/instanced.vert" -o "${EW_SHADER_OUT}/instanced.vert.spv"
-        DEPENDS "${EW_SHADER_DIR}/instanced.vert"
-        VERBATIM)
+    ew_add_spirv_shader_command(
+        "${EW_SHADER_COMPILER}"
+        "${EW_COMP_MODE}"
+        "${EW_SHADER_DIR}/instanced.vert"
+        "${EW_SHADER_OUT}/instanced.vert.spv")
 
-    add_custom_command(
-        OUTPUT "${EW_SHADER_OUT}/instanced.frag.spv"
-        COMMAND "${EW_SHADER_COMPILER}" $<$<STREQUAL:${EW_COMP_MODE},glslc>:-o> "${EW_SHADER_OUT}/instanced.frag.spv" "${EW_SHADER_DIR}/instanced.frag"
-        COMMAND "${EW_SHADER_COMPILER}" $<$<STREQUAL:${EW_COMP_MODE},glslang>:-V> "${EW_SHADER_DIR}/instanced.frag" -o "${EW_SHADER_OUT}/instanced.frag.spv"
-        DEPENDS "${EW_SHADER_DIR}/instanced.frag"
-        VERBATIM)
+    ew_add_spirv_shader_command(
+        "${EW_SHADER_COMPILER}"
+        "${EW_COMP_MODE}"
+        "${EW_SHADER_DIR}/instanced.frag"
+        "${EW_SHADER_OUT}/instanced.frag.spv")
 
     add_custom_target(EWShaders ALL DEPENDS ${EW_SPV})
     add_dependencies(genesis_app EWShaders)
@@ -161,11 +162,15 @@ if (TARGET genesis_runtime)
         install(FILES ${EW_SPV} DESTINATION GenesisEngineState/Binaries/Win64/Runtime/shaders COMPONENT RuntimeApp)
     endif()
 endif()
+if (WIN32)
+    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/resources/genesis.ico" DESTINATION GenesisEngineState/Binaries/Win64 COMPONENT RuntimeApp)
+endif()
 install(FILES "${GENESIS_RUNTIME_EDITOR_SPLIT_MANIFEST}" DESTINATION GenesisEngineState/Binaries/Win64 COMPONENT RuntimeApp)
 if (GENESIS_INSTALL_EDITOR_APP)
     install(TARGETS genesis_app RUNTIME DESTINATION GenesisEngineState/Binaries/Win64/Editor COMPONENT EditorApp)
     if (WIN32)
         install(FILES ${EW_SPV} DESTINATION GenesisEngineState/Binaries/Win64/Editor/shaders COMPONENT EditorApp)
+        install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/resources/genesis.ico" DESTINATION GenesisEngineState/Binaries/Win64 COMPONENT EditorApp)
     endif()
 endif()
 

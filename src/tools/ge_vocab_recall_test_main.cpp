@@ -99,7 +99,7 @@ int main(int argc, char** argv) {
         GE_CorpusAnchorRecord q{};
         if (!ge_build_query_from_text(line, (uint8_t)lane, q)) continue;
 
-        const auto hits = GE_retrieve_topk_cuda(store, q, (uint8_t)lane, nullptr, topk);
+        const auto hits = GE_retrieve_topk_gpu(store, q, (uint8_t)lane, nullptr, topk);
         if (!hits.empty() && hits[0].score_q32_32 >= accept_min_q32_32) {
             hit++;
         }

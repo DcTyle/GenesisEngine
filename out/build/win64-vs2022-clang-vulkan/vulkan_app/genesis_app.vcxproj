@@ -1,0 +1,412 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <PreferredToolArchitecture>x64</PreferredToolArchitecture>
+  </PropertyGroup>
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="MinSizeRel|x64">
+      <Configuration>MinSizeRel</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="RelWithDebInfo|x64">
+      <Configuration>RelWithDebInfo</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{591C5C49-22EB-3476-A582-CF9E0941E4F1}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+    <Platform>x64</Platform>
+    <ProjectName>genesis_app</ProjectName>
+    <VCProjectUpgraderObjectName>NoUpgrade</VCProjectUpgraderObjectName>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>ClangCL</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>ClangCL</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>ClangCL</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>ClangCL</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <_ProjectFileVersion>10.0.20506.1</_ProjectFileVersion>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\GenesisEngineState\Binaries\Win64\Editor\Debug\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">genesis_app.dir\Debug\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">genesis_app</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">.exe</TargetExt>
+    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</LinkIncremental>
+    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</GenerateManifest>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\GenesisEngineState\Binaries\Win64\Editor\Release\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">genesis_app.dir\Release\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">genesis_app</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Release|x64'">.exe</TargetExt>
+    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkIncremental>
+    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</GenerateManifest>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\GenesisEngineState\Binaries\Win64\Editor\MinSizeRel\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">genesis_app.dir\MinSizeRel\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">genesis_app</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">.exe</TargetExt>
+    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkIncremental>
+    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">true</GenerateManifest>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\GenesisEngineState\Binaries\Win64\Editor\RelWithDebInfo\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">genesis_app.dir\RelWithDebInfo\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">genesis_app</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">.exe</TargetExt>
+    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">true</LinkIncremental>
+    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">true</GenerateManifest>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>D:\GameCreation\GenesisEngine\vulkan_app\include;D:\GameCreation\GenesisEngine\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>%(AdditionalOptions) -imsvc "C:/Users/Myke/AppData/Local/Programs/VulkanSDK/1.4.341.1/include"</AdditionalOptions>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
+      <BufferSecurityCheck></BufferSecurityCheck>
+      <CallingConvention></CallingConvention>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <FloatingPointModel></FloatingPointModel>
+      <ForceConformanceInForLoopScope></ForceConformanceInForLoopScope>
+      <InlineFunctionExpansion>Disabled</InlineFunctionExpansion>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <MinimalRebuild></MinimalRebuild>
+      <Optimization>Disabled</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RemoveUnreferencedCodeData></RemoveUnreferencedCodeData>
+      <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+      <RuntimeTypeInfo>true</RuntimeTypeInfo>
+      <SupportJustMyCode></SupportJustMyCode>
+      <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
+      <UseFullPaths>false</UseFullPaths>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;GENESIS_EDITOR_BUILD=1;NOMINMAX;WIN32_LEAN_AND_MEAN;EW_SHADER_OUT_DIR="D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/shaders";EW_ALU_TRACE_ENABLE=0;CMAKE_INTDIR="Debug"</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_DEBUG;_WINDOWS;GENESIS_EDITOR_BUILD=1;NOMINMAX;WIN32_LEAN_AND_MEAN;EW_SHADER_OUT_DIR=\"D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/shaders\";EW_ALU_TRACE_ENABLE=0;CMAKE_INTDIR=\"Debug\"</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>D:\GameCreation\GenesisEngine\vulkan_app\include;D:\GameCreation\GenesisEngine\include;C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>D:\GameCreation\GenesisEngine\vulkan_app\include;D:\GameCreation\GenesisEngine\include;C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <Link>
+      <AdditionalDependencies>..\Debug\EigenWareCore.lib;C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\Lib\vulkan-1.lib;user32.lib;gdi32.lib;shell32.lib;comdlg32.lib;winhttp.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+      <DataExecutionPrevention></DataExecutionPrevention>
+      <EntryPointSymbol>mainCRTStartup</EntryPointSymbol>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+      <ImageHasSafeExceptionHandlers></ImageHasSafeExceptionHandlers>
+      <ImportLibrary>D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/Debug/genesis_app.lib</ImportLibrary>
+      <LinkErrorReporting></LinkErrorReporting>
+      <ProgramDataBaseFile>D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/GenesisEngineState/Binaries/Win64/Editor/Debug/genesis_app.pdb</ProgramDataBaseFile>
+      <RandomizedBaseAddress></RandomizedBaseAddress>
+      <SubSystem>Windows</SubSystem>
+    </Link>
+    <ProjectReference>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>D:\GameCreation\GenesisEngine\vulkan_app\include;D:\GameCreation\GenesisEngine\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>%(AdditionalOptions) -imsvc "C:/Users/Myke/AppData/Local/Programs/VulkanSDK/1.4.341.1/include"</AdditionalOptions>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <BufferSecurityCheck></BufferSecurityCheck>
+      <CallingConvention></CallingConvention>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <FloatingPointModel></FloatingPointModel>
+      <ForceConformanceInForLoopScope></ForceConformanceInForLoopScope>
+      <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <MinimalRebuild></MinimalRebuild>
+      <Optimization>MaxSpeed</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RemoveUnreferencedCodeData></RemoveUnreferencedCodeData>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <RuntimeTypeInfo>true</RuntimeTypeInfo>
+      <SupportJustMyCode></SupportJustMyCode>
+      <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
+      <UseFullPaths>false</UseFullPaths>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;GENESIS_EDITOR_BUILD=1;NOMINMAX;WIN32_LEAN_AND_MEAN;EW_SHADER_OUT_DIR="D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/shaders";EW_ALU_TRACE_ENABLE=0;CMAKE_INTDIR="Release"</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <DebugInformationFormat>
+      </DebugInformationFormat>
+      <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;GENESIS_EDITOR_BUILD=1;NOMINMAX;WIN32_LEAN_AND_MEAN;EW_SHADER_OUT_DIR=\"D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/shaders\";EW_ALU_TRACE_ENABLE=0;CMAKE_INTDIR=\"Release\"</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>D:\GameCreation\GenesisEngine\vulkan_app\include;D:\GameCreation\GenesisEngine\include;C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>D:\GameCreation\GenesisEngine\vulkan_app\include;D:\GameCreation\GenesisEngine\include;C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <Link>
+      <AdditionalDependencies>..\Release\EigenWareCore.lib;C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\Lib\vulkan-1.lib;user32.lib;gdi32.lib;shell32.lib;comdlg32.lib;winhttp.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+      <DataExecutionPrevention></DataExecutionPrevention>
+      <EntryPointSymbol>mainCRTStartup</EntryPointSymbol>
+      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+      <ImageHasSafeExceptionHandlers></ImageHasSafeExceptionHandlers>
+      <ImportLibrary>D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/Release/genesis_app.lib</ImportLibrary>
+      <LinkErrorReporting></LinkErrorReporting>
+      <ProgramDataBaseFile>D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/GenesisEngineState/Binaries/Win64/Editor/Release/genesis_app.pdb</ProgramDataBaseFile>
+      <RandomizedBaseAddress></RandomizedBaseAddress>
+      <SubSystem>Windows</SubSystem>
+    </Link>
+    <ProjectReference>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>D:\GameCreation\GenesisEngine\vulkan_app\include;D:\GameCreation\GenesisEngine\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>%(AdditionalOptions) -imsvc "C:/Users/Myke/AppData/Local/Programs/VulkanSDK/1.4.341.1/include"</AdditionalOptions>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <BufferSecurityCheck></BufferSecurityCheck>
+      <CallingConvention></CallingConvention>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <FloatingPointModel></FloatingPointModel>
+      <ForceConformanceInForLoopScope></ForceConformanceInForLoopScope>
+      <InlineFunctionExpansion>OnlyExplicitInline</InlineFunctionExpansion>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <MinimalRebuild></MinimalRebuild>
+      <Optimization>MinSpace</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RemoveUnreferencedCodeData></RemoveUnreferencedCodeData>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <RuntimeTypeInfo>true</RuntimeTypeInfo>
+      <SupportJustMyCode></SupportJustMyCode>
+      <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
+      <UseFullPaths>false</UseFullPaths>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;GENESIS_EDITOR_BUILD=1;NOMINMAX;WIN32_LEAN_AND_MEAN;EW_SHADER_OUT_DIR="D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/shaders";EW_ALU_TRACE_ENABLE=0;CMAKE_INTDIR="MinSizeRel"</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <DebugInformationFormat>
+      </DebugInformationFormat>
+      <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;GENESIS_EDITOR_BUILD=1;NOMINMAX;WIN32_LEAN_AND_MEAN;EW_SHADER_OUT_DIR=\"D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/shaders\";EW_ALU_TRACE_ENABLE=0;CMAKE_INTDIR=\"MinSizeRel\"</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>D:\GameCreation\GenesisEngine\vulkan_app\include;D:\GameCreation\GenesisEngine\include;C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>D:\GameCreation\GenesisEngine\vulkan_app\include;D:\GameCreation\GenesisEngine\include;C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <Link>
+      <AdditionalDependencies>..\MinSizeRel\EigenWareCore.lib;C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\Lib\vulkan-1.lib;user32.lib;gdi32.lib;shell32.lib;comdlg32.lib;winhttp.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+      <DataExecutionPrevention></DataExecutionPrevention>
+      <EntryPointSymbol>mainCRTStartup</EntryPointSymbol>
+      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+      <ImageHasSafeExceptionHandlers></ImageHasSafeExceptionHandlers>
+      <ImportLibrary>D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/MinSizeRel/genesis_app.lib</ImportLibrary>
+      <LinkErrorReporting></LinkErrorReporting>
+      <ProgramDataBaseFile>D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/GenesisEngineState/Binaries/Win64/Editor/MinSizeRel/genesis_app.pdb</ProgramDataBaseFile>
+      <RandomizedBaseAddress></RandomizedBaseAddress>
+      <SubSystem>Windows</SubSystem>
+    </Link>
+    <ProjectReference>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>D:\GameCreation\GenesisEngine\vulkan_app\include;D:\GameCreation\GenesisEngine\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>%(AdditionalOptions) -imsvc "C:/Users/Myke/AppData/Local/Programs/VulkanSDK/1.4.341.1/include"</AdditionalOptions>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <BufferSecurityCheck></BufferSecurityCheck>
+      <CallingConvention></CallingConvention>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <FloatingPointModel></FloatingPointModel>
+      <ForceConformanceInForLoopScope></ForceConformanceInForLoopScope>
+      <InlineFunctionExpansion>OnlyExplicitInline</InlineFunctionExpansion>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <MinimalRebuild></MinimalRebuild>
+      <Optimization>MaxSpeed</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RemoveUnreferencedCodeData></RemoveUnreferencedCodeData>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <RuntimeTypeInfo>true</RuntimeTypeInfo>
+      <SupportJustMyCode></SupportJustMyCode>
+      <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
+      <UseFullPaths>false</UseFullPaths>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;GENESIS_EDITOR_BUILD=1;NOMINMAX;WIN32_LEAN_AND_MEAN;EW_SHADER_OUT_DIR="D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/shaders";EW_ALU_TRACE_ENABLE=0;CMAKE_INTDIR="RelWithDebInfo"</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;GENESIS_EDITOR_BUILD=1;NOMINMAX;WIN32_LEAN_AND_MEAN;EW_SHADER_OUT_DIR=\"D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/shaders\";EW_ALU_TRACE_ENABLE=0;CMAKE_INTDIR=\"RelWithDebInfo\"</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>D:\GameCreation\GenesisEngine\vulkan_app\include;D:\GameCreation\GenesisEngine\include;C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>D:\GameCreation\GenesisEngine\vulkan_app\include;D:\GameCreation\GenesisEngine\include;C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <Link>
+      <AdditionalDependencies>..\RelWithDebInfo\EigenWareCore.lib;C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\Lib\vulkan-1.lib;user32.lib;gdi32.lib;shell32.lib;comdlg32.lib;winhttp.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+      <DataExecutionPrevention></DataExecutionPrevention>
+      <EntryPointSymbol>mainCRTStartup</EntryPointSymbol>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+      <ImageHasSafeExceptionHandlers></ImageHasSafeExceptionHandlers>
+      <ImportLibrary>D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/RelWithDebInfo/genesis_app.lib</ImportLibrary>
+      <LinkErrorReporting></LinkErrorReporting>
+      <ProgramDataBaseFile>D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/GenesisEngineState/Binaries/Win64/Editor/RelWithDebInfo/genesis_app.pdb</ProgramDataBaseFile>
+      <RandomizedBaseAddress></RandomizedBaseAddress>
+      <SubSystem>Windows</SubSystem>
+    </Link>
+    <ProjectReference>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <CustomBuild Include="D:\GameCreation\GenesisEngine\vulkan_app\CMakeLists.txt">
+      <UseUtf8Encoding>Always</UseUtf8Encoding>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Building Custom Rule D:/GameCreation/GenesisEngine/vulkan_app/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">setlocal
+"D:\Program Files\CMake\bin\cmake.exe" -SD:/GameCreation/GenesisEngine -BD:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan --check-stamp-file D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\GameCreation\GenesisEngine\cmake\EwSpirvTools.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageHandleStandardArgs.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageMessage.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindVulkan.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Building Custom Rule D:/GameCreation/GenesisEngine/vulkan_app/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">setlocal
+"D:\Program Files\CMake\bin\cmake.exe" -SD:/GameCreation/GenesisEngine -BD:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan --check-stamp-file D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\GameCreation\GenesisEngine\cmake\EwSpirvTools.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageHandleStandardArgs.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageMessage.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindVulkan.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Building Custom Rule D:/GameCreation/GenesisEngine/vulkan_app/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">setlocal
+"D:\Program Files\CMake\bin\cmake.exe" -SD:/GameCreation/GenesisEngine -BD:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan --check-stamp-file D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\GameCreation\GenesisEngine\cmake\EwSpirvTools.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageHandleStandardArgs.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageMessage.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindVulkan.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Building Custom Rule D:/GameCreation/GenesisEngine/vulkan_app/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">setlocal
+"D:\Program Files\CMake\bin\cmake.exe" -SD:/GameCreation/GenesisEngine -BD:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan --check-stamp-file D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\GameCreation\GenesisEngine\cmake\EwSpirvTools.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageHandleStandardArgs.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageMessage.cmake;D:\Program Files\CMake\share\cmake-4.2\Modules\FindVulkan.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\vulkan_app\src\main.cpp" />
+    <ClCompile Include="D:\GameCreation\GenesisEngine\vulkan_app\src\GE_app.cpp" />
+    <ClCompile Include="D:\GameCreation\GenesisEngine\vulkan_app\src\camera_controller.cpp" />
+    <ClCompile Include="D:\GameCreation\GenesisEngine\vulkan_app\src\ai_ui.cpp" />
+    <ClCompile Include="D:\GameCreation\GenesisEngine\vulkan_app\src\ew_openai_chat.cpp" />
+    <ClCompile Include="D:\GameCreation\GenesisEngine\vulkan_app\src\openxr_runtime.cpp" />
+    <ClCompile Include="D:\GameCreation\GenesisEngine\vulkan_app\src\obj_import.cpp" />
+    <ClCompile Include="D:\GameCreation\GenesisEngine\vulkan_app\src\scene.cpp" />
+    <ClCompile Include="D:\GameCreation\GenesisEngine\vulkan_app\src\scene_api.cpp" />
+    <ResourceCompile Include="D:\GameCreation\GenesisEngine\vulkan_app\resources\genesis_icon.rc" />
+  </ItemGroup>
+  <ItemGroup />
+  <ItemGroup>
+    <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\ZERO_CHECK.vcxproj">
+      <Project>{EF57CC11-CB31-3876-B50D-BE8D6AD98E6D}</Project>
+      <Name>ZERO_CHECK</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\EWShaders.vcxproj">
+      <Project>{1162C764-8942-3ED3-B853-05585F0640EC}</Project>
+      <Name>EWShaders</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.vcxproj">
+      <Project>{FC10132A-C155-390E-8E04-4FD6FD32A7F1}</Project>
+      <Name>EigenWareCore</Name>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

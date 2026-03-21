@@ -1,0 +1,60 @@
+#version 460
+#extension GL_ARB_gpu_shader_int64 : require
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform Push {
+    uint n_u32;
+    uint k_u32;
+    uint chunk_u32;
+} pc;
+
+layout(std430, binding = 0) readonly buffer ScoresBuf {
+    int64_t scores[];
+};
+
+layout(std430, binding = 1) buffer OutIdxBuf {
+    uint out_idx[];
+};
+
+layout(std430, binding = 2) buffer OutScoreBuf {
+    int64_t out_score[];
+};
+
+const int64_t SENTINEL_SCORE = int64_t(-9223372036854775807L) - int64_t(1);
+const uint SENTINEL_INDEX = 0xFFFFFFFFu;
+
+bool ge_better(int64_t score_a, uint idx_a, int64_t score_b, uint idx_b) {
+    if (score_a > score_b) return true;
+    if (score_a < score_b) return false;
+    return idx_a < idx_b;
+}
+
+void main() {
+    uint bid = gl_GlobalInvocationID.x;
+    uint start = bid * pc.chunk_u32;
+    uint end = min(start + pc.chunk_u32, pc.n_u32);
+    uint base = bid * pc.k_u32;
+
+    for (uint i = 0u; i < pc.k_u32; ++i) {
+        out_idx[base + i] = SENTINEL_INDEX;
+        out_score[base + i] = SENTINEL_SCORE;
+    }
+
+    for (uint i = start; i < end; ++i) {
+        int64_t s = scores[i];
+        if (s <= int64_t(0)) continue;
+        for (uint pos = 0u; pos < pc.k_u32; ++pos) {
+            int64_t cur_s = out_score[base + pos];
+            uint cur_i = out_idx[base + pos];
+            if (!ge_better(s, i, cur_s, cur_i)) continue;
+            for (uint j = pc.k_u32 - 1u; j > pos; --j) {
+                out_score[base + j] = out_score[base + j - 1u];
+                out_idx[base + j] = out_idx[base + j - 1u];
+            }
+            out_score[base + pos] = s;
+            out_idx[base + pos] = i;
+            break;
+        }
+    }
+}

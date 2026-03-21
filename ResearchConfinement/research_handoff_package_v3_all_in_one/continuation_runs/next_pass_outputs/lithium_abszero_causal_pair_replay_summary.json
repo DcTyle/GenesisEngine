@@ -1,0 +1,84 @@
+{
+  "run_id": "020_causal_pair_replay",
+  "hypothesis": "The current local timing law is already mostly correct, and the remaining outer-band miss can be reduced by a causal pair-support accumulation replay built from logged pair channels without arbitrary shell scaling.",
+  "active_equations": {
+    "local_timing_law": "t_appear = 14.5729166667 + 1808.22336112*(omega_eff - 0.9957121838) - 275.99151246*(R_eff - 0.4425915037) + 1367.81476721*(C_eff - 0.3855790654) - 135161.28797655*(scale_eff_doppler - 1.0156430049)",
+    "pair_support_raw": "S_ij = Rel_ij^2 * O_ij * R_ij * Cgate_ij * Tpair_base_ij * Tflux_ij",
+    "pair_timing_correction": "delta_t_pair(j) = t_local(j) * (1 - Rel_i_calc(j)) * sum_{i<j} S_ij",
+    "corrected_local_time": "t_corrected(j) = t_local(j) - delta_t_pair(j)",
+    "causal_replay_update": "n_j(t+1) = n_j(t) + dn_local_shifted_j(t+1) * (1 + sum_{i<j} S_ij * n_i(t) / n_i_final_baseline)"
+  },
+  "pair_support_raw": {
+    "2-3": 0.15899233739180108,
+    "2-5": 0.05588230166910839,
+    "2-6": 0.04165774148871111,
+    "5-6": 0.041758708837552706
+  },
+  "timing_correction": {
+    "2": {
+      "t_local": 5.091159043384437,
+      "delta_t_pair": 0.0,
+      "t_corrected": 5.091159043384437
+    },
+    "3": {
+      "t_local": 4.906351288918245,
+      "delta_t_pair": 0.0909762319503528,
+      "t_corrected": 4.815375056967892
+    },
+    "5": {
+      "t_local": 17.38856202716795,
+      "delta_t_pair": 0.3263428742767661,
+      "t_corrected": 17.062219152891185
+    },
+    "6": {
+      "t_local": 30.90561294896281,
+      "delta_t_pair": 0.7900094968037183,
+      "t_corrected": 30.11560345215909
+    }
+  },
+  "baseline_metrics": {
+    "r2": {
+      "first_persist_step_at_0p1": 4,
+      "final_n": 2.1869844097664024
+    },
+    "r3": {
+      "first_persist_step_at_0p1": 5,
+      "final_n": 1.831799583084502
+    },
+    "r5": {
+      "first_persist_step_at_0p1": 18,
+      "final_n": 0.8290027573827758
+    },
+    "r6": {
+      "first_persist_step_at_0p1": 31,
+      "final_n": 0.6721458801801243
+    }
+  },
+  "corrected_metrics": {
+    "r2": {
+      "first_persist_step_at_0p1": 4,
+      "final_n": 2.1869844097664024
+    },
+    "r3": {
+      "first_persist_step_at_0p1": 5,
+      "final_n": 1.981141895941073
+    },
+    "r5": {
+      "first_persist_step_at_0p1": 17,
+      "final_n": 0.8725429972391293
+    },
+    "r6": {
+      "first_persist_step_at_0p1": 30,
+      "final_n": 0.7273800107948672
+    }
+  },
+  "key_deltas": {
+    "r5_first_persist_shift_steps": 1,
+    "r6_first_persist_shift_steps": 1,
+    "r5_final_gain_fraction": 0.05252122440920859,
+    "r6_final_gain_fraction": 0.08217580772784183,
+    "r6_to_r5_ratio_baseline": 0.8107884734933084,
+    "r6_to_r5_ratio_corrected": 0.8336322829893978
+  },
+  "honesty_note": "This is still a toy/analogue replay derived from logged effective channels and baseline replay occupancies. It is not validated particle physics and it does not prove a canonical closure."
+}

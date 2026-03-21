@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.18)
 project(GenesisEngine)
 
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/EwSpirvTools.cmake")
+
 # Disallow in-source builds to keep the repo clean (no build artifacts in tree).
 if (CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR)
     message(FATAL_ERROR "In-source builds are disabled. Use: cmake -S . -B build")
@@ -15,14 +17,16 @@ endif()
 
 set(CMAKE_CXX_STANDARD 17)
 
-# CUDA build policy: fixed toolchain behavior for deterministic kernels.
-set(CMAKE_CUDA_STANDARD 17)
-set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+option(EW_ENABLE_CUDA "Enable CUDA evolution kernel (required for CUDA-only pipeline slices)" ON)
+if (EW_ENABLE_CUDA)
+    # CUDA build policy: fixed toolchain behavior for deterministic kernels.
+    set(CMAKE_CUDA_STANDARD 17)
+    set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
-# GPU-only build policy: CUDA is mandatory for the runtime pipeline.
-# Default CUDA architectures: RTX 2060 (Turing) = 75. Override via -DCMAKE_CUDA_ARCHITECTURES=...
-if (NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-    set(CMAKE_CUDA_ARCHITECTURES 75)
+    # Default CUDA architectures: RTX 2060 (Turing) = 75.
+    if (NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+        set(CMAKE_CUDA_ARCHITECTURES 75)
+    endif()
 endif()
 
 # Carrier-trace (substrate microprocessor inspection) can be compiled out for FPS.
@@ -112,7 +116,6 @@ add_library(EigenWareCore
     src/GE_corpus_anchor_store.cpp
     src/GE_corpus_pulse_log.cpp
     src/GE_lane_threshold_schedule.cpp
-    src/GE_overlap_router.cpp
     src/GE_quantity_peeling_trainer.cpp
     src/GE_coherence_graph_store.cpp
     src/GE_safety_governor.cpp
@@ -185,48 +188,85 @@ if (UNIX)
     target_link_libraries(EigenWareCore PUBLIC m)
 endif()
 
+find_package(Vulkan REQUIRED)
+target_link_libraries(EigenWareCore PRIVATE Vulkan::Vulkan)
+target_compile_definitions(EigenWareCore PRIVATE EW_ENABLE_GPU_COMPUTE=1)
+
+set(EW_VK_COMPUTE_SHADER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vkcompute")
+set(EW_VK_COMPUTE_SHADER_OUT "${CMAKE_CURRENT_BINARY_DIR}/vkcompute_shaders")
+file(MAKE_DIRECTORY "${EW_VK_COMPUTE_SHADER_OUT}")
+
+ew_find_spirv_compiler(EW_VK_SHADER_COMPILER EW_VK_COMP_MODE)
+
+set(EW_VK_COMPUTE_SHADERS
+    ge_canonicalize.comp
+    symbol_tokenize.comp
+    carrier_bundle.comp
+    ge_overlap_scores.comp
+    ge_topk_block.comp
+    ge_topk_merge.comp
+)
+
+set(EW_VK_COMPUTE_SPV)
+foreach(EW_VK_SHADER IN LISTS EW_VK_COMPUTE_SHADERS)
+    set(EW_VK_SHADER_SRC "${EW_VK_COMPUTE_SHADER_DIR}/${EW_VK_SHADER}")
+    set(EW_VK_SHADER_DST "${EW_VK_COMPUTE_SHADER_OUT}/${EW_VK_SHADER}.spv")
+    list(APPEND EW_VK_COMPUTE_SPV "${EW_VK_SHADER_DST}")
+    ew_add_spirv_shader_command(
+        "${EW_VK_SHADER_COMPILER}"
+        "${EW_VK_COMP_MODE}"
+        "${EW_VK_SHADER_SRC}"
+        "${EW_VK_SHADER_DST}")
+endforeach()
+
+add_custom_target(EWVulkanComputeShaders ALL DEPENDS ${EW_VK_COMPUTE_SPV})
+add_dependencies(EigenWareCore EWVulkanComputeShaders)
+target_compile_definitions(EigenWareCore PRIVATE EW_VK_SHADER_OUT_DIR="${EW_VK_COMPUTE_SHADER_OUT}")
+
 
 if (EW_BUILD_ASSIMP_TOOLS)
     target_sources(EigenWareCore PRIVATE src/assimp_fbx_io.cpp)
     target_link_libraries(EigenWareCore PUBLIC assimp::assimp)
 endif()
 
-# Main executables are provided by vulkan_app as genesis_runtime and genesis_editor.
+# Main executables are provided by vulkan_app as genesis_runtime and genesis_app.
 
 option(EW_ENABLE_UI_PARTITION "Enable UI anchor partition + chat stream" ON)
-enable_language(CUDA)
-find_package(CUDAToolkit REQUIRED)
-add_library(eigen_cuda
-    cuda/evolve_kernel.cu
-    cuda/field_lattice_kernels.cu
-    cuda/emergent_post_kernel.cu
-    cuda/carrier_bundle_kernels.cu
-    cuda/learning_gate_kernels.cu
-    cuda/crawler_encode_kernels.cu
-    cuda/GE_overlap_kernels.cu
-    cuda/GE_canonicalize_kernels.cu
-    cuda/GE_topk_select_kernels.cu
-    cuda/symbol_tokenize_kernels.cu
-    cuda/GE_phase_current_kernels.cu
-    cuda/GE_object_local_kernels.cu
-)
-target_link_libraries(eigen_cuda PRIVATE CUDA::cudart)
-target_include_directories(eigen_cuda PRIVATE ${CUDAToolkit_INCLUDE_DIRS} ${CMAKE_CURRENT_SOURCE_DIR}/include)
+if (EW_ENABLE_CUDA)
+    enable_language(CUDA)
+    find_package(CUDAToolkit REQUIRED)
+    add_library(eigen_cuda
+        cuda/evolve_kernel.cu
+        cuda/field_lattice_kernels.cu
+        cuda/emergent_post_kernel.cu
+        cuda/carrier_bundle_kernels.cu
+        cuda/learning_gate_kernels.cu
+        cuda/crawler_encode_kernels.cu
+        cuda/GE_overlap_kernels.cu
+        cuda/GE_canonicalize_kernels.cu
+        cuda/GE_topk_select_kernels.cu
+        cuda/symbol_tokenize_kernels.cu
+        cuda/GE_phase_current_kernels.cu
+        cuda/GE_object_local_kernels.cu
+    )
+    target_link_libraries(eigen_cuda PRIVATE CUDA::cudart)
+    target_include_directories(eigen_cuda PRIVATE ${CUDAToolkit_INCLUDE_DIRS} ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
-# Deterministic CUDA numerics: disable FMA reassociation and enforce precise div/sqrt.
-target_compile_options(eigen_cuda PRIVATE
-    $<$<COMPILE_LANGUAGE:CUDA>:--fmad=false --prec-div=true --prec-sqrt=true>
-)
-target_compile_definitions(EigenWareCore PRIVATE EW_ENABLE_CUDA=1)
-target_link_libraries(EigenWareCore PRIVATE eigen_cuda)
+    # Deterministic CUDA numerics: disable FMA reassociation and enforce precise div/sqrt.
+    target_compile_options(eigen_cuda PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:--fmad=false --prec-div=true --prec-sqrt=true>
+    )
+    target_compile_definitions(EigenWareCore PRIVATE EW_ENABLE_CUDA=1)
+    target_link_libraries(EigenWareCore PRIVATE eigen_cuda)
+else()
+    target_compile_definitions(EigenWareCore PRIVATE EW_ENABLE_CUDA=0)
+endif()
 
-# CUDA C++ wrappers (thin orchestration only; compute stays in kernels)
+# Canonical GPU orchestration for the Vulkan compute path.
 target_sources(EigenWareCore PRIVATE
-    src/symbol_tokenize_cuda.cpp
-    src/carrier_bundle_cuda.cpp
-    src/GE_canonicalize_cuda.cpp
-    src/GE_overlap_cuda.cpp
-    src/GE_topk_cuda.cpp
+    src/carrier_bundle_gpu.cpp
+    src/GE_overlap_gpu.cpp
+    src/ew_gpu_compute.cpp
 )
 
 # Vulkan app lives in its own subdirectory.
@@ -242,24 +282,26 @@ target_link_libraries(test_determinism PRIVATE EigenWareCore)
 add_test(NAME deterministic COMMAND test_determinism)
 
 # Corpus pipeline regression tests (CUDA required).
-add_test(NAME ge_corpus_mvp
-    COMMAND ge_regression_suite
-        corpus_dir=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/Corpus
-        out_dir=${CMAKE_BINARY_DIR}/test_out/Corpus
-        lane=0
-        epochs=2
-        tokens=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/tokens_vocab.txt
-)
-set_tests_properties(ge_corpus_mvp PROPERTIES LABELS "CUDA;CORPUS")
+if (EW_ENABLE_CUDA)
+    add_test(NAME ge_corpus_mvp
+        COMMAND ge_regression_suite
+            corpus_dir=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/Corpus
+            out_dir=${CMAKE_BINARY_DIR}/test_out/Corpus
+            lane=0
+            epochs=2
+            tokens=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/tokens_vocab.txt
+    )
+    set_tests_properties(ge_corpus_mvp PROPERTIES LABELS "CUDA;CORPUS")
 
-add_test(NAME ge_corpus_replay_identity
-    COMMAND ge_corpus_replay
-        state_dir=${CMAKE_BINARY_DIR}/test_out/Corpus
-        corpus_root=${CMAKE_BINARY_DIR}/test_out/Corpus
-        epochs=2
-        cuda=true
-)
-set_tests_properties(ge_corpus_replay_identity PROPERTIES LABELS "CUDA;CORPUS")
+    add_test(NAME ge_corpus_replay_identity
+        COMMAND ge_corpus_replay
+            state_dir=${CMAKE_BINARY_DIR}/test_out/Corpus
+            corpus_root=${CMAKE_BINARY_DIR}/test_out/Corpus
+            epochs=2
+            cuda=true
+    )
+    set_tests_properties(ge_corpus_replay_identity PROPERTIES LABELS "CUDA;CORPUS")
+endif()
 
 
 add_executable(ew_contract_harness
@@ -433,3 +475,51 @@ add_executable(ge_ai_determinism_test
     src/tools/ge_ai_determinism_test_main.cpp
 )
 target_link_libraries(ge_ai_determinism_test PRIVATE EigenWareCore)
+
+if (WIN32)
+add_executable(genesis_remote
+    src/tools/genesis_remote_main.cpp
+    vulkan_app/resources/genesis_icon.rc
+)
+target_include_directories(genesis_remote PRIVATE include)
+target_link_libraries(genesis_remote PRIVATE user32 shell32)
+install(TARGETS genesis_remote RUNTIME DESTINATION GenesisEngineState/Binaries/Win64/Runtime COMPONENT RuntimeApp)
+endif()
+
+set(CPACK_PACKAGE_NAME "GenesisEngine")
+set(CPACK_PACKAGE_VENDOR "GenesisEngine")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Genesis Engine native runtime and editor viewport")
+set(CPACK_PACKAGE_VERSION_MAJOR 0)
+set(CPACK_PACKAGE_VERSION_MINOR 1)
+set(CPACK_PACKAGE_VERSION_PATCH 0)
+set(CPACK_PACKAGE_DIRECTORY "${CMAKE_BINARY_DIR}/packages")
+set(CPACK_PACKAGE_INSTALL_DIRECTORY "GenesisEngine")
+set(CPACK_PACKAGE_FILE_NAME "${CPACK_PACKAGE_NAME}-${CPACK_PACKAGE_VERSION_MAJOR}.${CPACK_PACKAGE_VERSION_MINOR}.${CPACK_PACKAGE_VERSION_PATCH}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
+set(CPACK_VERBATIM_VARIABLES ON)
+set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY OFF)
+set(CPACK_ARCHIVE_COMPONENT_INSTALL ON)
+set(CPACK_COMPONENTS_ALL RuntimeApp)
+if (GENESIS_INSTALL_EDITOR_APP)
+    list(APPEND CPACK_COMPONENTS_ALL EditorApp)
+endif()
+set(CPACK_COMPONENT_RUNTIMEAPP_DISPLAY_NAME "Genesis Runtime")
+set(CPACK_COMPONENT_RUNTIMEAPP_DESCRIPTION "Shipping runtime binaries, shaders, manifest, and remote control helper.")
+set(CPACK_COMPONENT_EDITORAPP_DISPLAY_NAME "Genesis Editor")
+set(CPACK_COMPONENT_EDITORAPP_DESCRIPTION "Native editor viewport binaries and shaders.")
+
+if (WIN32)
+    set(CPACK_GENERATOR "ZIP")
+    find_program(EW_MAKENSIS_EXECUTABLE makensis)
+    if (EW_MAKENSIS_EXECUTABLE)
+        set(CPACK_GENERATOR "ZIP;NSIS")
+        set(CPACK_NSIS_DISPLAY_NAME "Genesis Engine")
+        set(CPACK_NSIS_PACKAGE_NAME "Genesis Engine")
+        set(CPACK_NSIS_MUI_ICON "${CMAKE_CURRENT_SOURCE_DIR}/vulkan_app/resources/genesis.ico")
+        set(CPACK_NSIS_MUI_UNIICON "${CMAKE_CURRENT_SOURCE_DIR}/vulkan_app/resources/genesis.ico")
+        set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
+    endif()
+else()
+    set(CPACK_GENERATOR "TGZ")
+endif()
+
+include(CPack)
