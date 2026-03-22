@@ -14,3 +14,6 @@ Notes
 - The scripts delete: out\build\<preset> before configuring and compiling.
 - Windows builds require the Visual Studio 2022 ClangCL toolset and the Vulkan SDK shader tools.
 - The canonical Vulkan preset disables CUDA so the viewport app can configure on non-CUDA machines.
+- Local install flow: scripts\install_vulkan_app_win64.bat
+- Distributable package flow: scripts\package_vulkan_app_win64.bat
+- When NSIS is available, package_vulkan_app_win64.bat emits both ZIP and Windows installer artifacts from out\build\<preset>\packages.

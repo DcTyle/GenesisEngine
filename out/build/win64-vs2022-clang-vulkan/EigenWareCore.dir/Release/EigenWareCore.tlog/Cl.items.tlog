@@ -92,6 +92,9 @@ D:\GameCreation\GenesisEngine\src\GE_planet_ancilla.cpp;D:\GameCreation\GenesisE
 D:\GameCreation\GenesisEngine\src\crawler_encode_cuda.cpp;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.dir\Release\crawler_encode_cuda.obj
 D:\GameCreation\GenesisEngine\src\ew_txn_file.cpp;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.dir\Release\ew_txn_file.obj
 D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\generated\anchor_pack_blobs.cpp;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.dir\Release\anchor_pack_blobs.obj
+D:\GameCreation\GenesisEngine\src\assimp_fbx_io_stub.cpp;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.dir\Release\assimp_fbx_io_stub.obj
+D:\GameCreation\GenesisEngine\src\field_lattice_gpu_stub.cpp;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.dir\Release\field_lattice_gpu_stub.obj
+D:\GameCreation\GenesisEngine\src\learning_gate_cuda_stub.cpp;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.dir\Release\learning_gate_cuda_stub.obj
 D:\GameCreation\GenesisEngine\src\carrier_bundle_gpu.cpp;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.dir\Release\carrier_bundle_gpu.obj
 D:\GameCreation\GenesisEngine\src\GE_overlap_gpu.cpp;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.dir\Release\GE_overlap_gpu.obj
 D:\GameCreation\GenesisEngine\src\ew_gpu_compute.cpp;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.dir\Release\ew_gpu_compute.obj

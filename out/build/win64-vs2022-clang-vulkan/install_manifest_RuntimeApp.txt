@@ -1,0 +1,7 @@
+D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/packages/_CPack_Packages/win64/NSIS/GenesisEngine-0.1.0-Windows-AMD64/RuntimeApp/GenesisEngineState/Binaries/Win64/Runtime/GenesisRuntime.exe
+D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/packages/_CPack_Packages/win64/NSIS/GenesisEngine-0.1.0-Windows-AMD64/RuntimeApp/GenesisEngineState/Binaries/Win64/Runtime/shaders/instanced.vert.spv
+D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/packages/_CPack_Packages/win64/NSIS/GenesisEngine-0.1.0-Windows-AMD64/RuntimeApp/GenesisEngineState/Binaries/Win64/Runtime/shaders/instanced.frag.spv
+D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/packages/_CPack_Packages/win64/NSIS/GenesisEngine-0.1.0-Windows-AMD64/RuntimeApp/GenesisEngineState/Branding/genesis.ico
+D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/packages/_CPack_Packages/win64/NSIS/GenesisEngine-0.1.0-Windows-AMD64/RuntimeApp/GenesisEngineState/Branding/genesis_splash.bmp
+D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/packages/_CPack_Packages/win64/NSIS/GenesisEngine-0.1.0-Windows-AMD64/RuntimeApp/GenesisEngineState/Binaries/Win64/GENESIS_RUNTIME_EDITOR_SPLIT_MANIFEST.txt
+D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/packages/_CPack_Packages/win64/NSIS/GenesisEngine-0.1.0-Windows-AMD64/RuntimeApp/GenesisEngineState/Binaries/Win64/Runtime/GenesisRemote.exe

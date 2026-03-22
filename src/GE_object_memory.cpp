@@ -8,6 +8,14 @@ static inline bool ew_write_u64(std::ostream& out, uint64_t v) {
     out.write(reinterpret_cast<const char*>(&v), sizeof(v));
     return out.good();
 }
+static inline bool ew_write_i64(std::ostream& out, int64_t v) {
+    out.write(reinterpret_cast<const char*>(&v), sizeof(v));
+    return out.good();
+}
+static inline bool ew_write_f32(std::ostream& out, float v) {
+    out.write(reinterpret_cast<const char*>(&v), sizeof(v));
+    return out.good();
+}
 static inline bool ew_read_u32(std::istream& in, uint32_t& v) {
     in.read(reinterpret_cast<char*>(&v), sizeof(v));
     return in.good();
@@ -16,11 +24,19 @@ static inline bool ew_read_u64(std::istream& in, uint64_t& v) {
     in.read(reinterpret_cast<char*>(&v), sizeof(v));
     return in.good();
 }
+static inline bool ew_read_i64(std::istream& in, int64_t& v) {
+    in.read(reinterpret_cast<char*>(&v), sizeof(v));
+    return in.good();
+}
+static inline bool ew_read_f32(std::istream& in, float& v) {
+    in.read(reinterpret_cast<char*>(&v), sizeof(v));
+    return in.good();
+}
 
 bool EwObjectStore::serialize_binary(std::ostream& out) const {
     // Header
     const uint32_t magic = 0x4F4D524FUL; // 'OMRO'
-    const uint32_t ver = 1u;
+    const uint32_t ver = 2u;
     if (!ew_write_u32(out, magic)) return false;
     if (!ew_write_u32(out, ver)) return false;
 
@@ -34,6 +50,29 @@ bool EwObjectStore::serialize_binary(std::ostream& out) const {
         if (!ew_write_u32(out, n)) return false;
         if (n) out.write(e.label_utf8.data(), (std::streamsize)n);
         if (!out.good()) return false;
+        if (!ew_write_i64(out, e.mass_or_cost_q32_32)) return false;
+        for (size_t i = 0; i < 9u; ++i) {
+            if (!ew_write_u64(out, e.geomcoord9_u64x9.u64x9[i])) return false;
+        }
+        if (!ew_write_u64(out, e.phase_seed_u64)) return false;
+#define EW_OBJECT_DNA_WRITE_SCALAR(name, default_value) if (!ew_write_f32(out, e.object_dna.name)) return false;
+        EW_OBJECT_DNA_SCALAR_FIELDS(EW_OBJECT_DNA_WRITE_SCALAR)
+        EW_OBJECT_DNA_6DOF_FIELDS(EW_OBJECT_DNA_WRITE_SCALAR)
+#undef EW_OBJECT_DNA_WRITE_SCALAR
+        if (!ew_write_u32(out, e.voxel_grid_x_u32)) return false;
+        if (!ew_write_u32(out, e.voxel_grid_y_u32)) return false;
+        if (!ew_write_u32(out, e.voxel_grid_z_u32)) return false;
+        if (!ew_write_u32(out, e.voxel_format_u32)) return false;
+        if (!ew_write_u64(out, e.voxel_blob_id_u64)) return false;
+        if (!ew_write_u32(out, e.uv_atlas_w_u32)) return false;
+        if (!ew_write_u32(out, e.uv_atlas_h_u32)) return false;
+        if (!ew_write_u32(out, e.uv_atlas_format_u32)) return false;
+        if (!ew_write_u64(out, e.uv_atlas_blob_id_u64)) return false;
+        if (!ew_write_u32(out, e.local_grid_x_u32)) return false;
+        if (!ew_write_u32(out, e.local_grid_y_u32)) return false;
+        if (!ew_write_u32(out, e.local_grid_z_u32)) return false;
+        if (!ew_write_u32(out, e.local_format_u32)) return false;
+        if (!ew_write_u64(out, e.local_blob_id_u64)) return false;
     }
 
     // Voxel index + blob
@@ -93,7 +132,7 @@ bool EwObjectStore::deserialize_binary(std::istream& in) {
     uint32_t magic = 0, ver = 0;
     if (!ew_read_u32(in, magic)) return false;
     if (!ew_read_u32(in, ver)) return false;
-    if (magic != 0x4F4D524FUL || ver != 1u) return false;
+    if (magic != 0x4F4D524FUL || ver != 2u) return false;
 
     entries_sorted_.clear();
     voxel_index_sorted_.clear();
@@ -118,6 +157,29 @@ bool EwObjectStore::deserialize_binary(std::istream& in) {
             in.read(&e.label_utf8[0], (std::streamsize)nlab);
             if (!in.good()) return false;
         }
+        if (!ew_read_i64(in, e.mass_or_cost_q32_32)) return false;
+        for (size_t g = 0; g < 9u; ++g) {
+            if (!ew_read_u64(in, e.geomcoord9_u64x9.u64x9[g])) return false;
+        }
+        if (!ew_read_u64(in, e.phase_seed_u64)) return false;
+#define EW_OBJECT_DNA_READ_SCALAR(name, default_value) if (!ew_read_f32(in, e.object_dna.name)) return false;
+        EW_OBJECT_DNA_SCALAR_FIELDS(EW_OBJECT_DNA_READ_SCALAR)
+        EW_OBJECT_DNA_6DOF_FIELDS(EW_OBJECT_DNA_READ_SCALAR)
+#undef EW_OBJECT_DNA_READ_SCALAR
+        if (!ew_read_u32(in, e.voxel_grid_x_u32)) return false;
+        if (!ew_read_u32(in, e.voxel_grid_y_u32)) return false;
+        if (!ew_read_u32(in, e.voxel_grid_z_u32)) return false;
+        if (!ew_read_u32(in, e.voxel_format_u32)) return false;
+        if (!ew_read_u64(in, e.voxel_blob_id_u64)) return false;
+        if (!ew_read_u32(in, e.uv_atlas_w_u32)) return false;
+        if (!ew_read_u32(in, e.uv_atlas_h_u32)) return false;
+        if (!ew_read_u32(in, e.uv_atlas_format_u32)) return false;
+        if (!ew_read_u64(in, e.uv_atlas_blob_id_u64)) return false;
+        if (!ew_read_u32(in, e.local_grid_x_u32)) return false;
+        if (!ew_read_u32(in, e.local_grid_y_u32)) return false;
+        if (!ew_read_u32(in, e.local_grid_z_u32)) return false;
+        if (!ew_read_u32(in, e.local_format_u32)) return false;
+        if (!ew_read_u64(in, e.local_blob_id_u64)) return false;
         entries_sorted_.push_back(e);
     }
 

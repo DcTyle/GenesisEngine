@@ -2,7 +2,7 @@
 
 # Set the install prefix
 if(NOT DEFINED CMAKE_INSTALL_PREFIX)
-  set(CMAKE_INSTALL_PREFIX "D:/Program Files/GenesisEngine")
+  set(CMAKE_INSTALL_PREFIX "D:/GameCreation/GenesisEngine/out/install/win64-vs2022-clang-vulkan")
 endif()
 string(REGEX REPLACE "/$" "" CMAKE_INSTALL_PREFIX "${CMAKE_INSTALL_PREFIX}")
 
@@ -44,13 +44,13 @@ endif()
 
 if(CMAKE_INSTALL_COMPONENT STREQUAL "RuntimeApp" OR NOT CMAKE_INSTALL_COMPONENT)
   if(CMAKE_INSTALL_CONFIG_NAME MATCHES "^([Dd][Ee][Bb][Uu][Gg])$")
-    file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/GenesisEngineState/Binaries/Win64/Runtime" TYPE EXECUTABLE FILES "D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/Debug/genesis_remote.exe")
+    file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/GenesisEngineState/Binaries/Win64/Runtime" TYPE EXECUTABLE FILES "D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/Debug/GenesisRemote.exe")
   elseif(CMAKE_INSTALL_CONFIG_NAME MATCHES "^([Rr][Ee][Ll][Ee][Aa][Ss][Ee])$")
-    file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/GenesisEngineState/Binaries/Win64/Runtime" TYPE EXECUTABLE FILES "D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/Release/genesis_remote.exe")
+    file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/GenesisEngineState/Binaries/Win64/Runtime" TYPE EXECUTABLE FILES "D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/Release/GenesisRemote.exe")
   elseif(CMAKE_INSTALL_CONFIG_NAME MATCHES "^([Mm][Ii][Nn][Ss][Ii][Zz][Ee][Rr][Ee][Ll])$")
-    file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/GenesisEngineState/Binaries/Win64/Runtime" TYPE EXECUTABLE FILES "D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/MinSizeRel/genesis_remote.exe")
+    file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/GenesisEngineState/Binaries/Win64/Runtime" TYPE EXECUTABLE FILES "D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/MinSizeRel/GenesisRemote.exe")
   elseif(CMAKE_INSTALL_CONFIG_NAME MATCHES "^([Rr][Ee][Ll][Ww][Ii][Tt][Hh][Dd][Ee][Bb][Ii][Nn][Ff][Oo])$")
-    file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/GenesisEngineState/Binaries/Win64/Runtime" TYPE EXECUTABLE FILES "D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/RelWithDebInfo/genesis_remote.exe")
+    file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/GenesisEngineState/Binaries/Win64/Runtime" TYPE EXECUTABLE FILES "D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/RelWithDebInfo/GenesisRemote.exe")
   endif()
 endif()
 

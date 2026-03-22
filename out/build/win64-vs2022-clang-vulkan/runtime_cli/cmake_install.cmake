@@ -2,7 +2,7 @@
 
 # Set the install prefix
 if(NOT DEFINED CMAKE_INSTALL_PREFIX)
-  set(CMAKE_INSTALL_PREFIX "D:/Program Files/GenesisEngine")
+  set(CMAKE_INSTALL_PREFIX "D:/GameCreation/GenesisEngine/out/install/win64-vs2022-clang-vulkan")
 endif()
 string(REGEX REPLACE "/$" "" CMAKE_INSTALL_PREFIX "${CMAKE_INSTALL_PREFIX}")
 

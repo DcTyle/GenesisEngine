@@ -2,30 +2,86 @@
   "version": 6,
   "cmakeMinimumRequired": {
     "major": 3,
-    "minor": 18,
+    "minor": 25,
     "patch": 0
   },
   "configurePresets": [
     {
-      "name": "win64-vs2022-clang-vulkan",
-      "displayName": "Win64 VS2022 ClangCL + Vulkan",
+      "name": "win64-vs2022-clang-vulkan-base",
+      "hidden": true,
       "generator": "Visual Studio 17 2022",
       "toolset": "ClangCL",
-      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "binaryDir": "${sourceDir}/out/build/win64-vs2022-clang-vulkan",
+      "installDir": "${sourceDir}/out/install/win64-vs2022-clang-vulkan",
       "architecture": "x64",
       "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "EW_ENABLE_CUDA": "OFF",
         "EW_BUILD_VULKAN_APP": "ON",
+        "EW_ENFORCE_COHERENCE_GATE": "OFF",
         "GENESIS_BUILD_RUNTIME_APP": "ON",
         "GENESIS_INSTALL_EDITOR_APP": "ON"
       }
+    },
+    {
+      "name": "win64-vs2022-clang-vulkan",
+      "displayName": "Win64 VS2022 ClangCL + Vulkan",
+      "description": "Canonical Win64 development environment for the Genesis Engine Vulkan editor/runtime.",
+      "inherits": "win64-vs2022-clang-vulkan-base"
     }
   ],
   "buildPresets": [
     {
       "name": "win64-vs2022-clang-vulkan",
+      "displayName": "Build Genesis Win64 Distribution",
       "configurePreset": "win64-vs2022-clang-vulkan",
-      "configuration": "Release"
+      "configuration": "Release",
+      "targets": [
+        "genesis_app",
+        "genesis_runtime",
+        "genesis_remote"
+      ]
+    },
+    {
+      "name": "win64-vs2022-clang-vulkan-editor",
+      "displayName": "Build Genesis Engine Editor",
+      "inherits": "win64-vs2022-clang-vulkan",
+      "targets": [
+        "genesis_app"
+      ]
+    },
+    {
+      "name": "win64-vs2022-clang-vulkan-runtime",
+      "displayName": "Build Genesis Runtime",
+      "inherits": "win64-vs2022-clang-vulkan",
+      "targets": [
+        "genesis_runtime"
+      ]
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "win64-vs2022-clang-vulkan-tests",
+      "displayName": "Test Genesis Win64 Vulkan",
+      "configurePreset": "win64-vs2022-clang-vulkan",
+      "configuration": "Release",
+      "execution": {
+        "noTestsAction": "error",
+        "stopOnFailure": false
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ],
+  "packagePresets": [
+    {
+      "name": "win64-vs2022-clang-vulkan",
+      "displayName": "Package Genesis Win64 Vulkan",
+      "configurePreset": "win64-vs2022-clang-vulkan",
+      "configurations": [
+        "Release"
+      ]
     }
   ]
 }

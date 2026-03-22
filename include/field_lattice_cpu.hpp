@@ -21,6 +21,7 @@ public:
     void inject_text_amplitude_q32_32(int64_t amp_q32_32);
     void inject_image_amplitude_q32_32(int64_t amp_q32_32);
     void inject_audio_amplitude_q32_32(int64_t amp_q32_32);
+    void set_dt_seconds(float dt_seconds) { dt_ = dt_seconds; }
     void step_one_tick();
     void get_radiance_slice_bgra8(uint32_t slice_z, std::vector<uint8_t>& out_bgra8, EwFieldFrameHeader& out_hdr);
 

@@ -105,6 +105,118 @@
     </Midl>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <CustomBuild Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\CMakeFiles\1289a9ae26d779998525edb9ed0c73ca\cam_hist.comp.spv.rule">
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Generating shaders/cam_hist.comp.spv</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">setlocal
+C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\Bin\glslc.exe -o D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/shaders/cam_hist.comp.spv D:/GameCreation/GenesisEngine/vulkan_app/shaders/cam_hist.comp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\GameCreation\GenesisEngine\vulkan_app\shaders\cam_hist.comp;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\cam_hist.comp.spv</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Generating shaders/cam_hist.comp.spv</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">setlocal
+C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\Bin\glslc.exe -o D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/shaders/cam_hist.comp.spv D:/GameCreation/GenesisEngine/vulkan_app/shaders/cam_hist.comp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\GameCreation\GenesisEngine\vulkan_app\shaders\cam_hist.comp;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\cam_hist.comp.spv</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Generating shaders/cam_hist.comp.spv</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">setlocal
+C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\Bin\glslc.exe -o D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/shaders/cam_hist.comp.spv D:/GameCreation/GenesisEngine/vulkan_app/shaders/cam_hist.comp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\GameCreation\GenesisEngine\vulkan_app\shaders\cam_hist.comp;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\cam_hist.comp.spv</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Generating shaders/cam_hist.comp.spv</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">setlocal
+C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\Bin\glslc.exe -o D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/shaders/cam_hist.comp.spv D:/GameCreation/GenesisEngine/vulkan_app/shaders/cam_hist.comp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\GameCreation\GenesisEngine\vulkan_app\shaders\cam_hist.comp;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\cam_hist.comp.spv</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\CMakeFiles\1289a9ae26d779998525edb9ed0c73ca\cam_median.comp.spv.rule">
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Generating shaders/cam_median.comp.spv</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">setlocal
+C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\Bin\glslc.exe -o D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/shaders/cam_median.comp.spv D:/GameCreation/GenesisEngine/vulkan_app/shaders/cam_median.comp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\GameCreation\GenesisEngine\vulkan_app\shaders\cam_median.comp;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\cam_median.comp.spv</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Generating shaders/cam_median.comp.spv</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">setlocal
+C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\Bin\glslc.exe -o D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/shaders/cam_median.comp.spv D:/GameCreation/GenesisEngine/vulkan_app/shaders/cam_median.comp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\GameCreation\GenesisEngine\vulkan_app\shaders\cam_median.comp;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\cam_median.comp.spv</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Generating shaders/cam_median.comp.spv</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">setlocal
+C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\Bin\glslc.exe -o D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/shaders/cam_median.comp.spv D:/GameCreation/GenesisEngine/vulkan_app/shaders/cam_median.comp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\GameCreation\GenesisEngine\vulkan_app\shaders\cam_median.comp;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\cam_median.comp.spv</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Generating shaders/cam_median.comp.spv</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">setlocal
+C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\Bin\glslc.exe -o D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vulkan_app/shaders/cam_median.comp.spv D:/GameCreation/GenesisEngine/vulkan_app/shaders/cam_median.comp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\GameCreation\GenesisEngine\vulkan_app\shaders\cam_median.comp;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\cam_median.comp.spv</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
     <CustomBuild Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\CMakeFiles\1289a9ae26d779998525edb9ed0c73ca\instanced.frag.spv.rule">
       <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Generating shaders/instanced.frag.spv</Message>
       <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">setlocal
@@ -226,7 +338,7 @@ endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
 exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
-      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\instanced.vert.spv;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\instanced.frag.spv;%(AdditionalInputs)</AdditionalInputs>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\instanced.vert.spv;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\instanced.frag.spv;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\cam_hist.comp.spv;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\cam_median.comp.spv;%(AdditionalInputs)</AdditionalInputs>
       <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\CMakeFiles\EWShaders</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
       <VerifyInputsAndOutputsExist Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</VerifyInputsAndOutputsExist>
@@ -238,7 +350,7 @@ endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
 exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
-      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\instanced.vert.spv;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\instanced.frag.spv;%(AdditionalInputs)</AdditionalInputs>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\instanced.vert.spv;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\instanced.frag.spv;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\cam_hist.comp.spv;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\cam_median.comp.spv;%(AdditionalInputs)</AdditionalInputs>
       <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\CMakeFiles\EWShaders</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
       <VerifyInputsAndOutputsExist Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</VerifyInputsAndOutputsExist>
@@ -250,7 +362,7 @@ endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
 exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
-      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\instanced.vert.spv;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\instanced.frag.spv;%(AdditionalInputs)</AdditionalInputs>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\instanced.vert.spv;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\instanced.frag.spv;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\cam_hist.comp.spv;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\cam_median.comp.spv;%(AdditionalInputs)</AdditionalInputs>
       <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\CMakeFiles\EWShaders</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkObjects>
       <VerifyInputsAndOutputsExist Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</VerifyInputsAndOutputsExist>
@@ -262,7 +374,7 @@ endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
 exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
-      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\instanced.vert.spv;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\instanced.frag.spv;%(AdditionalInputs)</AdditionalInputs>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\instanced.vert.spv;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\instanced.frag.spv;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\cam_hist.comp.spv;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\shaders\cam_median.comp.spv;%(AdditionalInputs)</AdditionalInputs>
       <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\CMakeFiles\EWShaders</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
       <VerifyInputsAndOutputsExist Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</VerifyInputsAndOutputsExist>

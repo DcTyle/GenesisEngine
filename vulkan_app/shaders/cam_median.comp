@@ -19,12 +19,12 @@ void main() {
         uint total = 0u;
         for (uint i = 0u; i < 256u; ++i) total += hist.bins[i];
         outv.total_count = total;
-        uint half = total / 2u;
+        uint midpoint = total / 2u;
         uint acc = 0u;
         uint med = 0u;
         for (uint i = 0u; i < 256u; ++i) {
             acc += hist.bins[i];
-            if (acc >= half) { med = i; break; }
+            if (acc >= midpoint) { med = i; break; }
         }
         // median normalized in Q16.16
         uint q = (med << 16) / 255u;

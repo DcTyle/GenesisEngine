@@ -190,12 +190,6 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <Project>{FC10132A-C155-390E-8E04-4FD6FD32A7F1}</Project>
       <Name>EigenWareCore</Name>
     </ProjectReference>
-    <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\coherence_gate.vcxproj">
-      <Project>{08F98444-8A5B-3FF5-89C4-019F0E53E2A7}</Project>
-      <Name>coherence_gate</Name>
-      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
-      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
-    </ProjectReference>
     <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\ew_contract_harness.vcxproj">
       <Project>{56D2BB27-A894-32ED-B246-48A40080C490}</Project>
       <Name>ew_contract_harness</Name>

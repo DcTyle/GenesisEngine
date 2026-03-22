@@ -72,13 +72,13 @@ static void apply_arg_kv(ewv::AppConfig& cfg, const std::string& key_in, const s
 
 int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
     ewv::AppConfig cfg;
-    cfg.app_title_utf8 = "Genesis Engine Viewport";
+    cfg.app_title_utf8 = "Genesis Engine";
     cfg.initial_width = 1600;
     cfg.initial_height = 900;
 #if defined(GENESIS_RUNTIME_BUILD) && GENESIS_RUNTIME_BUILD
-    cfg.app_user_model_id_utf8 = "GenesisEngine.Viewport.Runtime";
+    cfg.app_user_model_id_utf8 = "GenesisEngine.Runtime";
 #else
-    cfg.app_user_model_id_utf8 = "GenesisEngine.Viewport.Editor";
+    cfg.app_user_model_id_utf8 = "GenesisEngine.Editor";
 #endif
 
     int argc = 0;

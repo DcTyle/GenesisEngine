@@ -13,6 +13,7 @@ struct EwControlPacket;
 struct EwRenderCameraPacket;
 struct EwRenderAssistPacket;
 struct EwRenderXrEyePacket;
+struct EwRenderObjectPacket;
 
 // Canonical runtime dispatcher surface per Spec v7.
 // These are thin wrappers over the existing SubstrateManager runtime to satisfy
@@ -34,6 +35,10 @@ bool ew_runtime_submit_control_packet(SubstrateManager* sm, const EwControlPacke
 
 // Renderer read path: derive a render camera packet from the camera anchor.
 bool ew_runtime_get_render_camera_packet(const SubstrateManager* sm, EwRenderCameraPacket* out);
+bool ew_runtime_get_render_object_packets(const SubstrateManager* sm,
+                                          const EwRenderObjectPacket** out_packets,
+                                          uint32_t* out_count_u32,
+                                          uint64_t* out_tick_u64);
 
 
 bool ew_runtime_get_render_assist_packet(const SubstrateManager* sm, EwRenderAssistPacket* out);

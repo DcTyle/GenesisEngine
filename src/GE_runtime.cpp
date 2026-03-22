@@ -6197,6 +6197,39 @@ bool SubstrateManager::export_object_bundle(uint64_t object_id_u64,
         f << "}\n";
     }
 
+    const std::string object_dna_path = (std::filesystem::path(out_dir_utf8) / "object_dna.json").string();
+    {
+        const EwObjectDnaDerived dna = ew_object_dna_derive(e->object_dna);
+        std::ofstream f(object_dna_path, std::ios::binary | std::ios::trunc);
+        if (!f) { rep("EXPORT:write_object_dna_failed"); return false; }
+        f << "{\n";
+        f << "  \"helix_primary_hz_f32\": " << e->object_dna.helix_primary_hz_f32 << ",\n";
+        f << "  \"helix_secondary_hz_f32\": " << e->object_dna.helix_secondary_hz_f32 << ",\n";
+        f << "  \"helix_pitch_hz_f32\": " << e->object_dna.helix_pitch_hz_f32 << ",\n";
+        f << "  \"helix_phase_rad_f32\": " << e->object_dna.helix_phase_rad_f32 << ",\n";
+        f << "  \"confinement_center_hz_f32\": " << e->object_dna.confinement_center_hz_f32 << ",\n";
+        f << "  \"confinement_bandwidth_hz_f32\": " << e->object_dna.confinement_bandwidth_hz_f32 << ",\n";
+        f << "  \"confinement_q_f32\": " << e->object_dna.confinement_q_f32 << ",\n";
+        f << "  \"existence_gain_f32\": " << e->object_dna.existence_gain_f32 << ",\n";
+        f << "  \"manifold_coupling_gain_f32\": " << e->object_dna.manifold_coupling_gain_f32 << ",\n";
+        f << "  \"coupling_6dof_f32\": [" << e->object_dna.coupling_tx_f32 << ", " << e->object_dna.coupling_ty_f32 << ", "
+          << e->object_dna.coupling_tz_f32 << ", " << e->object_dna.coupling_rx_f32 << ", "
+          << e->object_dna.coupling_ry_f32 << ", " << e->object_dna.coupling_rz_f32 << "],\n";
+        f << "  \"derived\": {\n";
+        f << "    \"helix_mean_hz_f32\": " << dna.helix_mean_hz_f32 << ",\n";
+        f << "    \"helix_beat_hz_f32\": " << dna.helix_beat_hz_f32 << ",\n";
+        f << "    \"confinement_floor_hz_f32\": " << dna.confinement_floor_hz_f32 << ",\n";
+        f << "    \"confinement_ceiling_hz_f32\": " << dna.confinement_ceiling_hz_f32 << ",\n";
+        f << "    \"confinement_effective_hz_f32\": " << dna.confinement_effective_hz_f32 << ",\n";
+        f << "    \"existence_resonance_hz_f32\": " << dna.existence_resonance_hz_f32 << ",\n";
+        f << "    \"manifold_6dof_hz_f32\": [" << dna.manifold_6dof_hz_f32[0] << ", " << dna.manifold_6dof_hz_f32[1] << ", "
+          << dna.manifold_6dof_hz_f32[2] << ", " << dna.manifold_6dof_hz_f32[3] << ", "
+          << dna.manifold_6dof_hz_f32[4] << ", " << dna.manifold_6dof_hz_f32[5] << "],\n";
+        f << "    \"manifold_6dof_l1_hz_f32\": " << dna.manifold_6dof_l1_hz_f32 << "\n";
+        f << "  }\n";
+        f << "}\n";
+    }
+
     const std::string manifest_path = (std::filesystem::path(out_dir_utf8) / "export_manifest.json").string();
     {
         std::ofstream f(manifest_path, std::ios::binary);
@@ -6217,7 +6250,8 @@ bool SubstrateManager::export_object_bundle(uint64_t object_id_u64,
         f << "    \"uv_atlas\": \"uv_atlas.rgba8\",\n";
         f << "    \"uv_atlas_tga\": \"uv_atlas.tga\",\n";
         f << "    \"uv_atlas_meta\": \"uv_atlas.json\",\n";
-        f << "    \"material_anim\": \"material_anim.json\"\n";
+        f << "    \"material_anim\": \"material_anim.json\",\n";
+        f << "    \"object_dna\": \"object_dna.json\"\n";
         f << "  }\n";
         f << "}\n";
     }

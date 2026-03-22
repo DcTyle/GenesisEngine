@@ -1,0 +1,10 @@
+C:\Users\Myke\AppData\Local\Programs\GenesisEngine/GenesisEngineState/Binaries/Win64/Runtime/GenesisRuntime.exe
+C:\Users\Myke\AppData\Local\Programs\GenesisEngine/GenesisEngineState/Binaries/Win64/Runtime/shaders/instanced.vert.spv
+C:\Users\Myke\AppData\Local\Programs\GenesisEngine/GenesisEngineState/Binaries/Win64/Runtime/shaders/instanced.frag.spv
+C:\Users\Myke\AppData\Local\Programs\GenesisEngine/GenesisEngineState/Branding/genesis.ico
+C:\Users\Myke\AppData\Local\Programs\GenesisEngine/GenesisEngineState/Branding/genesis_splash.bmp
+C:\Users\Myke\AppData\Local\Programs\GenesisEngine/GenesisEngineState/Binaries/Win64/GENESIS_RUNTIME_EDITOR_SPLIT_MANIFEST.txt
+C:\Users\Myke\AppData\Local\Programs\GenesisEngine/GenesisEngineState/Binaries/Win64/Editor/GenesisEngine.exe
+C:\Users\Myke\AppData\Local\Programs\GenesisEngine/GenesisEngineState/Binaries/Win64/Editor/shaders/instanced.vert.spv
+C:\Users\Myke\AppData\Local\Programs\GenesisEngine/GenesisEngineState/Binaries/Win64/Editor/shaders/instanced.frag.spv
+C:\Users\Myke\AppData\Local\Programs\GenesisEngine/GenesisEngineState/Binaries/Win64/Runtime/GenesisRemote.exe

@@ -22,7 +22,6 @@ D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/CMakeFiles/ge_
 D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/CMakeFiles/ge_tts_speak.dir
 D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/CMakeFiles/ge_voice_train.dir
 D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/CMakeFiles/ge_force_align.dir
-D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/CMakeFiles/coherence_gate.dir
 D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/CMakeFiles/ew_package_artifacts.dir
 D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/CMakeFiles/ge_vocab_recall_test.dir
 D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/CMakeFiles/ge_regression_suite.dir

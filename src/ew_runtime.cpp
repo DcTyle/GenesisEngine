@@ -75,6 +75,23 @@ bool ew_runtime_get_render_camera_packet(const SubstrateManager* sm, EwRenderCam
     return true;
 }
 
+bool ew_runtime_get_render_object_packets(const SubstrateManager* sm,
+                                          const EwRenderObjectPacket** out_packets,
+                                          uint32_t* out_count_u32,
+                                          uint64_t* out_tick_u64) {
+    if (out_packets) *out_packets = nullptr;
+    if (out_count_u32) *out_count_u32 = 0u;
+    if (out_tick_u64) *out_tick_u64 = 0u;
+    if (!sm || !out_packets || !out_count_u32) return false;
+    if (sm->render_object_packets_tick_u64 == 0u) return false;
+    *out_packets = sm->render_object_packets.empty() ? nullptr : sm->render_object_packets.data();
+    *out_count_u32 = (sm->render_object_packets.size() > 0xFFFFFFFFu)
+        ? 0xFFFFFFFFu
+        : static_cast<uint32_t>(sm->render_object_packets.size());
+    if (out_tick_u64) *out_tick_u64 = sm->render_object_packets_tick_u64;
+    return true;
+}
+
 
 
 bool ew_runtime_get_render_assist_packet(const SubstrateManager* sm, EwRenderAssistPacket* out) {

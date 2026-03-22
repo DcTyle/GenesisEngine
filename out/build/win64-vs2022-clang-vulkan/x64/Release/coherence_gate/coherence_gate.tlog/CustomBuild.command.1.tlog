@@ -1,0 +1,28 @@
+^D:\GAMECREATION\GENESISENGINE\OUT\BUILD\WIN64-VS2022-CLANG-VULKAN\CMAKEFILES\9483B0744B3A08C0550A148C75A0EF65\COHERENCE_GATE.RULE
+setlocal
+cd D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan
+if %errorlevel% neq 0 goto :cmEnd
+D:
+if %errorlevel% neq 0 goto :cmEnd
+"D:\Program Files\CMake\bin\ctest.exe" --output-on-failure -C Release
+if %errorlevel% neq 0 goto :cmEnd
+D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\Release\ew_contract_harness.exe
+if %errorlevel% neq 0 goto :cmEnd
+D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\Release\ew_verify_proofs.exe
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^D:\GAMECREATION\GENESISENGINE\CMAKELISTS.TXT
+setlocal
+"D:\Program Files\CMake\bin\cmake.exe" -SD:/GameCreation/GenesisEngine -BD:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan --check-stamp-file D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

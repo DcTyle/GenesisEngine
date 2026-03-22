@@ -96,7 +96,7 @@ bool ew_win32_create(EwWin64Host& host, const wchar_t* title) {
     WNDCLASSW wc{};
     wc.lpfnWndProc = WndProc;
     wc.hInstance = host.hinst;
-    wc.lpszClassName = L"GenesisEngineVulkanHost";
+    wc.lpszClassName = L"GenesisEngineHost";
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     if (!RegisterClassW(&wc)) {
         // ok if already registered

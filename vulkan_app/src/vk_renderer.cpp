@@ -22,7 +22,7 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL ew_vk_debug_cb(
     void*) {
     // Keep output minimal but actionable.
     if (severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT && data && data->pMessage) {
-        OutputDebugStringA("[GenesisEngineVulkan] ");
+        OutputDebugStringA("[GenesisEngine] ");
         OutputDebugStringA(data->pMessage);
         OutputDebugStringA("\n");
     }
@@ -31,7 +31,7 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL ew_vk_debug_cb(
 
 static VkInstance create_instance(bool enable_validation, VkDebugUtilsMessengerEXT* out_dbg) {
     VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
-    app.pApplicationName = "GenesisEngineVulkan";
+    app.pApplicationName = "GenesisEngine";
     app.applicationVersion = VK_MAKE_VERSION(1,0,0);
     app.pEngineName = "GenesisEngine";
     app.engineVersion = VK_MAKE_VERSION(1,0,0);

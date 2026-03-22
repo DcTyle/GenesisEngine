@@ -198,6 +198,18 @@ bool GeAssetSubstrate::save_into_root_(SubstrateManager* sm,
         out << "voxel_grid=" << e->voxel_grid_x_u32 << "," << e->voxel_grid_y_u32 << "," << e->voxel_grid_z_u32 << "\n";
         out << "uv_atlas=" << e->uv_atlas_w_u32 << "," << e->uv_atlas_h_u32 << "," << e->uv_atlas_format_u32 << "\n";
         out << "local_grid=" << e->local_grid_x_u32 << "," << e->local_grid_y_u32 << "," << e->local_grid_z_u32 << "\n";
+        const EwObjectDnaDerived dna = ew_object_dna_derive(e->object_dna);
+        out << "object_dna.helix_primary_hz_f32=" << e->object_dna.helix_primary_hz_f32 << "\n";
+        out << "object_dna.helix_secondary_hz_f32=" << e->object_dna.helix_secondary_hz_f32 << "\n";
+        out << "object_dna.helix_pitch_hz_f32=" << e->object_dna.helix_pitch_hz_f32 << "\n";
+        out << "object_dna.confinement_center_hz_f32=" << e->object_dna.confinement_center_hz_f32 << "\n";
+        out << "object_dna.confinement_bandwidth_hz_f32=" << e->object_dna.confinement_bandwidth_hz_f32 << "\n";
+        out << "object_dna.confinement_q_f32=" << e->object_dna.confinement_q_f32 << "\n";
+        out << "object_dna.existence_gain_f32=" << e->object_dna.existence_gain_f32 << "\n";
+        out << "object_dna.manifold_coupling_gain_f32=" << e->object_dna.manifold_coupling_gain_f32 << "\n";
+        out << "object_dna.derived.confinement_effective_hz_f32=" << dna.confinement_effective_hz_f32 << "\n";
+        out << "object_dna.derived.existence_resonance_hz_f32=" << dna.existence_resonance_hz_f32 << "\n";
+        out << "object_dna.derived.manifold_6dof_l1_hz_f32=" << dna.manifold_6dof_l1_hz_f32 << "\n";
         if (!out.good()) {
             if (out_err) *out_err = "write_failed";
             return false;

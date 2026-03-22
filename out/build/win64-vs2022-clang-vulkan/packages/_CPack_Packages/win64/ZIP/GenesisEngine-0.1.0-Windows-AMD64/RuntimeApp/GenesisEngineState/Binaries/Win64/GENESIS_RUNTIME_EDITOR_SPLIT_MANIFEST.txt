@@ -1,0 +1,9 @@
+Genesis Engine Runtime/Editor Split
+
+Runtime target: genesis_runtime
+Runtime output: D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/GenesisEngineState/Binaries/Win64/Runtime
+Editor target: genesis_app
+Editor output: D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/GenesisEngineState/Binaries/Win64/Editor
+Default install: runtime only
+Optional editor install: GENESIS_INSTALL_EDITOR_APP=ON
+Editor-only UI/tools remain excluded from runtime packaging by target split and compile definitions.

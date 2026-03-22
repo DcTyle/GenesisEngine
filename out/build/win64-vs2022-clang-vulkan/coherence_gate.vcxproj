@@ -112,7 +112,7 @@ cd D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan
 if %errorlevel% neq 0 goto :cmEnd
 D:
 if %errorlevel% neq 0 goto :cmEnd
-"D:\Program Files\CMake\bin\ctest.exe" --output-on-failure
+"D:\Program Files\CMake\bin\ctest.exe" --output-on-failure -C Debug
 if %errorlevel% neq 0 goto :cmEnd
 D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\Debug\ew_contract_harness.exe
 if %errorlevel% neq 0 goto :cmEnd
@@ -134,7 +134,7 @@ cd D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan
 if %errorlevel% neq 0 goto :cmEnd
 D:
 if %errorlevel% neq 0 goto :cmEnd
-"D:\Program Files\CMake\bin\ctest.exe" --output-on-failure
+"D:\Program Files\CMake\bin\ctest.exe" --output-on-failure -C Release
 if %errorlevel% neq 0 goto :cmEnd
 D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\Release\ew_contract_harness.exe
 if %errorlevel% neq 0 goto :cmEnd
@@ -156,7 +156,7 @@ cd D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan
 if %errorlevel% neq 0 goto :cmEnd
 D:
 if %errorlevel% neq 0 goto :cmEnd
-"D:\Program Files\CMake\bin\ctest.exe" --output-on-failure
+"D:\Program Files\CMake\bin\ctest.exe" --output-on-failure -C MinSizeRel
 if %errorlevel% neq 0 goto :cmEnd
 D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\MinSizeRel\ew_contract_harness.exe
 if %errorlevel% neq 0 goto :cmEnd
@@ -178,7 +178,7 @@ cd D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan
 if %errorlevel% neq 0 goto :cmEnd
 D:
 if %errorlevel% neq 0 goto :cmEnd
-"D:\Program Files\CMake\bin\ctest.exe" --output-on-failure
+"D:\Program Files\CMake\bin\ctest.exe" --output-on-failure -C RelWithDebInfo
 if %errorlevel% neq 0 goto :cmEnd
 D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\RelWithDebInfo\ew_contract_harness.exe
 if %errorlevel% neq 0 goto :cmEnd
@@ -276,6 +276,10 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\test_ai_golden.vcxproj">
       <Project>{C2D66318-7185-3740-B63C-938FA62F9A7E}</Project>
       <Name>test_ai_golden</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\test_contact_constraint.vcxproj">
+      <Project>{CFF9D31C-CE67-36BA-9E1D-B9597E0A6DD5}</Project>
+      <Name>test_contact_constraint</Name>
     </ProjectReference>
     <ProjectReference Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\test_determinism.vcxproj">
       <Project>{2A9FDC9C-AD01-3B33-8771-F9F03979E594}</Project>

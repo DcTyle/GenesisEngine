@@ -5,7 +5,7 @@
 #include <vector>
 
 namespace genesis {
-class MetricTask;
+struct MetricTask;
 }
 
 class SubstrateManager;

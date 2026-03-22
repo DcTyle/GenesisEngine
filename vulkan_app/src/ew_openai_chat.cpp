@@ -101,6 +101,11 @@ static void ew_json_escape_append(std::string& out, const std::string& s) {
     }
 }
 
+struct EwOpenAiSource {
+    std::string title_utf8;
+    std::string url_utf8;
+};
+
 static std::string ew_build_request_body_json(const EwOpenAiTextRequest& request) {
     std::string json;
     json.reserve(request.instructions_utf8.size() + request.input_utf8.size() + 512u);
@@ -113,7 +118,7 @@ static std::string ew_build_request_body_json(const EwOpenAiTextRequest& request
     json += "\",\"max_output_tokens\":";
     json += std::to_string((unsigned long long)request.max_output_tokens_u32);
     if (request.enable_web_search) {
-        json += ",\"tools\":[{\"type\":\"web_search\"}]";
+        json += ",\"tools\":[{\"type\":\"web_search\"}],\"include\":[\"web_search_call.action.sources\"]";
     }
     json += "}";
     return json;
@@ -220,6 +225,89 @@ static std::string ew_extract_error_message_from_response_json(const std::string
     return std::string();
 }
 
+static void ew_append_unique_source(std::vector<EwOpenAiSource>* out_sources, EwOpenAiSource source) {
+    if (!out_sources || source.url_utf8.empty()) return;
+    if (source.title_utf8.empty()) source.title_utf8 = source.url_utf8;
+    for (const EwOpenAiSource& existing : *out_sources) {
+        if (existing.url_utf8 == source.url_utf8) return;
+    }
+    out_sources->push_back(std::move(source));
+}
+
+static void ew_extract_sources_from_response_json(const std::string& json, std::vector<EwOpenAiSource>* out_sources) {
+    if (!out_sources) return;
+    out_sources->clear();
+
+    size_t pos = 0u;
+    while (true) {
+        pos = json.find("\"type\"", pos);
+        if (pos == std::string::npos) break;
+        std::string type_value;
+        if (!ew_find_json_string_value_after_key(json, "\"type\"", pos, json.size(), &type_value)) {
+            pos += 6u;
+            continue;
+        }
+        if (type_value == "url_citation") {
+            const size_t window_end = (pos + 4096u < json.size()) ? (pos + 4096u) : json.size();
+            EwOpenAiSource source;
+            (void)ew_find_json_string_value_after_key(json, "\"title\"", pos, window_end, &source.title_utf8);
+            (void)ew_find_json_string_value_after_key(json, "\"url\"", pos, window_end, &source.url_utf8);
+            ew_append_unique_source(out_sources, std::move(source));
+        }
+        pos += 6u;
+    }
+
+    if (!out_sources->empty()) return;
+
+    pos = 0u;
+    while (true) {
+        pos = json.find("\"url\"", pos);
+        if (pos == std::string::npos) break;
+        size_t colon = pos + 5u;
+        ew_skip_json_ws(json, &colon);
+        if (colon >= json.size() || json[colon] != ':') {
+            pos += 5u;
+            continue;
+        }
+        ++colon;
+        ew_skip_json_ws(json, &colon);
+        if (colon >= json.size() || json[colon] != '"') {
+            pos += 5u;
+            continue;
+        }
+        EwOpenAiSource source;
+        size_t next = colon;
+        if (!ew_parse_json_string(json, colon, &source.url_utf8, &next)) {
+            pos += 5u;
+            continue;
+        }
+        const size_t window_end = (next + 1024u < json.size()) ? (next + 1024u) : json.size();
+        (void)ew_find_json_string_value_after_key(json, "\"title\"", pos, window_end, &source.title_utf8);
+        ew_append_unique_source(out_sources, std::move(source));
+        pos = next;
+    }
+}
+
+static void ew_append_sources_to_output_text(std::string* io_text_utf8, const std::vector<EwOpenAiSource>& sources) {
+    if (!io_text_utf8 || sources.empty()) return;
+    if (!io_text_utf8->empty()) {
+        if (io_text_utf8->back() != '\n') *io_text_utf8 += "\n";
+        *io_text_utf8 += "\n";
+    }
+    *io_text_utf8 += "Sources:\n";
+    const size_t shown = (sources.size() < 6u) ? sources.size() : 6u;
+    for (size_t i = 0; i < shown; ++i) {
+        io_text_utf8->push_back('-');
+        io_text_utf8->push_back(' ');
+        if (!sources[i].title_utf8.empty() && sources[i].title_utf8 != sources[i].url_utf8) {
+            *io_text_utf8 += sources[i].title_utf8;
+            *io_text_utf8 += " - ";
+        }
+        *io_text_utf8 += sources[i].url_utf8;
+        *io_text_utf8 += "\n";
+    }
+}
+
 static bool ew_read_response_body(HINTERNET request, std::string* out_body_utf8) {
     if (out_body_utf8) out_body_utf8->clear();
     std::string body;
@@ -283,7 +371,7 @@ bool ew_openai_send_text_request(const EwOpenAiTextRequest& request, EwOpenAiTex
         std::wstring(L"Content-Type: application/json\r\nAuthorization: Bearer ") +
         ew_utf8_to_wide_local(api_key_utf8) + L"\r\n";
 
-    HINTERNET session = WinHttpOpen(L"GenesisEngineVulkan/1.0",
+    HINTERNET session = WinHttpOpen(L"GenesisEngine/1.0",
                                     WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                     WINHTTP_NO_PROXY_NAME,
                                     WINHTTP_NO_PROXY_BYPASS,
@@ -375,6 +463,9 @@ bool ew_openai_send_text_request(const EwOpenAiTextRequest& request, EwOpenAiTex
     const bool parse_ok = ew_extract_output_text_from_response_json(response_body_utf8, &output_text_utf8);
     if (status_u32 >= 200u && status_u32 < 300u && parse_ok && !output_text_utf8.empty()) {
         if (out_response) {
+            std::vector<EwOpenAiSource> sources;
+            ew_extract_sources_from_response_json(response_body_utf8, &sources);
+            ew_append_sources_to_output_text(&output_text_utf8, sources);
             out_response->ok = true;
             out_response->output_text_utf8 = output_text_utf8;
         }

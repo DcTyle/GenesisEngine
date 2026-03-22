@@ -1,0 +1,18 @@
+{
+  "version": 4,
+  "configurations": [
+    {
+      "name": "GenesisEngine Win64",
+      "configurationProvider": "ms-vscode.cmake-tools",
+      "mergeConfigurations": true,
+      "intelliSenseMode": "windows-clang-x64",
+      "includePath": [
+        "${workspaceFolder}/**",
+        "C:/Users/Myke/AppData/Local/Programs/VulkanSDK/1.4.341.1/Include"
+      ],
+      "defines": [
+        "VK_USE_PLATFORM_WIN32_KHR=1"
+      ]
+    }
+  ]
+}

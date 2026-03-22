@@ -7,6 +7,30 @@ Param(
 
 $ErrorActionPreference = "Stop"
 
+function Use-UserVulkanSdkIfPresent {
+  if (-not [string]::IsNullOrWhiteSpace($env:VULKAN_SDK)) {
+    return
+  }
+  $sdkBase = Join-Path $env:LOCALAPPDATA "Programs\VulkanSDK"
+  if (-not (Test-Path $sdkBase)) {
+    return
+  }
+  $sdkDir = Get-ChildItem -Path $sdkBase -Directory -ErrorAction SilentlyContinue |
+    Sort-Object Name -Descending |
+    Select-Object -First 1
+  if ($null -eq $sdkDir) {
+    return
+  }
+  $env:VULKAN_SDK = $sdkDir.FullName
+  $env:VK_SDK_PATH = $sdkDir.FullName
+  $binPath = Join-Path $sdkDir.FullName "Bin"
+  if (($env:PATH -split ';') -notcontains $binPath) {
+    $env:PATH = $binPath + ";" + $env:PATH
+  }
+}
+
+Use-UserVulkanSdkIfPresent
+
 # Always do a fresh out-of-tree build for each iteration.
 $SourceDir = Split-Path -Parent $PSScriptRoot
 $BuildDir  = Join-Path $SourceDir ("out\build\" + $Preset)

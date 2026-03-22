@@ -77,7 +77,6 @@ bool ew_obj_load_utf8(const std::string& path_utf8, EwObjMesh& out) {
 
     // Deterministic ordered map. Avoid hash-based containers.
     std::map<uint32_t, uint32_t> map;
-    map.reserve(4096);
 
     std::istringstream iss(txt);
     std::string line;

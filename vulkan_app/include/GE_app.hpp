@@ -1,15 +1,21 @@
 #pragma once
 
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
+#include <commctrl.h>
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include <unordered_set>
 
 #include <utility>
 
+#include "../../include/GE_asset_substrate.hpp"
+#include "../../include/GE_control_packets.hpp"
 #include "camera_controller.hpp"
 #include "openxr_runtime.hpp"
 
@@ -30,6 +36,9 @@ struct AppConfig {
 
 class App {
 public:
+    struct VkCtx;
+    struct Scene;
+
     explicit App(const AppConfig& cfg);
     int Run(HINSTANCE hInst);
 
@@ -40,6 +49,21 @@ private:
     HWND hwnd_main_ = nullptr;
     HWND hwnd_viewport_ = nullptr;
     HWND hwnd_panel_ = nullptr;
+    HWND hwnd_dock_splitter_ = nullptr;
+    HWND hwnd_topbar_ = nullptr;
+    HWND hwnd_topbar_menu_ = nullptr;
+    HWND hwnd_topbar_title_ = nullptr;
+    HWND hwnd_topbar_project_ = nullptr;
+    HWND hwnd_topbar_status_ = nullptr;
+    HWND hwnd_topbar_sim_ = nullptr;
+    HWND hwnd_topbar_ai_ = nullptr;
+    HWND hwnd_topbar_live_ = nullptr;
+    HWND hwnd_topbar_photon_ = nullptr;
+    HWND hwnd_topbar_content_ = nullptr;
+    HWND hwnd_topbar_assistant_ = nullptr;
+    HWND hwnd_topbar_minimize_ = nullptr;
+    HWND hwnd_topbar_maximize_ = nullptr;
+    HWND hwnd_topbar_close_ = nullptr;
 
     // Right dock (Unreal-style): tab strip + panel registry
     HWND hwnd_rdock_tab_ = nullptr;
@@ -71,10 +95,23 @@ private:
     HWND hwnd_voxel_atom_nodes_ = nullptr;
     HWND hwnd_voxel_summary_   = nullptr;
     int  voxel_atom_node_selected_i32_ = 0;
+    HWND hwnd_asset_label_run_ = nullptr;
+    HWND hwnd_asset_label_ai_ = nullptr;
+    HWND hwnd_asset_label_learning_ = nullptr;
+    HWND hwnd_asset_label_crawling_ = nullptr;
     HWND hwnd_asset_selected_  = nullptr;
     HWND hwnd_asset_gate_      = nullptr;
     HWND hwnd_asset_builder_status_ = nullptr;
     HWND hwnd_asset_review_refs_ = nullptr;
+    HWND hwnd_asset_ai_panel_button_ = nullptr;
+    HWND hwnd_asset_label_tool_mode_ = nullptr;
+    HWND hwnd_asset_label_planet_atmo_ = nullptr;
+    HWND hwnd_asset_label_planet_iono_ = nullptr;
+    HWND hwnd_asset_label_planet_magneto_ = nullptr;
+    HWND hwnd_asset_label_character_archetype_ = nullptr;
+    HWND hwnd_asset_label_character_height_ = nullptr;
+    HWND hwnd_asset_label_character_rigidity_ = nullptr;
+    HWND hwnd_asset_label_character_gait_ = nullptr;
     HWND hwnd_asset_tool_mode_ = nullptr;
     HWND hwnd_asset_planet_atmo_ = nullptr;
     HWND hwnd_asset_planet_iono_ = nullptr;
@@ -89,6 +126,7 @@ private:
     HWND hwnd_asset_character_bind_ = nullptr;
     HWND hwnd_asset_character_pose_ = nullptr;
     HWND hwnd_asset_tool_summary_ = nullptr;
+    HWND hwnd_asset_thumb_ = nullptr;
     HWND hwnd_node_summary_ = nullptr;
     HWND hwnd_node_open_coh_ = nullptr;
     HWND hwnd_node_graph_ = nullptr;
@@ -217,6 +255,8 @@ private:
     // Outliner filter (UI-only).
     std::string outliner_filter_utf8_;
 
+    struct CanonicalReferenceSummary;
+
     void RebuildOutlinerList();
     void RebuildContentBrowserViews();
     void RefreshContentBrowserFromRuntime(uint32_t limit_u32);
@@ -225,6 +265,7 @@ private:
     void RefreshVoxelDesignerPanel();
     void SyncVoxelAtomNodeList();
     void RefreshViewportResonanceOverlay();
+    std::string BuildPhotonConfinementStatusUtf8() const;
     void RefreshSequencerPanel();
     void RefreshContentBrowserChrome();
     void RefreshContent3DBrowserSurface();
@@ -285,7 +326,7 @@ private:
     bool content_selection_sync_guard_ = false;
     std::string asset_last_review_rel_utf8_;
     uint64_t asset_last_review_revision_u64_ = 0ull;
-    // Content view toggles + surfaces (List / Thumb / 3D stub).
+    // Content view toggles + surfaces (List / Thumb / 3D).
     HWND hwnd_content_view_list_ = nullptr;
     HWND hwnd_content_view_thumb_ = nullptr;
     HWND hwnd_content_view_3d_ = nullptr;
@@ -296,7 +337,7 @@ private:
     HWND hwnd_content_refcheck_ = nullptr;  // coherence/reference review
     HIMAGELIST himl_content_thumbs_ = nullptr; // 64x64 thumbs
     HIMAGELIST himl_content_icons_ = nullptr;  // 16x16 list icons
-    uint32_t content_view_mode_u32_ = 0; // 0=list,1=thumb,2=3d
+    uint32_t content_view_mode_u32_ = 1; // 0=list,1=thumb,2=3d (default: thumbnail-first)
 
     // Coherence highlight (derived-only). Mirrors SubstrateManager::coh_highlight_paths.
     uint64_t coh_highlight_seen_revision_u64_ = 0;
@@ -360,12 +401,12 @@ private:
     HWND hwnd_ai_tab_ = nullptr;
     HWND hwnd_ai_bell_ = nullptr; // reserved (future notifications)
     HWND hwnd_ai_menu_ = nullptr; // "⋯" menu button (toggles)
-    HWND hwnd_ai_toggle_learning_ = nullptr;
-    HWND hwnd_ai_toggle_crawling_ = nullptr;
     // Chat controls
     HWND hwnd_ai_chat_list_ = nullptr;
     HWND hwnd_ai_chat_input_ = nullptr;
     HWND hwnd_ai_chat_send_ = nullptr;
+    HWND hwnd_ai_chat_provider_ = nullptr;
+    HWND hwnd_ai_chat_model_ = nullptr;
     // New-chat (compose) button: pen+pad icon at the top-right of the AI panel.
     HWND hwnd_ai_chat_compose_ = nullptr;
     // Apply patch button (UI-only): writes changes to disk only after explicit approval.
@@ -430,6 +471,9 @@ private:
     uint32_t ai_panel_view_u32_ = 0u; // 0 chat, 1 repo, 2 coherence
 
     static constexpr int AI_CHAT_MAX = 8;
+    static constexpr uint32_t AI_CHAT_PROVIDER_NATIVE = 0u;
+    static constexpr uint32_t AI_CHAT_PROVIDER_CHATGPT = 1u;
+    static constexpr uint32_t AI_CHAT_PROVIDER_HYBRID = 2u;
     uint32_t ai_chat_count_u32_ = 1u;
     // UI-only: chat folder routing. Folder UI comes later, but chat creation
     // already supports "new chat in current folder" semantics.
@@ -451,6 +495,9 @@ private:
     std::wstring ai_chat_last_detected_patch_w_[AI_CHAT_MAX];
     bool ai_chat_last_detected_patch_valid_[AI_CHAT_MAX]{};
     uint32_t ai_chat_mode_u32_[AI_CHAT_MAX]{}; // 1=talk,2=code,3=sim
+    uint32_t ai_chat_provider_u32_[AI_CHAT_MAX]{}; // 0=native,1=chatgpt,2=hybrid
+    std::wstring ai_chat_api_model_w_[AI_CHAT_MAX];
+    std::wstring ai_chat_native_model_w_[AI_CHAT_MAX];
     std::wstring ai_chat_cortex_summary_w_[AI_CHAT_MAX];
     std::wstring ai_chat_project_summary_w_[AI_CHAT_MAX];
     std::wstring ai_chat_project_root_w_[AI_CHAT_MAX];
@@ -508,7 +555,11 @@ private:
     void AiChatRename(uint32_t chat_idx, const std::wstring& new_title);
     void AiChatClose(uint32_t chat_idx);
     void RefreshAiPanelChrome();
+    void RefreshAiChatProviderControls(uint32_t chat_idx_u32);
     void RefreshAiChatCortex(uint32_t chat_idx_u32);
+    std::string ResolveAiChatApiModelUtf8(uint32_t chat_idx_u32) const;
+    bool AiChatProviderRoutesNative(uint32_t chat_idx_u32) const;
+    bool AiChatProviderRoutesApi(uint32_t chat_idx_u32) const;
     void LayoutAiPanelChildren();
     void AiPanelSetView(uint32_t view_u32);
     void RefreshAiRepoPane();
@@ -524,22 +575,18 @@ private:
     void SetEditorSelectionLocal(uint64_t object_id_u64);
     void ToggleEditorSelectionLocal(uint64_t object_id_u64);
 
-    bool sim_play_enabled_ = false;
     bool live_mode_enabled_ = false;
-    bool ai_enabled_ = true;
-    bool ai_learning_enabled_ = false;
-    bool ai_crawling_enabled_ = false;
-    bool ai_repo_reader_enabled_ = false;
-    bool ai_safe_mode_enabled_ = false; // stub hook (menu-only; no behavior yet)
 
     bool running_ = true;
     bool resized_ = false;
     int client_w_ = 0;
     int client_h_ = 0;
+    int right_dock_width_px_ = 420;
+    int right_dock_width_previous_px_ = 420;
+    int right_dock_splitter_grab_dx_px_ = 0;
+    bool right_dock_splitter_dragging_ = false;
 
     // Subsystems
-    struct VkCtx;
-    struct Scene;
     VkCtx* vk_ = nullptr;
     Scene* scene_ = nullptr;
     EwOpenXRRuntime xr_{};
@@ -574,12 +621,17 @@ private:
     int32_t drag_start_pos_q16_16_[3] = {0,0,0};
     int32_t drag_last_pos_q16_16_[3] = {0,0,0};
     int32_t drag_start_rot_q16_16_[4] = {0,0,0,65536};
+    int32_t drag_last_rot_q16_16_[4] = {0,0,0,65536};
     bool duplicate_drag_consumed_ = false;
 
     // Visualization toggle: when false, the app runs headless (no continuous presentation)
     // but simulation and verification continue.
     bool visualize_enabled_ = true;
+    std::string visualization_fault_utf8_;
     bool confinement_particles_enabled_ = true;
+    uint32_t viewport_projected_points_u32_ = 0u;
+    uint32_t viewport_anchor_points_visible_u32_ = 0u;
+    uint32_t viewport_anchor_points_hidden_u32_ = 0u;
     std::wstring output_log_path_w_;
 
 // View modes
@@ -618,6 +670,18 @@ private:
     void RefreshAiExperimentList();
     void RefreshAiDomainProgressList();
     void MarkAiExperimentsSeen();
+    bool IsSimPlayEnabledCanonical() const;
+    bool IsAiEnabledCanonical() const;
+    bool IsAiLearningEnabledCanonical() const;
+    bool IsAiCrawlingEnabledCanonical() const;
+    bool IsRepoReaderEnabledCanonical() const;
+    void SubmitToggleControlPacket(EwControlPacketKind kind, bool enabled);
+    void SetAiStateCanonical(bool ai_enabled, bool learning_enabled, bool crawling_enabled);
+    void SetRepoReaderEnabledCanonical(bool enabled);
+    void RefreshAiToggleWidgets();
+    void RefreshTopBarChrome();
+    void ShowTopBarWorkbenchMenu();
+    void DisableVisualizationWithReason(const std::string& reason_utf8);
 
     void OnApplyTransform();
 
@@ -636,8 +700,8 @@ private:
     void EmitCameraSetFromRig();
 
     void SubmitAiChatTextUtf8(uint32_t chat_idx_u32, const std::string& utf8, bool append_user_line);
-    void RequestChatGptResearchReply(uint32_t chat_idx_u32, const std::string& user_utf8);
-    std::string BuildChatGptResearchPromptUtf8(uint32_t chat_idx_u32, const std::string& user_utf8);
+    void RequestChatGptResearchReply(uint32_t chat_idx_u32, const std::string& user_utf8, const std::string& model_utf8);
+    std::string BuildChatGptReasoningInputUtf8(uint32_t chat_idx_u32, const std::string& user_utf8);
     void ExecuteExternalCommandUtf8(const std::string& line);
     void AppendOutputUtf8(const std::string& line);
 };

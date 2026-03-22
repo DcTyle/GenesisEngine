@@ -48,7 +48,7 @@ int main(int argc, char** argv) {
     }
 
 #if defined(_WIN32)
-    const std::string window_class_utf8 = get_str_def("window_class", "GenesisEngineVulkanWnd");
+    const std::string window_class_utf8 = get_str_def("window_class", "GenesisEngineWnd");
     const uint32_t timeout_ms = get_u32_def("timeout_ms", 3000u);
     const std::wstring window_class_w = utf8_to_wide_local(window_class_utf8);
     HWND hwnd = FindWindowW(window_class_w.empty() ? GE_REMOTE_WINDOW_CLASS_W : window_class_w.c_str(), nullptr);

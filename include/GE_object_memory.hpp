@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "assimp_fbx_io.hpp" // FBX/glTF import/export (Assimp)
+#include "GE_object_dna.hpp"
 
 // Object Memory Reference Operator (OMRO)
 // Blueprint: Section C.
@@ -27,6 +28,8 @@ struct EwObjectEntry {
     EwGeomCoord9 geomcoord9_u64x9;
     // Deterministically derived phase key.
     uint64_t phase_seed_u64;
+    // Canonical photonic-confinement DNA for manifold/existence coupling.
+    EwObjectDna object_dna;
 
     // -----------------------------------------------------------------
     // Genesis synthesis outputs (voxelized volume)

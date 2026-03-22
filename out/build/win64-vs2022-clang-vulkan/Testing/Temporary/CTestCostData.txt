@@ -1,0 +1,8 @@
+deterministic 0 0
+ai_golden 0 0
+microprocessor 0 0
+contact_constraint 1 0.0252328
+---
+deterministic
+ai_golden
+microprocessor

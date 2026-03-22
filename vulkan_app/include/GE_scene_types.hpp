@@ -1,5 +1,6 @@
 #pragma once
 #include "GE_vulkan_types.hpp"
+#include "GE_object_dna.hpp"
 #include <string>
 #include <vector>
 #include <cstdint>
@@ -9,6 +10,7 @@ struct EwSceneObject {
     std::string name_utf8;
     std::string source_path_utf8;
     EwTransform xform;
+    EwObjectDna object_dna;
 };
 
 struct EwScene {

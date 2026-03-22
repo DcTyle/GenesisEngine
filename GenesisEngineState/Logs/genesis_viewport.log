@@ -1,0 +1,5 @@
+GENESIS_VIEWPORT_LOG v1
+APP_LOG path=D:\GameCreation\GenesisEngine\GenesisEngineState\Logs\genesis_viewport.log
+REMOTE_VIEWPORT_PHOTON confinement=1 projected_points=0 anchor_visible=0 anchor_hidden=0 resonance=0
+PHOTON_CONTROLS key=F8 cmds="viewport photon on|off|toggle|status"
+CHATGPT_CONFIGURED model=gpt-5-mini auth=unverified

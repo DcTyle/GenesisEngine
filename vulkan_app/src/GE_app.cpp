@@ -1,13 +1,19 @@
 #include "GE_app.hpp"
 #include "ew_openai_chat.hpp"
 
+#ifndef VK_USE_PLATFORM_WIN32_KHR
+#define VK_USE_PLATFORM_WIN32_KHR 1
+#endif
 #include <vulkan/vulkan.h>
 #include <shellscalingapi.h>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <commdlg.h>
 #include <commctrl.h>
+#include <dwmapi.h>
+#include <windowsx.h>
 #pragma comment(lib, "Comctl32.lib")
+#pragma comment(lib, "Dwmapi.lib")
 
 
 #include <algorithm>
@@ -16,6 +22,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <stdexcept>
 #include <sstream>
 #include <cstdlib>
 #include <thread>
@@ -23,6 +30,7 @@
 #include "GE_runtime.hpp" // SubstrateManager
 #include "ew_runtime.h"      // ew_runtime_project_points
 #include "GE_object_memory.hpp"
+#include "GE_scene_types.hpp"
 #include "field_lattice_cpu.hpp"
 #include "obj_import.hpp"
 #include "GE_render_instance.hpp"
@@ -57,24 +65,99 @@ struct EwOpenAiUiResult {
 
 // -----------------------------------------------------------------------------
 // UI Theme (Windows native host, Win64 app baseline)
-// - Black + Gold styling for editor panels.
-// - Important: purely presentation. Does not touch simulation truth.
+// - Unreal-inspired editor shell: black background, blue-grey foreground
+//   surfaces, and gold interaction accents.
+// - Important: purely presentation. The substrate simulation remains the
+//   authoritative backend that the editor depends on.
 // -----------------------------------------------------------------------------
 struct EwUiTheme {
-    COLORREF bg        = RGB(16,16,16);   // main window background
-    COLORREF panel     = RGB(24,24,24);   // panel background
-    COLORREF edit_bg   = RGB(30,30,30);   // edit/list background
-    COLORREF text      = RGB(232,232,232);
-    COLORREF muted     = RGB(180,180,180);
-    COLORREF border    = RGB(70,70,70);
-    COLORREF gold      = RGB(212,175,55);
-    COLORREF gold_dark = RGB(140,110,30);
+    COLORREF bg                 = RGB(8, 10, 13);
+    COLORREF bg_elevated        = RGB(12, 16, 21);
+    COLORREF panel              = RGB(20, 25, 32);
+    COLORREF panel_alt          = RGB(27, 34, 43);
+    COLORREF edit_bg            = RGB(14, 19, 25);
+    COLORREF edit_bg_alt        = RGB(18, 24, 31);
+    COLORREF text               = RGB(226, 232, 240);
+    COLORREF muted              = RGB(154, 165, 180);
+    COLORREF dim                = RGB(118, 128, 142);
+    COLORREF border             = RGB(60, 71, 84);
+    COLORREF border_soft        = RGB(40, 48, 58);
+    COLORREF gold               = RGB(212, 176, 68);
+    COLORREF gold_hot           = RGB(245, 210, 102);
+    COLORREF gold_dim           = RGB(132, 109, 46);
+    COLORREF gold_fill          = RGB(63, 52, 21);
+    COLORREF gold_fill_hot      = RGB(80, 66, 27);
+    COLORREF gold_fill_pressed  = RGB(96, 78, 32);
+    COLORREF steel              = RGB(99, 122, 156);
+    COLORREF steel_hot          = RGB(132, 160, 201);
+    COLORREF steel_fill         = RGB(31, 41, 55);
+    COLORREF highlight_bg       = RGB(29, 38, 49);
+    COLORREF highlight_bg_strong= RGB(39, 50, 64);
+    COLORREF badge_red          = RGB(191, 78, 56);
+    COLORREF chat_user_bg       = RGB(23, 29, 37);
+    COLORREF chat_assistant_bg  = RGB(15, 19, 26);
 };
 
 static EwUiTheme g_theme;
 static HBRUSH g_brush_bg    = nullptr;
 static HBRUSH g_brush_panel = nullptr;
 static HBRUSH g_brush_edit  = nullptr;
+static HBRUSH g_brush_splitter = nullptr;
+static HBRUSH g_brush_topbar = nullptr;
+
+static COLORREF ew_theme_button_fill(bool active, bool hot, bool pressed, bool disabled) {
+    if (disabled) return g_theme.bg_elevated;
+    if (pressed) return active ? g_theme.gold_fill_pressed : g_theme.panel_alt;
+    if (hot) return active ? g_theme.gold_fill_hot : g_theme.highlight_bg;
+    return active ? g_theme.gold_fill : g_theme.bg_elevated;
+}
+
+static COLORREF ew_theme_button_border(bool active, bool hot, bool disabled) {
+    if (disabled) return g_theme.border_soft;
+    if (hot) return active ? g_theme.gold_hot : g_theme.steel_hot;
+    return active ? g_theme.gold : g_theme.border;
+}
+
+static COLORREF ew_theme_button_text(bool active, bool disabled) {
+    if (disabled) return g_theme.dim;
+    return active ? g_theme.gold_hot : g_theme.text;
+}
+
+static COLORREF ew_theme_tab_fill(bool selected) {
+    return selected ? g_theme.panel_alt : g_theme.bg_elevated;
+}
+
+static COLORREF ew_theme_list_highlight_fill(bool selected) {
+    return selected ? g_theme.highlight_bg_strong : g_theme.highlight_bg;
+}
+
+#ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
+#define DWMWA_USE_IMMERSIVE_DARK_MODE 20
+#endif
+#ifndef DWMWA_WINDOW_CORNER_PREFERENCE
+#define DWMWA_WINDOW_CORNER_PREFERENCE 33
+#endif
+#ifndef DWMWA_BORDER_COLOR
+#define DWMWA_BORDER_COLOR 34
+#endif
+#ifndef DWMWA_CAPTION_COLOR
+#define DWMWA_CAPTION_COLOR 35
+#endif
+#ifndef DWMWA_TEXT_COLOR
+#define DWMWA_TEXT_COLOR 36
+#endif
+#ifndef DWMWA_SYSTEMBACKDROP_TYPE
+#define DWMWA_SYSTEMBACKDROP_TYPE 38
+#endif
+#ifndef DWMWCP_ROUND
+#define DWMWCP_ROUND 2
+#endif
+#ifndef DWMSBT_MAINWINDOW
+#define DWMSBT_MAINWINDOW 2
+#endif
+#ifndef DWMSBT_TRANSIENTWINDOW
+#define DWMSBT_TRANSIENTWINDOW 3
+#endif
 
 
 #ifndef GENESIS_EDITOR_BUILD
@@ -86,6 +169,70 @@ static constexpr bool ew_editor_build_enabled = (GENESIS_EDITOR_BUILD != 0);
 static HFONT g_font_ui = nullptr;
 static HFONT g_font_ui_bold = nullptr;
 static HFONT g_font_ui_small = nullptr;
+
+static std::wstring utf8_to_wide(const std::string& s);
+static std::string wide_to_utf8(const std::wstring& s);
+static bool ew_starts_with(const std::wstring& s, const wchar_t* prefix);
+static bool env_truthy(const char* name);
+static std::vector<std::wstring> ew_split_trim_pin_list_local(const std::wstring& s) {
+    std::vector<std::wstring> out;
+    std::wstring cur;
+    auto flush = [&]() {
+        size_t a = 0;
+        while (a < cur.size() && iswspace(cur[a])) ++a;
+        size_t b = cur.size();
+        while (b > a && iswspace(cur[b - 1])) --b;
+        if (b > a) out.push_back(cur.substr(a, b - a));
+        cur.clear();
+    };
+    for (wchar_t ch : s) {
+        if (ch == L',') flush();
+        else cur.push_back(ch);
+    }
+    flush();
+    return out;
+}
+
+static void ew_listview_get_item_text_w(HWND lv, int item, int sub, wchar_t* buffer, int cch_buffer) {
+    if (!buffer || cch_buffer <= 0) return;
+    buffer[0] = 0;
+    if (!lv || item < 0 || sub < 0) return;
+    LVITEMW it{};
+    it.iSubItem = sub;
+    it.pszText = buffer;
+    it.cchTextMax = cch_buffer;
+    (void)SendMessageW(lv, LVM_GETITEMTEXTW, (WPARAM)item, (LPARAM)&it);
+}
+
+static void ew_listview_set_item_text_w(HWND lv, int item, int sub, const std::wstring& s) {
+    if (!lv || item < 0 || sub < 0) return;
+    LVITEMW it{};
+    it.iSubItem = sub;
+    it.pszText = const_cast<LPWSTR>(s.c_str());
+    (void)SendMessageW(lv, LVM_SETITEMTEXTW, (WPARAM)item, (LPARAM)&it);
+}
+
+static std::wstring ew_extract_first_url_w(const std::wstring& text) {
+    const size_t https_pos = text.find(L"https://");
+    const size_t http_pos = text.find(L"http://");
+    size_t pos = std::wstring::npos;
+    if (https_pos != std::wstring::npos) pos = https_pos;
+    if (http_pos != std::wstring::npos && (pos == std::wstring::npos || http_pos < pos)) pos = http_pos;
+    if (pos == std::wstring::npos) return std::wstring();
+
+    size_t end = pos;
+    while (end < text.size()) {
+        const wchar_t ch = text[end];
+        if (iswspace(ch) || ch == L')' || ch == L']' || ch == L'>' || ch == L'"') break;
+        ++end;
+    }
+    while (end > pos) {
+        const wchar_t tail = text[end - 1];
+        if (tail == L'.' || tail == L',' || tail == L';') --end;
+        else break;
+    }
+    return text.substr(pos, end - pos);
+}
 
 static bool ew_content_is_highlighted(const std::wstring& rel_path_w, const SubstrateManager* sm) {
     if (!sm) return false;
@@ -109,16 +256,127 @@ static void ew_theme_init_once() {
     g_brush_bg    = CreateSolidBrush(g_theme.bg);
     g_brush_panel = CreateSolidBrush(g_theme.panel);
     g_brush_edit  = CreateSolidBrush(g_theme.edit_bg);
-    // Fonts (Segoe UI, editor-friendly)
-    g_font_ui = CreateFontW(-MulDiv(10, GetDeviceCaps(GetDC(nullptr), LOGPIXELSY), 72), 0, 0, 0, FW_NORMAL,
+    g_brush_splitter = CreateSolidBrush(g_theme.border_soft);
+    g_brush_topbar = CreateSolidBrush(g_theme.bg_elevated);
+    HDC screen_dc = GetDC(nullptr);
+    const int dpi_y = screen_dc ? GetDeviceCaps(screen_dc, LOGPIXELSY) : 96;
+    if (screen_dc) ReleaseDC(nullptr, screen_dc);
+    // Fonts: Windows-native, slightly closer to a professional editor shell.
+    g_font_ui = CreateFontW(-MulDiv(10, dpi_y, 72), 0, 0, 0, FW_NORMAL,
                            FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                           CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-    g_font_ui_bold = CreateFontW(-MulDiv(10, GetDeviceCaps(GetDC(nullptr), LOGPIXELSY), 72), 0, 0, 0, FW_SEMIBOLD,
+                           CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI Variable Text");
+    g_font_ui_bold = CreateFontW(-MulDiv(10, dpi_y, 72), 0, 0, 0, FW_SEMIBOLD,
                            FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                           CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-    g_font_ui_small = CreateFontW(-MulDiv(9, GetDeviceCaps(GetDC(nullptr), LOGPIXELSY), 72), 0, 0, 0, FW_NORMAL,
+                           CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI Variable Text");
+    g_font_ui_small = CreateFontW(-MulDiv(9, dpi_y, 72), 0, 0, 0, FW_NORMAL,
                            FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                           CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+                           CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI Variable Text");
+}
+
+static void ew_apply_modern_window_chrome(HWND hwnd, bool transient_window) {
+    ew_theme_init_once();
+    if (!hwnd) return;
+
+    const BOOL dark_mode = TRUE;
+    (void)DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark_mode, sizeof(dark_mode));
+
+    const DWORD corner_pref = DWMWCP_ROUND;
+    (void)DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corner_pref, sizeof(corner_pref));
+
+    const COLORREF border = transient_window ? g_theme.border_soft : g_theme.border;
+    const COLORREF caption = transient_window ? g_theme.panel : g_theme.bg_elevated;
+    const COLORREF text = g_theme.text;
+    (void)DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &border, sizeof(border));
+    (void)DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, &caption, sizeof(caption));
+    (void)DwmSetWindowAttribute(hwnd, DWMWA_TEXT_COLOR, &text, sizeof(text));
+
+    const DWORD backdrop = transient_window ? DWMSBT_TRANSIENTWINDOW : DWMSBT_MAINWINDOW;
+    (void)DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop, sizeof(backdrop));
+}
+
+static void ew_draw_rounded_surface(HDC dc, const RECT& rc, COLORREF fill, COLORREF border, int radius_px, int border_px) {
+    if (!dc) return;
+    const int width = std::max(1, (int)(rc.right - rc.left));
+    const int height = std::max(1, (int)(rc.bottom - rc.top));
+    const int radius = std::max(6, std::min(radius_px, std::min(width, height)));
+    HBRUSH fill_br = CreateSolidBrush(fill);
+    HPEN border_pen = CreatePen(PS_SOLID, std::max(1, border_px), border);
+    HGDIOBJ old_br = SelectObject(dc, fill_br);
+    HGDIOBJ old_pen = SelectObject(dc, border_pen);
+    RoundRect(dc, rc.left, rc.top, rc.right, rc.bottom, radius, radius);
+    SelectObject(dc, old_pen);
+    SelectObject(dc, old_br);
+    DeleteObject(border_pen);
+    DeleteObject(fill_br);
+}
+
+static void ew_draw_window_chrome_button(const DRAWITEMSTRUCT* dis, bool is_close_button) {
+    ew_theme_init_once();
+    if (!dis || !dis->hDC) return;
+    HDC dc = dis->hDC;
+    RECT rc = dis->rcItem;
+    const bool pressed = (dis->itemState & ODS_SELECTED) != 0;
+    const bool disabled = (dis->itemState & ODS_DISABLED) != 0;
+    const bool hot = (dis->itemState & ODS_HOTLIGHT) != 0;
+    COLORREF fill = ew_theme_button_fill(false, hot, pressed, disabled);
+    COLORREF border = ew_theme_button_border(false, hot, disabled);
+    COLORREF text = ew_theme_button_text(false, disabled);
+    if (is_close_button && !disabled) {
+        if (pressed) {
+            fill = RGB(124, 42, 42);
+            border = RGB(210, 88, 88);
+            text = RGB(255, 233, 233);
+        } else if (hot) {
+            fill = RGB(104, 34, 34);
+            border = RGB(196, 80, 80);
+            text = RGB(255, 236, 236);
+        } else {
+            fill = g_theme.panel_alt;
+            border = g_theme.border;
+            text = g_theme.text;
+        }
+    }
+    ew_draw_rounded_surface(dc, rc, fill, border, 12, is_close_button ? 2 : 1);
+    wchar_t txt[32]{};
+    GetWindowTextW(dis->hwndItem, txt, 31);
+    HFONT oldf = (HFONT)SelectObject(dc, g_font_ui_bold ? g_font_ui_bold : GetStockObject(DEFAULT_GUI_FONT));
+    RECT tr = rc;
+    if (pressed) { tr.left += 1; tr.top += 1; }
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, text);
+    DrawTextW(dc, txt, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    SelectObject(dc, oldf);
+}
+
+static void ew_draw_project_badge(const DRAWITEMSTRUCT* dis) {
+    ew_theme_init_once();
+    if (!dis || !dis->hDC) return;
+    HDC dc = dis->hDC;
+    RECT rc = dis->rcItem;
+    InflateRect(&rc, -1, -2);
+    ew_draw_rounded_surface(dc, rc, g_theme.highlight_bg, g_theme.steel, 14, 1);
+    RECT dot = rc;
+    dot.left += 10;
+    dot.right = dot.left + 8;
+    dot.top += 9;
+    dot.bottom = dot.top + 8;
+    HBRUSH dot_br = CreateSolidBrush(g_theme.gold);
+    HGDIOBJ old_br = SelectObject(dc, dot_br);
+    HGDIOBJ old_pen = SelectObject(dc, GetStockObject(NULL_PEN));
+    Ellipse(dc, dot.left, dot.top, dot.right, dot.bottom);
+    SelectObject(dc, old_pen);
+    SelectObject(dc, old_br);
+    DeleteObject(dot_br);
+    wchar_t txt[160]{};
+    GetWindowTextW(dis->hwndItem, txt, 159);
+    HFONT oldf = (HFONT)SelectObject(dc, g_font_ui_small ? g_font_ui_small : GetStockObject(DEFAULT_GUI_FONT));
+    RECT tr = rc;
+    tr.left += 24;
+    tr.right -= 10;
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, g_theme.gold_hot);
+    DrawTextW(dc, txt, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+    SelectObject(dc, oldf);
 }
 
 static void ew_apply_font_recursive(HWND root, HFONT font) {
@@ -134,6 +392,45 @@ static void ew_apply_editor_fonts(HWND root) {
     ew_theme_init_once();
     ew_apply_font_recursive(root, g_font_ui);
 }
+
+static void ew_set_edit_margins(HWND hwnd_edit) {
+    if (!hwnd_edit) return;
+    SendMessageW(hwnd_edit, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(8, 8));
+}
+
+static constexpr int EW_UI_RIGHT_DOCK_DEFAULT_W_PX = 420;
+static constexpr int EW_UI_RIGHT_DOCK_MIN_W_PX = 300;
+static constexpr int EW_UI_RIGHT_DOCK_MAX_W_PX = 860;
+static constexpr int EW_UI_RIGHT_DOCK_SPLITTER_W_PX = 8;
+static constexpr int EW_UI_RIGHT_DOCK_SPLITTER_GRAB_PX = 12;
+static constexpr int EW_UI_VIEWPORT_MIN_W_PX = 320;
+
+static int ew_ui_clamp_right_dock_width_px(int desired_w_px, int window_w_px) {
+    const int max_w = std::max(EW_UI_RIGHT_DOCK_MIN_W_PX,
+                               std::min(EW_UI_RIGHT_DOCK_MAX_W_PX,
+                                        window_w_px - EW_UI_VIEWPORT_MIN_W_PX));
+    const int min_w = std::min(EW_UI_RIGHT_DOCK_MIN_W_PX, max_w);
+    return std::max(min_w, std::min(desired_w_px, max_w));
+}
+
+static bool ew_ui_hit_test_right_dock_splitter_px(int mouse_x,
+                                                   int mouse_y,
+                                                   int client_w_px,
+                                                   int client_h_px,
+                                                   int panel_w_px,
+                                                   bool content_visible) {
+    const int content_h = content_visible ? 260 : 0;
+    const int top_h = (client_h_px > content_h) ? (client_h_px - content_h) : client_h_px;
+    if (top_h <= 0) return false;
+    const int split_x = client_w_px - panel_w_px;
+    const int half = EW_UI_RIGHT_DOCK_SPLITTER_GRAB_PX / 2;
+    return (mouse_y >= 0 && mouse_y < top_h && mouse_x >= (split_x - half) && mouse_x <= (split_x + half));
+}
+
+static void ew_set_visible_enabled(HWND hwnd, bool visible, bool enabled = true) {
+    if (!hwnd) return;
+    ShowWindow(hwnd, visible ? SW_SHOW : SW_HIDE);
+    EnableWindow(hwnd, (visible && enabled) ? TRUE : FALSE);
 }
 
 
@@ -150,7 +447,7 @@ struct EwBindingsEditorWin32 {
     HWND edit = nullptr;
     HWND btn_save = nullptr;
     std::string path_utf8;
-    EigenWare::SubstrateManager* sm = nullptr;
+    SubstrateManager* sm = nullptr;
 };
 
 static EwBindingsEditorWin32 g_bind_editor;
@@ -239,7 +536,7 @@ static LRESULT CALLBACK EwBindingsEditorProc(HWND h, UINT msg, WPARAM w, LPARAM 
     return DefWindowProcW(h, msg, w, l);
 }
 
-static void ew_open_bindings_editor(EigenWare::SubstrateManager* sm, const std::string& path_utf8) {
+static void ew_open_bindings_editor(SubstrateManager* sm, const std::string& path_utf8) {
     if (g_bind_editor.hwnd) {
         SetForegroundWindow(g_bind_editor.hwnd);
         return;
@@ -327,7 +624,7 @@ static bool write_ewmesh_v1(const std::string& out_path_utf8, const EwObjMesh& m
 }
 
 struct App::Scene {
-    EigenWare::SubstrateManager sm;
+    SubstrateManager sm;
     uint64_t next_object_id_u64 = 1;
 
     // Default solar-system demo state (Earth orbit).
@@ -352,6 +649,7 @@ struct App::Scene {
         uint8_t pbr_scan_u8 = 0; // PBR/photogrammetry flag (AI training gate)
         uint8_t ai_training_meta_ready_u8 = 0; // explicit bounded metadata acknowledgement for training eligibility
         std::string material_meta_hint_utf8; // bounded substrate-resident composition/material hint for training eligibility
+        EwObjectDna object_dna;
 // Cached fixed-point representation for render-time (no draw-time float conversions).
 int32_t pos_q16_16[3] = {0,0,0};
 int32_t rot_quat_q16_16[4] = {0,0,0,65536};
@@ -417,7 +715,6 @@ void Tick() {
                         o.xf.pos[0] = (float)p.pos_q16_16[0] / 65536.0f;
                         o.xf.pos[1] = (float)p.pos_q16_16[1] / 65536.0f;
                         o.xf.pos[2] = (float)p.pos_q16_16[2] / 65536.0f;
-                        for (int k = 0; k < 4; ++k) o.rot_quat_q16_16[k] = p.rot_quat_q16_16[k];
                         o.radius_m_f32 = (float)p.radius_q16_16 / 65536.0f;
                         o.albedo_rgba8 = p.albedo_rgba8;
                         o.atmosphere_rgba8 = p.atmosphere_rgba8;
@@ -505,9 +802,10 @@ void Tick() {
         const uint64_t s0 = dup.object_id_u64 * 6364136223846793005ULL + 1442695040888963407ULL;
         const uint64_t s1 = ((uint64_t)tricount << 32) ^ (uint64_t)vcount;
         e.phase_seed_u64 = s0 ^ (s1 * 2862933555777941757ULL);
+        e.object_dna = dup.object_dna;
         (void)sm.object_store.upsert(e);
         const uint32_t synth_g = 32u;
-        (void)genesis_synthesize_voxelize_local(sm.object_store, dup.mesh, dup.object_id_u64, synth_g, synth_g, synth_g);
+        (void)genesis_synthesize_voxelize_local(sm.object_store, dup.mesh, dup.object_id_u64, sm.materials_calib_done, synth_g, synth_g, synth_g);
         genesis_apply_object_density_to_lattice(dup.object_id_u64);
 
         EwControlPacket cp{};
@@ -561,6 +859,7 @@ void Tick() {
     static bool genesis_synthesize_voxelize_local(EwObjectStore& store,
                                                   const EwObjMesh& mesh,
                                                   uint64_t object_id_u64,
+                                                  bool materials_calib_done,
                                                   uint32_t grid_x_u32,
                                                   uint32_t grid_y_u32,
                                                   uint32_t grid_z_u32) {
@@ -580,7 +879,7 @@ void Tick() {
         }
 
         std::vector<uint8_t> occ;
-        if (!genesis::ewmesh_voxelize_occupancy_u8(m, sm.materials_calib_done, grid_x_u32, grid_y_u32, grid_z_u32, occ)) return false;
+        if (!genesis::ewmesh_voxelize_occupancy_u8(m, materials_calib_done, grid_x_u32, grid_y_u32, grid_z_u32, occ)) return false;
 
         if (!store.upsert_voxel_volume_occupancy_u8(object_id_u64, grid_x_u32, grid_y_u32, grid_z_u32, occ.data(), occ.size())) {
             return false;
@@ -678,6 +977,7 @@ void Tick() {
         const uint64_t s0 = object_id * 6364136223846793005ULL + 1442695040888963407ULL;
         const uint64_t s1 = ((uint64_t)tricount << 32) ^ (uint64_t)vcount;
         e.phase_seed_u64 = s0 ^ (s1 * 2862933555777941757ULL);
+        e.object_dna = ew_object_dna_seed_from_geometry(object_id, tricount, vcount, ex, ey, ez);
 
         (void)sm.object_store.upsert(e);
 
@@ -687,7 +987,7 @@ void Tick() {
         const EwObjectEntry* e_check = sm.object_store.find(object_id);
         const bool needs_vox = (!e_check) || (e_check->voxel_format_u32 == 0u) || (e_check->voxel_grid_x_u32 == 0u);
         if (needs_vox) {
-            if (!genesis_synthesize_voxelize_local(sm.object_store, m, object_id, synth_g, synth_g, synth_g)) return false;
+            if (!genesis_synthesize_voxelize_local(sm.object_store, m, object_id, sm.materials_calib_done, synth_g, synth_g, synth_g)) return false;
         }
 
         // Bind synthesized density into the lattice (physics field).
@@ -733,6 +1033,7 @@ void Tick() {
         o.pbr_scan_u8 = pbr_scan ? 1 : 0;
         o.material_meta_hint_utf8 = material_meta_hint_utf8;
         o.ai_training_meta_ready_u8 = (!material_meta_hint_utf8.empty()) ? 1u : 0u;
+        o.object_dna = e.object_dna;
         o.mesh = std::move(m);
         o.object_id_u64 = object_id;
         o.anchor_id_u32 = 0;
@@ -748,7 +1049,7 @@ void Tick() {
         for (auto& o : objects) {
             if (o.object_id_u64 != object_id_u64) continue;
             const uint32_t synth_g = 96u; // bounded resolution for training bring-up
-            if (!genesis_synthesize_voxelize_local(sm.object_store, o.mesh, object_id_u64, synth_g, synth_g, synth_g)) return false;
+            if (!genesis_synthesize_voxelize_local(sm.object_store, o.mesh, object_id_u64, sm.materials_calib_done, synth_g, synth_g, synth_g)) return false;
             genesis_apply_object_density_to_lattice(object_id_u64);
             return true;
         }
@@ -947,13 +1248,346 @@ static bool ew_parse_bool_ascii(const std::string& s, bool fallback) {
     return fallback;
 }
 
-static void ew_append_prompt_section(std::string& out_utf8, const char* label_ascii, const std::string& payload_utf8) {
-    if (!label_ascii || payload_utf8.empty()) return;
-    out_utf8 += label_ascii;
-    out_utf8 += "\n";
-    out_utf8 += payload_utf8;
-    if (out_utf8.empty() || out_utf8.back() != '\n') out_utf8 += "\n";
-    out_utf8 += "\n";
+static void ew_json_escape_append_local(std::string& out_utf8, const std::string& s) {
+    for (unsigned char c : s) {
+        switch (c) {
+            case '\\': out_utf8 += "\\\\"; break;
+            case '"': out_utf8 += "\\\""; break;
+            case '\b': out_utf8 += "\\b"; break;
+            case '\f': out_utf8 += "\\f"; break;
+            case '\n': out_utf8 += "\\n"; break;
+            case '\r': out_utf8 += "\\r"; break;
+            case '\t': out_utf8 += "\\t"; break;
+            default:
+                if (c < 0x20u) {
+                    char buf[7]{};
+                    std::snprintf(buf, sizeof(buf), "\\u%04x", (unsigned)c);
+                    out_utf8 += buf;
+                } else {
+                    out_utf8.push_back((char)c);
+                }
+                break;
+        }
+    }
+}
+
+static void ew_json_begin_field_local(std::string& out_utf8, const char* key_ascii, bool* io_first) {
+    if (!io_first || !key_ascii) return;
+    if (!*io_first) out_utf8 += ",";
+    *io_first = false;
+    out_utf8 += "\"";
+    out_utf8 += key_ascii;
+    out_utf8 += "\":";
+}
+
+static void ew_json_append_string_field_local(std::string& out_utf8, const char* key_ascii, const std::string& value_utf8, bool* io_first) {
+    ew_json_begin_field_local(out_utf8, key_ascii, io_first);
+    out_utf8 += "\"";
+    ew_json_escape_append_local(out_utf8, value_utf8);
+    out_utf8 += "\"";
+}
+
+static void ew_json_append_bool_field_local(std::string& out_utf8, const char* key_ascii, bool value, bool* io_first) {
+    ew_json_begin_field_local(out_utf8, key_ascii, io_first);
+    out_utf8 += value ? "true" : "false";
+}
+
+static void ew_json_append_u32_field_local(std::string& out_utf8, const char* key_ascii, uint32_t value_u32, bool* io_first) {
+    ew_json_begin_field_local(out_utf8, key_ascii, io_first);
+    out_utf8 += std::to_string((unsigned long long)value_u32);
+}
+
+static void ew_json_append_i32_field_local(std::string& out_utf8, const char* key_ascii, int32_t value_s32, bool* io_first) {
+    ew_json_begin_field_local(out_utf8, key_ascii, io_first);
+    out_utf8 += std::to_string((long long)value_s32);
+}
+
+static void ew_json_append_u64_field_local(std::string& out_utf8, const char* key_ascii, uint64_t value_u64, bool* io_first) {
+    ew_json_begin_field_local(out_utf8, key_ascii, io_first);
+    out_utf8 += std::to_string((unsigned long long)value_u64);
+}
+
+static void ew_json_append_u16_field_local(std::string& out_utf8, const char* key_ascii, uint16_t value_u16, bool* io_first) {
+    ew_json_begin_field_local(out_utf8, key_ascii, io_first);
+    out_utf8 += std::to_string((unsigned)value_u16);
+}
+
+static void ew_json_append_f32_field_local(std::string& out_utf8, const char* key_ascii, float value_f32, bool* io_first) {
+    ew_json_begin_field_local(out_utf8, key_ascii, io_first);
+    char buf[64]{};
+    std::snprintf(buf, sizeof(buf), "%.6f", (double)value_f32);
+    out_utf8 += buf;
+}
+
+static void ew_json_append_string_array_field_local(std::string& out_utf8, const char* key_ascii, const std::vector<std::string>& values_utf8, bool* io_first) {
+    ew_json_begin_field_local(out_utf8, key_ascii, io_first);
+    out_utf8 += "[";
+    bool first = true;
+    for (const std::string& value_utf8 : values_utf8) {
+        if (!first) out_utf8 += ",";
+        first = false;
+        out_utf8 += "\"";
+        ew_json_escape_append_local(out_utf8, value_utf8);
+        out_utf8 += "\"";
+    }
+    out_utf8 += "]";
+}
+
+static std::string ew_format_vec3_f32_local(float x, float y, float z) {
+    char buf[160]{};
+    std::snprintf(buf, sizeof(buf), "%.4f,%.4f,%.4f", (double)x, (double)y, (double)z);
+    return std::string(buf);
+}
+
+static void ew_clip_text_bytes_local(std::string& text_utf8, size_t max_bytes) {
+    if (max_bytes == 0u) {
+        text_utf8.clear();
+        return;
+    }
+    if (text_utf8.size() <= max_bytes) return;
+    text_utf8.resize(max_bytes);
+    text_utf8 += "... (capped)";
+}
+
+static const char* ew_chat_mode_name_ascii_local(uint32_t mode_u32) {
+    switch (mode_u32) {
+        case SubstrateManager::EW_CHAT_MEMORY_MODE_CODE: return "code";
+        case SubstrateManager::EW_CHAT_MEMORY_MODE_SIM:  return "simulation";
+        case SubstrateManager::EW_CHAT_MEMORY_MODE_TALK:
+        default: return "conversation";
+    }
+}
+
+static const char* ew_ai_provider_name_ascii_local(uint32_t provider_u32) {
+    switch (provider_u32) {
+        case 0u: return "aethen";
+        case 1u: return "chatgpt_api";
+        case 2u:
+        default: return "hybrid";
+    }
+}
+
+struct EwChatGptReasoningContext {
+    std::string user_query_utf8;
+    std::string chat_mode_utf8;
+    std::string provider_utf8;
+    std::string model_utf8;
+
+    uint64_t canonical_tick_u64 = 0ull;
+    bool runtime_play_enabled = false;
+    bool viewport_live_mode_enabled = false;
+    bool viewport_resonance_view_enabled = false;
+    bool viewport_confinement_particles_enabled = false;
+    bool sequencer_play_enabled = false;
+    bool sequencer_stress_overlay_enabled = false;
+    int32_t fixed_dt_ms_s32 = 0;
+    int32_t spectrum_band_i32 = 0;
+    float spectrum_phase_f32 = 0.0f;
+    uint32_t object_count_u32 = 0u;
+    uint32_t editor_selection_count_u32 = 0u;
+
+    uint16_t global_coherence_q15 = 0u;
+    uint16_t lang_coherence_q15 = 0u;
+    uint16_t phys_coherence_q15 = 0u;
+    uint16_t crawl_coherence_q15 = 0u;
+    uint16_t exp_coherence_q15 = 0u;
+    uint16_t coherence_gate_min_q15 = 0u;
+
+    bool sandbox_active = false;
+    bool sandbox_replace_world = false;
+    uint64_t sandbox_target_object_id_u64 = 0ull;
+    std::string sandbox_center_xyz_q32_32_utf8;
+    std::string sandbox_size_xyz_q32_32_utf8;
+
+    bool selected_object_present = false;
+    std::string selected_object_name_utf8;
+    uint64_t selected_object_id_u64 = 0ull;
+    uint32_t selected_object_anchor_id_u32 = 0u;
+    std::string selected_object_position_m_utf8;
+    float selected_object_radius_m_f32 = 0.0f;
+    float selected_object_atmosphere_thickness_m_f32 = 0.0f;
+    float selected_object_emissive_f32 = 0.0f;
+    uint32_t selected_object_pbr_scan_u32 = 0u;
+    uint32_t selected_object_ai_training_meta_ready_u32 = 0u;
+    std::string selected_object_material_meta_hint_utf8;
+    bool selected_object_dna_present = false;
+    EwObjectDna selected_object_dna;
+    float selected_object_confinement_effective_hz_f32 = 0.0f;
+    float selected_object_existence_resonance_hz_f32 = 0.0f;
+    float selected_object_manifold_6dof_hz_f32[6] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    float selected_object_manifold_6dof_l1_hz_f32 = 0.0f;
+
+    bool ai_enabled = false;
+    bool ai_learning_enabled = false;
+    bool ai_crawling_enabled = false;
+    std::string repo_reader_status_utf8;
+    uint64_t vault_experiments_committed_u64 = 0ull;
+    uint64_t vault_experiments_ephemeral_u64 = 0ull;
+    uint64_t vault_allowlist_pages_u64 = 0ull;
+    uint64_t vault_resonant_pages_u64 = 0ull;
+
+    std::string chat_cortex_summary_utf8;
+    std::vector<std::string> recent_chat_memory_utf8;
+
+    std::string linked_project_root_utf8;
+    std::vector<std::string> linked_project_paths_utf8;
+    std::vector<std::string> project_eigen_spectra_utf8;
+
+    std::string coherence_view_stats_utf8;
+    std::string coherence_navigation_spine_utf8;
+    std::string primary_path_utf8;
+    std::vector<std::string> primary_path_coherence_links_utf8;
+    std::string primary_path_preview_utf8;
+
+    std::string pending_patch_scope_root_utf8;
+    uint32_t pending_patch_scope_file_count_u32 = 0u;
+    std::string pending_patch_utf8;
+
+    std::vector<std::string> vault_entries_utf8;
+    std::string vault_latest_entry_utf8;
+    std::string vault_latest_preview_utf8;
+
+    std::vector<std::string> domain_crawl_lines_utf8;
+};
+
+static std::string ew_serialize_chatgpt_reasoning_context_json_local(const EwChatGptReasoningContext& ctx) {
+    std::string json;
+    json.reserve(ctx.user_query_utf8.size() + ctx.primary_path_preview_utf8.size() + ctx.pending_patch_utf8.size() + 4096u);
+    json += "{";
+    bool first_top = true;
+    ew_json_append_string_field_local(json, "user_query", ctx.user_query_utf8, &first_top);
+    ew_json_begin_field_local(json, "engine_context", &first_top);
+    json += "{";
+    bool first_engine = true;
+    ew_json_append_string_field_local(json, "chat_mode", ctx.chat_mode_utf8, &first_engine);
+    ew_json_append_string_field_local(json, "provider", ctx.provider_utf8, &first_engine);
+    ew_json_append_string_field_local(json, "model", ctx.model_utf8, &first_engine);
+    ew_json_append_u64_field_local(json, "canonical_tick_u64", ctx.canonical_tick_u64, &first_engine);
+
+    ew_json_begin_field_local(json, "simulation", &first_engine);
+    json += "{";
+    bool first_sim = true;
+    ew_json_append_bool_field_local(json, "runtime_play_enabled", ctx.runtime_play_enabled, &first_sim);
+    ew_json_append_bool_field_local(json, "viewport_live_mode_enabled", ctx.viewport_live_mode_enabled, &first_sim);
+    ew_json_append_bool_field_local(json, "viewport_resonance_view_enabled", ctx.viewport_resonance_view_enabled, &first_sim);
+    ew_json_append_bool_field_local(json, "viewport_confinement_particles_enabled", ctx.viewport_confinement_particles_enabled, &first_sim);
+    ew_json_append_bool_field_local(json, "sequencer_play_enabled", ctx.sequencer_play_enabled, &first_sim);
+    ew_json_append_bool_field_local(json, "sequencer_stress_overlay_enabled", ctx.sequencer_stress_overlay_enabled, &first_sim);
+    ew_json_append_i32_field_local(json, "fixed_dt_ms_s32", ctx.fixed_dt_ms_s32, &first_sim);
+    ew_json_append_i32_field_local(json, "spectrum_band_i32", ctx.spectrum_band_i32, &first_sim);
+    ew_json_append_f32_field_local(json, "spectrum_phase_f32", ctx.spectrum_phase_f32, &first_sim);
+    ew_json_append_u32_field_local(json, "object_count_u32", ctx.object_count_u32, &first_sim);
+    ew_json_append_u32_field_local(json, "editor_selection_count_u32", ctx.editor_selection_count_u32, &first_sim);
+    json += "}";
+
+    ew_json_begin_field_local(json, "coherence", &first_engine);
+    json += "{";
+    bool first_coh = true;
+    ew_json_append_u16_field_local(json, "global_q15", ctx.global_coherence_q15, &first_coh);
+    ew_json_append_u16_field_local(json, "lang_q15", ctx.lang_coherence_q15, &first_coh);
+    ew_json_append_u16_field_local(json, "phys_q15", ctx.phys_coherence_q15, &first_coh);
+    ew_json_append_u16_field_local(json, "crawl_q15", ctx.crawl_coherence_q15, &first_coh);
+    ew_json_append_u16_field_local(json, "exp_q15", ctx.exp_coherence_q15, &first_coh);
+    ew_json_append_u16_field_local(json, "gate_min_q15", ctx.coherence_gate_min_q15, &first_coh);
+    json += "}";
+
+    ew_json_begin_field_local(json, "sandbox", &first_engine);
+    json += "{";
+    bool first_sandbox = true;
+    ew_json_append_bool_field_local(json, "active", ctx.sandbox_active, &first_sandbox);
+    ew_json_append_bool_field_local(json, "replace_world", ctx.sandbox_replace_world, &first_sandbox);
+    ew_json_append_u64_field_local(json, "target_object_id_u64", ctx.sandbox_target_object_id_u64, &first_sandbox);
+    ew_json_append_string_field_local(json, "center_xyz_q32_32", ctx.sandbox_center_xyz_q32_32_utf8, &first_sandbox);
+    ew_json_append_string_field_local(json, "size_xyz_q32_32", ctx.sandbox_size_xyz_q32_32_utf8, &first_sandbox);
+    json += "}";
+
+    ew_json_begin_field_local(json, "selected_object", &first_engine);
+    json += "{";
+    bool first_object = true;
+    ew_json_append_bool_field_local(json, "present", ctx.selected_object_present, &first_object);
+    ew_json_append_string_field_local(json, "name", ctx.selected_object_name_utf8, &first_object);
+    ew_json_append_u64_field_local(json, "object_id_u64", ctx.selected_object_id_u64, &first_object);
+    ew_json_append_u32_field_local(json, "anchor_id_u32", ctx.selected_object_anchor_id_u32, &first_object);
+    ew_json_append_string_field_local(json, "position_m", ctx.selected_object_position_m_utf8, &first_object);
+    ew_json_append_f32_field_local(json, "radius_m_f32", ctx.selected_object_radius_m_f32, &first_object);
+    ew_json_append_f32_field_local(json, "atmosphere_thickness_m_f32", ctx.selected_object_atmosphere_thickness_m_f32, &first_object);
+    ew_json_append_f32_field_local(json, "emissive_f32", ctx.selected_object_emissive_f32, &first_object);
+    ew_json_append_u32_field_local(json, "pbr_scan_u32", ctx.selected_object_pbr_scan_u32, &first_object);
+    ew_json_append_u32_field_local(json, "ai_training_meta_ready_u32", ctx.selected_object_ai_training_meta_ready_u32, &first_object);
+    ew_json_append_string_field_local(json, "material_meta_hint", ctx.selected_object_material_meta_hint_utf8, &first_object);
+    ew_json_begin_field_local(json, "object_dna", &first_object);
+    json += "{";
+    bool first_dna = true;
+    ew_json_append_bool_field_local(json, "present", ctx.selected_object_dna_present, &first_dna);
+#define EW_APPEND_OBJECT_DNA_JSON(name, default_value) ew_json_append_f32_field_local(json, #name, ctx.selected_object_dna.name, &first_dna);
+    EW_OBJECT_DNA_SCALAR_FIELDS(EW_APPEND_OBJECT_DNA_JSON)
+    EW_OBJECT_DNA_6DOF_FIELDS(EW_APPEND_OBJECT_DNA_JSON)
+#undef EW_APPEND_OBJECT_DNA_JSON
+    ew_json_append_f32_field_local(json, "confinement_effective_hz_f32", ctx.selected_object_confinement_effective_hz_f32, &first_dna);
+    ew_json_append_f32_field_local(json, "existence_resonance_hz_f32", ctx.selected_object_existence_resonance_hz_f32, &first_dna);
+    ew_json_append_f32_field_local(json, "manifold_tx_hz_f32", ctx.selected_object_manifold_6dof_hz_f32[0], &first_dna);
+    ew_json_append_f32_field_local(json, "manifold_ty_hz_f32", ctx.selected_object_manifold_6dof_hz_f32[1], &first_dna);
+    ew_json_append_f32_field_local(json, "manifold_tz_hz_f32", ctx.selected_object_manifold_6dof_hz_f32[2], &first_dna);
+    ew_json_append_f32_field_local(json, "manifold_rx_hz_f32", ctx.selected_object_manifold_6dof_hz_f32[3], &first_dna);
+    ew_json_append_f32_field_local(json, "manifold_ry_hz_f32", ctx.selected_object_manifold_6dof_hz_f32[4], &first_dna);
+    ew_json_append_f32_field_local(json, "manifold_rz_hz_f32", ctx.selected_object_manifold_6dof_hz_f32[5], &first_dna);
+    ew_json_append_f32_field_local(json, "manifold_6dof_l1_hz_f32", ctx.selected_object_manifold_6dof_l1_hz_f32, &first_dna);
+    json += "}";
+    json += "}";
+
+    ew_json_begin_field_local(json, "ai_runtime", &first_engine);
+    json += "{";
+    bool first_runtime = true;
+    ew_json_append_bool_field_local(json, "ai_enabled", ctx.ai_enabled, &first_runtime);
+    ew_json_append_bool_field_local(json, "learning_enabled", ctx.ai_learning_enabled, &first_runtime);
+    ew_json_append_bool_field_local(json, "crawling_enabled", ctx.ai_crawling_enabled, &first_runtime);
+    ew_json_append_string_field_local(json, "repo_reader_status", ctx.repo_reader_status_utf8, &first_runtime);
+    ew_json_append_u64_field_local(json, "vault_experiments_committed_u64", ctx.vault_experiments_committed_u64, &first_runtime);
+    ew_json_append_u64_field_local(json, "vault_experiments_ephemeral_u64", ctx.vault_experiments_ephemeral_u64, &first_runtime);
+    ew_json_append_u64_field_local(json, "vault_allowlist_pages_u64", ctx.vault_allowlist_pages_u64, &first_runtime);
+    ew_json_append_u64_field_local(json, "vault_resonant_pages_u64", ctx.vault_resonant_pages_u64, &first_runtime);
+    json += "}";
+
+    ew_json_begin_field_local(json, "chat_cortex", &first_engine);
+    json += "{";
+    bool first_cortex = true;
+    ew_json_append_string_field_local(json, "summary", ctx.chat_cortex_summary_utf8, &first_cortex);
+    ew_json_append_string_array_field_local(json, "recent_entries", ctx.recent_chat_memory_utf8, &first_cortex);
+    json += "}";
+
+    ew_json_begin_field_local(json, "project_work_surface", &first_engine);
+    json += "{";
+    bool first_work = true;
+    ew_json_append_string_field_local(json, "linked_project_root", ctx.linked_project_root_utf8, &first_work);
+    ew_json_append_string_array_field_local(json, "linked_project_paths", ctx.linked_project_paths_utf8, &first_work);
+    ew_json_append_string_array_field_local(json, "project_eigen_spectra", ctx.project_eigen_spectra_utf8, &first_work);
+    ew_json_append_string_field_local(json, "coherence_view_stats", ctx.coherence_view_stats_utf8, &first_work);
+    ew_json_append_string_field_local(json, "coherence_navigation_spine", ctx.coherence_navigation_spine_utf8, &first_work);
+    ew_json_append_string_field_local(json, "primary_path", ctx.primary_path_utf8, &first_work);
+    ew_json_append_string_array_field_local(json, "primary_path_coherence_links", ctx.primary_path_coherence_links_utf8, &first_work);
+    ew_json_append_string_field_local(json, "primary_path_preview", ctx.primary_path_preview_utf8, &first_work);
+    ew_json_append_string_field_local(json, "pending_patch_scope_root", ctx.pending_patch_scope_root_utf8, &first_work);
+    ew_json_append_u32_field_local(json, "pending_patch_scope_file_count_u32", ctx.pending_patch_scope_file_count_u32, &first_work);
+    ew_json_append_string_field_local(json, "pending_patch", ctx.pending_patch_utf8, &first_work);
+    json += "}";
+
+    ew_json_begin_field_local(json, "vault_surface", &first_engine);
+    json += "{";
+    bool first_vault = true;
+    ew_json_append_string_array_field_local(json, "recent_entries", ctx.vault_entries_utf8, &first_vault);
+    ew_json_append_string_field_local(json, "latest_entry", ctx.vault_latest_entry_utf8, &first_vault);
+    ew_json_append_string_field_local(json, "latest_preview", ctx.vault_latest_preview_utf8, &first_vault);
+    json += "}";
+
+    ew_json_begin_field_local(json, "crawler_surface", &first_engine);
+    json += "{";
+    bool first_crawler = true;
+    ew_json_append_string_array_field_local(json, "domain_progress", ctx.domain_crawl_lines_utf8, &first_crawler);
+    json += "}";
+
+    json += "}";
+    json += "}";
+    return json;
 }
 
 static HICON ew_create_genesis_icon(int size_px) {
@@ -1020,19 +1654,224 @@ static HICON ew_create_genesis_icon(int size_px) {
     return icon;
 }
 
-static HICON ew_get_genesis_icon(bool small) {
+static HICON ew_get_genesis_icon(bool want_small) {
     static HICON big_icon = ew_create_genesis_icon(64);
     static HICON small_icon = ew_create_genesis_icon(32);
-    return small ? small_icon : big_icon;
+    return want_small ? small_icon : big_icon;
+}
+
+struct EwStartupSplash {
+    HWND hwnd = nullptr;
+    HBITMAP bitmap = nullptr;
+    int bitmap_w = 0;
+    int bitmap_h = 0;
+    std::wstring title_w;
+    std::wstring subtitle_w;
+};
+
+static std::wstring ew_resolve_startup_splash_path_w() {
+    wchar_t exe_buf[MAX_PATH] = {};
+    const DWORD n = GetModuleFileNameW(nullptr, exe_buf, MAX_PATH);
+    if (n == 0u || n >= MAX_PATH) return std::wstring();
+
+    std::error_code ec;
+    std::filesystem::path probe = std::filesystem::path(exe_buf).parent_path();
+    while (!probe.empty()) {
+        const std::filesystem::path branding = probe / "GenesisEngineState" / "Branding" / "genesis_splash.bmp";
+        if (std::filesystem::exists(branding, ec) && std::filesystem::is_regular_file(branding, ec)) {
+            return branding.wstring();
+        }
+        ec.clear();
+        const std::filesystem::path portable_branding = probe / "Branding" / "genesis_splash.bmp";
+        if (std::filesystem::exists(portable_branding, ec) && std::filesystem::is_regular_file(portable_branding, ec)) {
+            return portable_branding.wstring();
+        }
+        ec.clear();
+        const std::filesystem::path source_branding = probe / "vulkan_app" / "resources" / "genesis_splash.bmp";
+        if (std::filesystem::exists(source_branding, ec) && std::filesystem::is_regular_file(source_branding, ec)) {
+            return source_branding.wstring();
+        }
+        ec.clear();
+        const std::filesystem::path parent = probe.parent_path();
+        if (parent == probe) break;
+        probe = parent;
+    }
+    return std::wstring();
+}
+
+static void ew_startup_splash_draw_text_block(HDC hdc, const RECT& rc, const std::wstring& title_w, const std::wstring& subtitle_w) {
+    ew_theme_init_once();
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, g_theme.gold_hot);
+    HFONT title_font = CreateFontW(-28, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                   OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                   VARIABLE_PITCH, L"Segoe UI Variable Display");
+    HFONT body_font = CreateFontW(-16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                  OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                  VARIABLE_PITCH, L"Segoe UI Variable Text");
+    HGDIOBJ old_font = SelectObject(hdc, title_font);
+    RECT title_rc = rc;
+    title_rc.left += 110;
+    title_rc.top += 18;
+    DrawTextW(hdc, title_w.c_str(), -1, &title_rc, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS);
+    SelectObject(hdc, body_font);
+    SetTextColor(hdc, g_theme.text);
+    RECT body_rc = rc;
+    body_rc.left += 110;
+    body_rc.top += 54;
+    DrawTextW(hdc, subtitle_w.c_str(), -1, &body_rc, DT_LEFT | DT_TOP | DT_WORDBREAK | DT_END_ELLIPSIS);
+    SelectObject(hdc, old_font);
+    DeleteObject(title_font);
+    DeleteObject(body_font);
+}
+
+static LRESULT CALLBACK EwStartupSplashProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+    if (msg == WM_NCCREATE) {
+        const CREATESTRUCTW* cs = reinterpret_cast<const CREATESTRUCTW*>(lparam);
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)cs->lpCreateParams);
+        return TRUE;
+    }
+    EwStartupSplash* splash = reinterpret_cast<EwStartupSplash*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    switch (msg) {
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_PAINT: {
+            ew_theme_init_once();
+            PAINTSTRUCT ps{};
+            HDC hdc = BeginPaint(hwnd, &ps);
+            RECT rc{};
+            GetClientRect(hwnd, &rc);
+
+            HBRUSH bg = CreateSolidBrush(g_theme.bg);
+            FillRect(hdc, &rc, bg);
+            DeleteObject(bg);
+
+            if (splash && splash->bitmap) {
+                HDC memdc = CreateCompatibleDC(hdc);
+                HGDIOBJ old_bmp = SelectObject(memdc, splash->bitmap);
+                StretchBlt(hdc, 0, 0, rc.right - rc.left, rc.bottom - rc.top,
+                           memdc, 0, 0, splash->bitmap_w, splash->bitmap_h, SRCCOPY);
+                SelectObject(memdc, old_bmp);
+                DeleteDC(memdc);
+            } else {
+                RECT hero = rc;
+                hero.bottom = (rc.bottom * 2) / 3;
+                HBRUSH hero_br = CreateSolidBrush(g_theme.panel_alt);
+                FillRect(hdc, &hero, hero_br);
+                DeleteObject(hero_br);
+            }
+
+            RECT footer = rc;
+            footer.top = std::max(rc.top, rc.bottom - 104);
+            HBRUSH footer_br = CreateSolidBrush(g_theme.bg_elevated);
+            FillRect(hdc, &footer, footer_br);
+            DeleteObject(footer_br);
+
+            DrawIconEx(hdc, 22, footer.top + 18, ew_get_genesis_icon(false), 72, 72, 0, nullptr, DI_NORMAL);
+            ew_startup_splash_draw_text_block(hdc, footer,
+                                              splash ? splash->title_w : std::wstring(L"Genesis Engine"),
+                                              splash ? splash->subtitle_w : std::wstring(L"Initializing Vulkan startup..."));
+
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
+        default:
+            break;
+    }
+    return DefWindowProcW(hwnd, msg, wparam, lparam);
+}
+
+static void ew_pump_pending_window_messages_local() {
+    MSG msg{};
+    while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+}
+
+static void ew_startup_splash_show(EwStartupSplash* splash, HINSTANCE hInst, const std::wstring& title_w, const std::wstring& subtitle_w) {
+    if (!splash) return;
+    splash->title_w = title_w;
+    splash->subtitle_w = subtitle_w;
+
+    static ATOM splash_class = 0;
+    if (splash_class == 0) {
+        WNDCLASSEXW wc{};
+        wc.cbSize = sizeof(wc);
+        wc.lpfnWndProc = EwStartupSplashProc;
+        wc.hInstance = hInst;
+        wc.lpszClassName = L"GenesisEngineSplashWnd";
+        wc.hCursor = LoadCursor(nullptr, IDC_WAIT);
+        wc.hIcon = ew_get_genesis_icon(false);
+        wc.hIconSm = ew_get_genesis_icon(true);
+        wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+        splash_class = RegisterClassExW(&wc);
+    }
+
+    const std::wstring splash_path_w = ew_resolve_startup_splash_path_w();
+    if (!splash_path_w.empty()) {
+        splash->bitmap = (HBITMAP)LoadImageW(nullptr, splash_path_w.c_str(), IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE | LR_CREATEDIBSECTION);
+        if (splash->bitmap) {
+            BITMAP bm{};
+            if (GetObjectW(splash->bitmap, sizeof(bm), &bm) == sizeof(bm)) {
+                splash->bitmap_w = bm.bmWidth;
+                splash->bitmap_h = bm.bmHeight;
+            }
+        }
+    }
+
+    int width = 900;
+    int height = 506;
+    if (splash->bitmap_w > 0 && splash->bitmap_h > 0) {
+        width = std::max(640, std::min(1280, splash->bitmap_w));
+        height = std::max(360, std::min(720, splash->bitmap_h));
+    }
+    const int screen_w = GetSystemMetrics(SM_CXSCREEN);
+    const int screen_h = GetSystemMetrics(SM_CYSCREEN);
+    const int x = (screen_w > width) ? ((screen_w - width) / 2) : 0;
+    const int y = (screen_h > height) ? ((screen_h - height) / 2) : 0;
+
+    splash->hwnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+                                   L"GenesisEngineSplashWnd",
+                                   title_w.c_str(),
+                                   WS_POPUP,
+                                   x, y, width, height,
+                                   nullptr, nullptr, hInst, splash);
+    if (!splash->hwnd) return;
+    ShowWindow(splash->hwnd, SW_SHOW);
+    UpdateWindow(splash->hwnd);
+    ew_pump_pending_window_messages_local();
+}
+
+static void ew_startup_splash_set_subtitle(EwStartupSplash* splash, const std::wstring& subtitle_w) {
+    if (!splash) return;
+    splash->subtitle_w = subtitle_w;
+    if (splash->hwnd) {
+        InvalidateRect(splash->hwnd, nullptr, TRUE);
+        UpdateWindow(splash->hwnd);
+        ew_pump_pending_window_messages_local();
+    }
+}
+
+static void ew_startup_splash_destroy(EwStartupSplash* splash) {
+    if (!splash) return;
+    if (splash->hwnd) {
+        DestroyWindow(splash->hwnd);
+        splash->hwnd = nullptr;
+    }
+    if (splash->bitmap) {
+        DeleteObject(splash->bitmap);
+        splash->bitmap = nullptr;
+    }
+    splash->bitmap_w = 0;
+    splash->bitmap_h = 0;
 }
 
 static void vk_check(VkResult r, const char* what) {
     if (r != VK_SUCCESS) {
-        char b[256];
-        sprintf_s(b, "Vulkan error %d at %s\n", (int)r, what);
-        OutputDebugStringA(b);
-        MessageBoxA(nullptr, b, "GenesisEngineVulkan", MB_ICONERROR | MB_OK);
-        abort();
+        std::string msg = std::string("Vulkan error ") + std::to_string((int)r) + " at " + (what ? what : "unknown");
+        OutputDebugStringA((msg + "\n").c_str());
+        throw std::runtime_error(msg);
     }
 }
 
@@ -1861,8 +2700,7 @@ VkPushConstantRange pcr{};
     auto vert = ew_read_spv_u32(vert_path);
     auto frag = ew_read_spv_u32(frag_path);
     if (vert.empty() || frag.empty()) {
-        MessageBoxA(nullptr, "Missing shader SPIR-V. Ensure Vulkan SDK is installed and shaders compiled.", "GenesisEngineVulkan", MB_ICONERROR | MB_OK);
-        abort();
+        throw std::runtime_error("Missing shader SPIR-V. Ensure Vulkan SDK is installed and shaders compiled.");
     }
     VkShaderModule vs = ew_make_shader(vk.dev, vert);
     VkShaderModule fs = ew_make_shader(vk.dev, frag);
@@ -2081,8 +2919,7 @@ VkPushConstantRange pcr{};
         auto hist_spv = ew_read_spv_u32(hist_path);
         auto med_spv  = ew_read_spv_u32(med_path);
         if (hist_spv.empty() || med_spv.empty()) {
-            MessageBoxA(nullptr, "Missing camera sensor compute shader SPIR-V.", "GenesisEngineVulkan", MB_ICONERROR | MB_OK);
-            abort();
+            throw std::runtime_error("Missing camera sensor compute shader SPIR-V.");
         }
         VkShaderModule hs = ew_make_shader(vk.dev, hist_spv);
         VkShaderModule ms = ew_make_shader(vk.dev, med_spv);
@@ -2105,8 +2942,9 @@ VkPushConstantRange pcr{};
 App::App(const AppConfig& cfg) : cfg_(cfg) {
     ew_camera_init(cam_);
     std::memset(&input_, 0, sizeof(input_));
-    const char* v = std::getenv("EW_IMMERSION");
-    if (v && (v[0]=='1' || v[0]=='y' || v[0]=='Y' || v[0]=='t' || v[0]=='T')) {
+    right_dock_width_px_ = EW_UI_RIGHT_DOCK_DEFAULT_W_PX;
+    right_dock_width_previous_px_ = EW_UI_RIGHT_DOCK_DEFAULT_W_PX;
+    if (env_truthy("EW_IMMERSION")) {
         immersion_mode_ = true;
     }
 }
@@ -2131,14 +2969,15 @@ void App::CreateMainWindow(HINSTANCE hInst) {
     set_dpi_awareness();
     ew_theme_init_once();
 
-    WNDCLASSW wc{};
+    WNDCLASSEXW wc{};
+    wc.cbSize = sizeof(wc);
     wc.lpfnWndProc = &App::WndProcThunk;
     wc.hInstance = hInst;
     wc.lpszClassName = GE_REMOTE_WINDOW_CLASS_W;
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
     wc.hIcon = ew_get_genesis_icon(false);
     wc.hIconSm = ew_get_genesis_icon(true);
-    RegisterClassW(&wc);
+    RegisterClassExW(&wc);
 
     RECT r{0,0,cfg_.initial_width,cfg_.initial_height};
     AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
@@ -2146,48 +2985,23 @@ void App::CreateMainWindow(HINSTANCE hInst) {
     hwnd_main_ = CreateWindowW(
         wc.lpszClassName,
         utf8_to_wide(cfg_.app_title_utf8).c_str(),
-        WS_OVERLAPPEDWINDOW,
+        WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
         CW_USEDEFAULT, CW_USEDEFAULT,
         r.right - r.left, r.bottom - r.top,
         nullptr, nullptr, hInst, this);
     if (hwnd_main_) {
         SendMessageW(hwnd_main_, WM_SETICON, ICON_BIG, (LPARAM)ew_get_genesis_icon(false));
         SendMessageW(hwnd_main_, WM_SETICON, ICON_SMALL, (LPARAM)ew_get_genesis_icon(true));
+        ew_apply_modern_window_chrome(hwnd_main_, false);
     }
 
-    // Minimal Unreal-style menu bar. Actions only route through deterministic
-    // UI commands/control packets (no new simulation semantics).
-    HMENU hMenu = CreateMenu();
-    HMENU hFile = CreateMenu();
-    AppendMenuW(hFile, MF_STRING, 9001, L"Exit");
-    AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hFile, L"File");
-    if (ew_editor_build_enabled) {
-        HMENU hEdit = CreateMenu();
-        HMENU hWindow = CreateMenu();
-        HMENU hTools = CreateMenu();
-        AppendMenuW(hEdit, MF_STRING, 9101, L"Copy");
-        AppendMenuW(hEdit, MF_STRING, 9102, L"Paste");
-        AppendMenuW(hWindow, MF_STRING | (content_visible_ ? MF_CHECKED : 0), 9201, L"Content Browser");
-        AppendMenuW(hWindow, MF_STRING, 9202, L"AI Panel");
-        AppendMenuW(hWindow, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(hWindow, MF_STRING, 9203, L"Outliner");
-        AppendMenuW(hWindow, MF_STRING, 9204, L"Details");
-        AppendMenuW(hWindow, MF_STRING, 9205, L"Asset");
-        AppendMenuW(hWindow, MF_STRING, 9206, L"Voxel");
-        AppendMenuW(hWindow, MF_STRING, 9207, L"Node");
-        AppendMenuW(hWindow, MF_STRING, 9208, L"Sequencer");
-        AppendMenuW(hWindow, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(hWindow, MF_STRING, 9209, L"Live Mode (Substrate Viewport)");
-        AppendMenuW(hTools, MF_STRING, 9301, L"Reindex Content");
-        AppendMenuW(hTools, MF_STRING, 9302, L"List Content");
-        AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hEdit, L"Edit");
-        AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hWindow, L"Window");
-        AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hTools, L"Tools");
-    }
-    SetMenu(hwnd_main_, hMenu);
-    if (ew_editor_build_enabled) SyncWindowMenu();
+    // Primary workspace commands are surfaced through the custom top bar instead
+    // of a classical Win32 menu bar.
+    SetMenu(hwnd_main_, nullptr);
 
-    ShowWindow(hwnd_main_, SW_SHOW);
+    ShowWindow(hwnd_main_, ew_editor_build_enabled ? SW_SHOWMAXIMIZED : SW_SHOW);
+    UpdateWindow(hwnd_main_);
+    SetForegroundWindow(hwnd_main_);
 }
 
 void App::CreateChildWindows() {
@@ -2195,10 +3009,78 @@ void App::CreateChildWindows() {
     GetClientRect(hwnd_main_, &rc);
     client_w_ = rc.right - rc.left;
     client_h_ = rc.bottom - rc.top;
+    right_dock_width_px_ = ew_ui_clamp_right_dock_width_px(right_dock_width_px_, client_w_);
+    right_dock_width_previous_px_ = right_dock_width_px_;
+    const int dock_w = right_dock_width_px_;
+    const UINT main_dpi = hwnd_main_ ? GetDpiForWindow(hwnd_main_) : 96u;
+    const int topbar_h = ew_editor_build_enabled ? MulDiv(44, (int)main_dpi, 96) : 0;
+    const int workspace_h = std::max(0, client_h_ - topbar_h);
+
+    if (ew_editor_build_enabled) {
+        const std::wstring project_label_w = cfg_.app_title_utf8.empty()
+            ? std::wstring(L"Vulkan Workspace")
+            : utf8_to_wide(cfg_.app_title_utf8);
+        hwnd_topbar_ = CreateWindowW(L"STATIC", L"",
+                                     WS_CHILD | WS_VISIBLE,
+                                     0, 0, client_w_, topbar_h,
+                                     hwnd_main_, (HMENU)1600, GetModuleHandleW(nullptr), nullptr);
+        hwnd_topbar_menu_ = CreateWindowW(L"BUTTON", L"Workbench",
+                                          WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                          16, 8, 108, 28,
+                                          hwnd_topbar_, (HMENU)1607, GetModuleHandleW(nullptr), nullptr);
+        hwnd_topbar_title_ = CreateWindowW(L"STATIC", L"Genesis Engine",
+                                           WS_CHILD | WS_VISIBLE,
+                                           136, 12, 152, 18,
+                                           hwnd_topbar_, nullptr, GetModuleHandleW(nullptr), nullptr);
+        hwnd_topbar_project_ = CreateWindowW(L"STATIC", project_label_w.c_str(),
+                                             WS_CHILD | WS_VISIBLE | SS_OWNERDRAW,
+                                             292, 8, 164, 28,
+                                             hwnd_topbar_, (HMENU)1608, GetModuleHandleW(nullptr), nullptr);
+        hwnd_topbar_sim_ = CreateWindowW(L"BUTTON", L"Sim",
+                                         WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                         470, 8, 62, 28,
+                                         hwnd_topbar_, (HMENU)1601, GetModuleHandleW(nullptr), nullptr);
+        hwnd_topbar_ai_ = CreateWindowW(L"BUTTON", L"AI",
+                                        WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                        538, 8, 54, 28,
+                                        hwnd_topbar_, (HMENU)1602, GetModuleHandleW(nullptr), nullptr);
+        hwnd_topbar_live_ = CreateWindowW(L"BUTTON", L"Live",
+                                          WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                          598, 8, 58, 28,
+                                          hwnd_topbar_, (HMENU)1603, GetModuleHandleW(nullptr), nullptr);
+        hwnd_topbar_photon_ = CreateWindowW(L"BUTTON", L"Photon",
+                                            WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                            662, 8, 72, 28,
+                                            hwnd_topbar_, (HMENU)1604, GetModuleHandleW(nullptr), nullptr);
+        hwnd_topbar_content_ = CreateWindowW(L"BUTTON", L"Content",
+                                             WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                             740, 8, 78, 28,
+                                             hwnd_topbar_, (HMENU)1605, GetModuleHandleW(nullptr), nullptr);
+        hwnd_topbar_assistant_ = CreateWindowW(L"BUTTON", L"Assistant",
+                                               WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                               824, 8, 90, 28,
+                                               hwnd_topbar_, (HMENU)1606, GetModuleHandleW(nullptr), nullptr);
+        hwnd_topbar_minimize_ = CreateWindowW(L"BUTTON", L"_",
+                                              WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                              client_w_ - 122, 8, 32, 28,
+                                              hwnd_topbar_, (HMENU)1609, GetModuleHandleW(nullptr), nullptr);
+        hwnd_topbar_maximize_ = CreateWindowW(L"BUTTON", L"[]",
+                                              WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                              client_w_ - 86, 8, 32, 28,
+                                              hwnd_topbar_, (HMENU)1610, GetModuleHandleW(nullptr), nullptr);
+        hwnd_topbar_close_ = CreateWindowW(L"BUTTON", L"X",
+                                           WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                           client_w_ - 50, 8, 36, 28,
+                                           hwnd_topbar_, (HMENU)1611, GetModuleHandleW(nullptr), nullptr);
+        hwnd_topbar_status_ = CreateWindowW(L"STATIC", L"Workspace ready.",
+                                            WS_CHILD | WS_VISIBLE | SS_RIGHT,
+                                            920, 12, std::max(120, client_w_ - 1058), 18,
+                                            hwnd_topbar_, nullptr, GetModuleHandleW(nullptr), nullptr);
+    }
 
     hwnd_viewport_ = CreateWindowW(L"STATIC", L"",
                                    WS_CHILD | WS_VISIBLE,
-                                   0, 0, ew_editor_build_enabled ? (client_w_ - 420) : client_w_, client_h_,
+                                   0, topbar_h, ew_editor_build_enabled ? (client_w_ - dock_w) : client_w_, workspace_h,
                                    hwnd_main_, (HMENU)1001, GetModuleHandleW(nullptr), nullptr);
 
     if (ew_editor_build_enabled && hwnd_viewport_) {
@@ -2212,13 +3094,19 @@ void App::CreateChildWindows() {
 
     if (!ew_editor_build_enabled) {
         hwnd_panel_ = nullptr;
+        hwnd_dock_splitter_ = nullptr;
         return;
     }
 
     hwnd_panel_ = CreateWindowW(L"STATIC", L"",
                                 WS_CHILD | WS_VISIBLE,
-                                client_w_ - 420, 0, 420, client_h_,
+                                client_w_ - dock_w, topbar_h, dock_w, workspace_h,
                                 hwnd_main_, (HMENU)1002, GetModuleHandleW(nullptr), nullptr);
+    hwnd_dock_splitter_ = CreateWindowW(L"STATIC", L"",
+                                        WS_CHILD | WS_VISIBLE | WS_DISABLED,
+                                        client_w_ - dock_w - (EW_UI_RIGHT_DOCK_SPLITTER_W_PX / 2), topbar_h,
+                                        EW_UI_RIGHT_DOCK_SPLITTER_W_PX, workspace_h,
+                                        hwnd_main_, (HMENU)1004, GetModuleHandleW(nullptr), nullptr);
 
     // Right dock: tabbed panels (Unreal-style). Pure UI layer: no core logic changes.
     {
@@ -2231,7 +3119,7 @@ void App::CreateChildWindows() {
     const int TAB_H = 30;
     hwnd_rdock_tab_ = CreateWindowW(WC_TABCONTROLW, L"",
                                     WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
-                                    PAD, PAD, 420 - 2*PAD, TAB_H,
+                                    PAD, PAD, dock_w - 2*PAD, TAB_H,
                                     hwnd_panel_, (HMENU)1500, GetModuleHandleW(nullptr), nullptr);
 
     TCITEMW ti{};
@@ -2252,8 +3140,8 @@ void App::CreateChildWindows() {
     // Panel roots (children of dock container). Only one visible at a time.
     int panel_x = PAD;
     int panel_y = PAD + TAB_H + 8;
-    int panel_w = 420 - 2*PAD;
-    int panel_h = client_h_ - panel_y - PAD;
+    int panel_w = dock_w - 2*PAD;
+    int panel_h = workspace_h - panel_y - PAD;
 
     hwnd_rdock_outliner_ = CreateWindowW(L"STATIC", L"", WS_CHILD | WS_VISIBLE,
                                          panel_x, panel_y, panel_w, panel_h,
@@ -2373,6 +3261,13 @@ void App::CreateChildWindows() {
     CreateWindowW(L"BUTTON", L"Close", WS_CHILD | WS_VISIBLE,
                   panel_w - 240, 5, 54, 24,
                   hwnd_tb_asset_, (HMENU)1542, GetModuleHandleW(nullptr), nullptr);
+
+    // Asset thumbnail preview (embedded in Asset tab). Layout adjusted in LayoutChildren().
+    hwnd_asset_thumb_ = CreateWindowW(WC_LISTVIEWW, L"",
+                                      WS_CHILD | WS_BORDER | LVS_ICON | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
+                                      10, TB_H + 10, panel_w - 20, 210,
+                                      hwnd_rdock_asset_, (HMENU)2050, GetModuleHandleW(nullptr), nullptr);
+    if (hwnd_asset_thumb_) ListView_SetExtendedListViewStyle(hwnd_asset_thumb_, LVS_EX_DOUBLEBUFFER);
 
 
     // Voxel toolbar: presets.
@@ -2578,39 +3473,55 @@ void App::CreateChildWindows() {
     // Deterministic placeholder thumbnail image list (solid gold tile).
     himl_content_thumbs_ = ImageList_Create(64, 64, ILC_COLOR32, 1, 0);
     if (himl_content_thumbs_) {
+        ew_theme_init_once();
         HDC hdc = GetDC(hwnd_content_thumb_);
         HBITMAP bmp = CreateCompatibleBitmap(hdc, 64, 64);
         HDC mem = CreateCompatibleDC(hdc);
         HGDIOBJ old = SelectObject(mem, bmp);
-        HBRUSH br = CreateSolidBrush(RGB(160, 120, 0));
         RECT r{0,0,64,64};
-        FillRect(mem, &r, br);
-        DeleteObject(br);
+        HBRUSH br_bg = CreateSolidBrush(g_theme.panel_alt);
+        FillRect(mem, &r, br_bg);
+        DeleteObject(br_bg);
+        RECT inner{6,6,58,58};
+        HBRUSH br_inner = CreateSolidBrush(g_theme.highlight_bg);
+        FillRect(mem, &inner, br_inner);
+        DeleteObject(br_inner);
+        RECT accent{10,44,54,50};
+        HBRUSH br_accent = CreateSolidBrush(g_theme.gold);
+        FillRect(mem, &accent, br_accent);
+        DeleteObject(br_accent);
         SelectObject(mem, old);
         DeleteDC(mem);
         ReleaseDC(hwnd_content_thumb_, hdc);
         ImageList_Add(himl_content_thumbs_, bmp, nullptr);
         DeleteObject(bmp);
         ListView_SetImageList(hwnd_content_thumb_, himl_content_thumbs_, LVSIL_NORMAL);
+        if (hwnd_asset_thumb_) ListView_SetImageList(hwnd_asset_thumb_, himl_content_thumbs_, LVSIL_NORMAL);
     }
     ShowWindow(hwnd_content_thumb_, SW_HIDE);
     // Deterministic small icon image list for list mode (solid gold tile).
     himl_content_icons_ = ImageList_Create(16, 16, ILC_COLOR32, 1, 0);
     if (himl_content_icons_) {
+        ew_theme_init_once();
         HDC hdc = GetDC(hwnd_content_list_);
         HBITMAP bmp = CreateCompatibleBitmap(hdc, 16, 16);
         HDC mem = CreateCompatibleDC(hdc);
         HGDIOBJ old = SelectObject(mem, bmp);
-        HBRUSH br = CreateSolidBrush(RGB(160, 120, 0));
         RECT r{0,0,16,16};
-        FillRect(mem, &r, br);
-        DeleteObject(br);
+        HBRUSH br_bg = CreateSolidBrush(g_theme.highlight_bg);
+        FillRect(mem, &r, br_bg);
+        DeleteObject(br_bg);
+        RECT accent{3,10,13,13};
+        HBRUSH br_accent = CreateSolidBrush(g_theme.gold);
+        FillRect(mem, &accent, br_accent);
+        DeleteObject(br_accent);
         SelectObject(mem, old);
         DeleteDC(mem);
         ReleaseDC(hwnd_content_list_, hdc);
         ImageList_Add(himl_content_icons_, bmp, nullptr);
         DeleteObject(bmp);
         ListView_SetImageList(hwnd_content_list_, himl_content_icons_, LVSIL_SMALL);
+        if (hwnd_asset_thumb_) ListView_SetImageList(hwnd_asset_thumb_, himl_content_icons_, LVSIL_SMALL);
     }
 
 
@@ -2659,26 +3570,26 @@ void App::CreateChildWindows() {
     // ------------------------------------------------------------
     // AI + sim toggles (owner-drawn switches)
     // ------------------------------------------------------------
-    CreateWindowW(L"STATIC", L"Run", WS_CHILD | WS_VISIBLE, 10, 70, 28, 18, asset_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+    hwnd_asset_label_run_ = CreateWindowW(L"STATIC", L"Run", WS_CHILD | WS_VISIBLE, 10, 70, 28, 18, asset_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
     hwnd_toggle_play_ = CreateWindowW(L"BUTTON", L"",
                                       WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
                                       42, 66, 86, 24,
                                       asset_parent, (HMENU)2040, GetModuleHandleW(nullptr), nullptr);
 
-    CreateWindowW(L"STATIC", L"AI", WS_CHILD | WS_VISIBLE, 138, 70, 18, 18, asset_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+    hwnd_asset_label_ai_ = CreateWindowW(L"STATIC", L"AI", WS_CHILD | WS_VISIBLE, 138, 70, 18, 18, asset_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
     hwnd_toggle_ai_ = CreateWindowW(L"BUTTON", L"",
                                     WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
                                     162, 66, 86, 24,
                                     asset_parent, (HMENU)2041, GetModuleHandleW(nullptr), nullptr);
 
     // Second row: learning + crawling.
-    CreateWindowW(L"STATIC", L"Learn", WS_CHILD | WS_VISIBLE, 10, 96, 34, 18, asset_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+    hwnd_asset_label_learning_ = CreateWindowW(L"STATIC", L"Learn", WS_CHILD | WS_VISIBLE, 10, 96, 34, 18, asset_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
     hwnd_toggle_learning_ = CreateWindowW(L"BUTTON", L"",
                                           WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
                                           52, 92, 86, 24,
                                           asset_parent, (HMENU)2042, GetModuleHandleW(nullptr), nullptr);
 
-    CreateWindowW(L"STATIC", L"Crawl", WS_CHILD | WS_VISIBLE, 148, 96, 34, 18, asset_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+    hwnd_asset_label_crawling_ = CreateWindowW(L"STATIC", L"Crawl", WS_CHILD | WS_VISIBLE, 148, 96, 34, 18, asset_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
     hwnd_toggle_crawling_ = CreateWindowW(L"BUTTON", L"",
                                           WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
                                           186, 92, 86, 24,
@@ -2693,10 +3604,10 @@ void App::CreateChildWindows() {
 
 
     // AI details panel (crawler progress + experiments)
-    CreateWindowW(L"BUTTON", L"AI Panel",
-                  WS_CHILD | WS_VISIBLE,
-                  346, 92, 64, 24,
-                  asset_parent, (HMENU)2046, GetModuleHandleW(nullptr), nullptr);
+    hwnd_asset_ai_panel_button_ = CreateWindowW(L"BUTTON", L"AI Panel",
+                                                WS_CHILD | WS_VISIBLE,
+                                                346, 92, 64, 24,
+                                                asset_parent, (HMENU)2046, GetModuleHandleW(nullptr), nullptr);
 
     hwnd_ai_status_ = CreateWindowW(L"STATIC", L"AI:IDLE",
                                     WS_CHILD | WS_VISIBLE,
@@ -2718,6 +3629,10 @@ void App::CreateChildWindows() {
                                             WS_CHILD | WS_VISIBLE,
                                             10, 214, 104, 24,
                                             asset_parent, (HMENU)2061, GetModuleHandleW(nullptr), nullptr);
+    hwnd_asset_label_tool_mode_ = CreateWindowW(L"STATIC", L"Tool Mode",
+                                                WS_CHILD | WS_VISIBLE,
+                                                122, 214, 72, 18,
+                                                asset_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
     hwnd_asset_tool_mode_ = CreateWindowW(WC_COMBOBOXW, L"",
                                           WS_CHILD | WS_VISIBLE | WS_BORDER | CBS_DROPDOWNLIST,
                                           122, 214, 156, 240,
@@ -2728,14 +3643,26 @@ void App::CreateChildWindows() {
         SendMessageW(hwnd_asset_tool_mode_, CB_ADDSTRING, 0, (LPARAM)L"Character Tools");
         SendMessageW(hwnd_asset_tool_mode_, CB_SETCURSEL, 0, 0);
     }
+    hwnd_asset_label_planet_atmo_ = CreateWindowW(L"STATIC", L"Atmosphere",
+                                                  WS_CHILD | WS_VISIBLE,
+                                                  10, 246, 96, 18,
+                                                  asset_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
     hwnd_asset_planet_atmo_ = CreateWindowW(TRACKBAR_CLASSW, L"",
                                             WS_CHILD | WS_VISIBLE | TBS_AUTOTICKS,
                                             10, 246, 260, 30,
                                             asset_parent, (HMENU)2067, GetModuleHandleW(nullptr), nullptr);
+    hwnd_asset_label_planet_iono_ = CreateWindowW(L"STATIC", L"Ionosphere",
+                                                  WS_CHILD | WS_VISIBLE,
+                                                  10, 278, 96, 18,
+                                                  asset_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
     hwnd_asset_planet_iono_ = CreateWindowW(TRACKBAR_CLASSW, L"",
                                             WS_CHILD | WS_VISIBLE | TBS_AUTOTICKS,
                                             10, 278, 260, 30,
                                             asset_parent, (HMENU)2068, GetModuleHandleW(nullptr), nullptr);
+    hwnd_asset_label_planet_magneto_ = CreateWindowW(L"STATIC", L"Magnetosphere",
+                                                     WS_CHILD | WS_VISIBLE,
+                                                     10, 310, 96, 18,
+                                                     asset_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
     hwnd_asset_planet_magneto_ = CreateWindowW(TRACKBAR_CLASSW, L"",
                                                WS_CHILD | WS_VISIBLE | TBS_AUTOTICKS,
                                                10, 310, 260, 30,
@@ -2752,6 +3679,10 @@ void App::CreateChildWindows() {
                                              WS_CHILD | WS_VISIBLE,
                                              278, 306, 112, 24,
                                              asset_parent, (HMENU)2072, GetModuleHandleW(nullptr), nullptr);
+    hwnd_asset_label_character_archetype_ = CreateWindowW(L"STATIC", L"Archetype",
+                                                          WS_CHILD | WS_VISIBLE,
+                                                          10, 344, 96, 18,
+                                                          asset_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
     hwnd_asset_character_archetype_ = CreateWindowW(WC_COMBOBOXW, L"",
                                                     WS_CHILD | WS_VISIBLE | WS_BORDER | CBS_DROPDOWNLIST,
                                                     10, 344, 168, 240,
@@ -2763,14 +3694,26 @@ void App::CreateChildWindows() {
         SendMessageW(hwnd_asset_character_archetype_, CB_ADDSTRING, 0, (LPARAM)L"Heavy Rig Worker");
         SendMessageW(hwnd_asset_character_archetype_, CB_SETCURSEL, 0, 0);
     }
+    hwnd_asset_label_character_height_ = CreateWindowW(L"STATIC", L"Height",
+                                                       WS_CHILD | WS_VISIBLE,
+                                                       10, 376, 96, 18,
+                                                       asset_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
     hwnd_asset_character_height_ = CreateWindowW(TRACKBAR_CLASSW, L"",
                                                  WS_CHILD | WS_VISIBLE | TBS_AUTOTICKS,
                                                  10, 376, 260, 30,
                                                  asset_parent, (HMENU)2074, GetModuleHandleW(nullptr), nullptr);
+    hwnd_asset_label_character_rigidity_ = CreateWindowW(L"STATIC", L"Rigidity",
+                                                         WS_CHILD | WS_VISIBLE,
+                                                         10, 408, 96, 18,
+                                                         asset_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
     hwnd_asset_character_rigidity_ = CreateWindowW(TRACKBAR_CLASSW, L"",
                                                    WS_CHILD | WS_VISIBLE | TBS_AUTOTICKS,
                                                    10, 408, 260, 30,
                                                    asset_parent, (HMENU)2075, GetModuleHandleW(nullptr), nullptr);
+    hwnd_asset_label_character_gait_ = CreateWindowW(L"STATIC", L"Gait",
+                                                     WS_CHILD | WS_VISIBLE,
+                                                     10, 440, 96, 18,
+                                                     asset_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
     hwnd_asset_character_gait_ = CreateWindowW(TRACKBAR_CLASSW, L"",
                                                WS_CHILD | WS_VISIBLE | TBS_AUTOTICKS,
                                                10, 440, 260, 30,
@@ -2918,9 +3861,14 @@ void App::CreateChildWindows() {
     }
 
     // Apply consistent editor fonts (Segoe UI) across UI controls.
+    if (hwnd_topbar_) ew_apply_editor_fonts(hwnd_topbar_);
+    if (hwnd_topbar_title_ && g_font_ui_bold) SendMessageW(hwnd_topbar_title_, WM_SETFONT, (WPARAM)g_font_ui_bold, TRUE);
+    if (hwnd_topbar_project_ && g_font_ui_small) SendMessageW(hwnd_topbar_project_, WM_SETFONT, (WPARAM)g_font_ui_small, TRUE);
+    if (hwnd_topbar_status_ && g_font_ui_small) SendMessageW(hwnd_topbar_status_, WM_SETFONT, (WPARAM)g_font_ui_small, TRUE);
     ew_apply_editor_fonts(hwnd_panel_);
     if (hwnd_content_) ew_apply_editor_fonts(hwnd_content_);
     LayoutChildren(client_w_, client_h_);
+    RefreshTopBarChrome();
     RefreshAssetDesignerPanel();
     RefreshVoxelDesignerPanel();
 
@@ -2940,13 +3888,14 @@ static void ew_draw_bell_badge(const DRAWITEMSTRUCT* dis, uint32_t badge_u32) {
     ew_theme_init_once();
     HDC hdc = dis->hDC;
     RECT rc = dis->rcItem;
-
-    FillRect(hdc, &rc, g_brush_panel);
+    HBRUSH shell = CreateSolidBrush(g_theme.bg_elevated);
+    FillRect(hdc, &rc, shell);
+    DeleteObject(shell);
 
     // Simple bell glyph (text) + red badge.
     SetBkMode(hdc, TRANSPARENT);
     SetTextColor(hdc, g_theme.gold);
-    HFONT hFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+    HFONT hFont = g_font_ui_bold ? g_font_ui_bold : (HFONT)GetStockObject(DEFAULT_GUI_FONT);
     HFONT old = (HFONT)SelectObject(hdc, hFont);
 
     // Simple bell glyph. We intentionally keep this ASCII-ish so it renders on
@@ -2960,8 +3909,8 @@ static void ew_draw_bell_badge(const DRAWITEMSTRUCT* dis, uint32_t badge_u32) {
         const int dot_r = 10;
         int cx = rc.right - dot_r - 2;
         int cy = rc.top + dot_r + 2;
-        HBRUSH red = CreateSolidBrush(RGB(220, 0, 0));
-        HPEN pen = CreatePen(PS_SOLID, 1, RGB(220,0,0));
+        HBRUSH red = CreateSolidBrush(g_theme.badge_red);
+        HPEN pen = CreatePen(PS_SOLID, 1, g_theme.badge_red);
         HGDIOBJ oldb = SelectObject(hdc, red);
         HGDIOBJ oldp = SelectObject(hdc, pen);
         Ellipse(hdc, cx - dot_r, cy - dot_r, cx + dot_r, cy + dot_r);
@@ -2973,8 +3922,8 @@ static void ew_draw_bell_badge(const DRAWITEMSTRUCT* dis, uint32_t badge_u32) {
         wchar_t num[16];
         uint32_t shown = badge_u32;
         if (shown > 963u) shown = 963u;
-        _snwprintf(num, 16, L"%u", (unsigned)shown);
-        SetTextColor(hdc, RGB(255,255,255));
+        swprintf_s(num, _countof(num), L"%u", (unsigned)shown);
+        SetTextColor(hdc, g_theme.text);
         RECT nr{cx - dot_r, cy - dot_r, cx + dot_r, cy + dot_r};
         DrawTextW(hdc, num, -1, &nr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         SetTextColor(hdc, g_theme.gold);
@@ -2989,15 +3938,18 @@ static void ew_draw_compose_icon(const DRAWITEMSTRUCT* dis) {
     HDC hdc = dis->hDC;
     RECT rc = dis->rcItem;
 
-    // Background
-    FillRect(hdc, &rc, g_brush_panel);
+    const bool hot = (dis->itemState & ODS_HOTLIGHT) != 0;
+    const bool pressed = (dis->itemState & ODS_SELECTED) != 0;
+    HBRUSH bg = CreateSolidBrush(ew_theme_button_fill(false, hot, pressed, false));
+    FillRect(hdc, &rc, bg);
+    DeleteObject(bg);
 
     // Slight inset for stroke
     RECT r = rc;
     InflateRect(&r, -6, -6);
 
     // Pen+pad icon: a square "page" with a clipped top-right corner and a pencil stroke.
-    HPEN pen = CreatePen(PS_SOLID, 2, g_theme.gold);
+    HPEN pen = CreatePen(PS_SOLID, 2, hot ? g_theme.gold_hot : g_theme.gold);
     HGDIOBJ oldp = SelectObject(hdc, pen);
 
     // Page outline with cut corner
@@ -3026,7 +3978,7 @@ static void ew_draw_compose_icon(const DRAWITEMSTRUCT* dis) {
 
     // Hover/pressed feedback (subtle gold border)
     if (dis->itemState & (ODS_SELECTED | ODS_FOCUS | ODS_HOTLIGHT)) {
-        HPEN p2 = CreatePen(PS_SOLID, 1, g_theme.gold);
+        HPEN p2 = CreatePen(PS_SOLID, 1, hot ? g_theme.gold_hot : g_theme.steel_hot);
         HGDIOBJ op2 = SelectObject(hdc, p2);
         Rectangle(hdc, rc.left + 1, rc.top + 1, rc.right - 1, rc.bottom - 1);
         SelectObject(hdc, op2);
@@ -3036,17 +3988,16 @@ static void ew_draw_compose_icon(const DRAWITEMSTRUCT* dis) {
 
 static void ew_draw_apply_button(const DRAWITEMSTRUCT* dis) {
     if (!dis) return;
+    ew_theme_init_once();
     HDC dc = dis->hDC;
     RECT r = dis->rcItem;
-
-    // Background: near-black.
-    HBRUSH bg = CreateSolidBrush(RGB(12, 12, 12));
-    FillRect(dc, &r, bg);
-    DeleteObject(bg);
-
     const bool hot = (dis->itemState & ODS_HOTLIGHT) != 0;
     const bool down = (dis->itemState & ODS_SELECTED) != 0;
-    const COLORREF gold = hot ? RGB(255, 210, 90) : RGB(220, 180, 60);
+    const COLORREF fill = ew_theme_button_fill(true, hot, down, false);
+    const COLORREF gold = ew_theme_button_border(true, hot, false);
+    HBRUSH bg = CreateSolidBrush(fill);
+    FillRect(dc, &r, bg);
+    DeleteObject(bg);
 
     // Border.
     HPEN pen = CreatePen(PS_SOLID, 1, gold);
@@ -3059,7 +4010,7 @@ static void ew_draw_apply_button(const DRAWITEMSTRUCT* dis) {
 
     // Text.
     SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, RGB(255, 255, 255));
+    SetTextColor(dc, g_theme.text);
     RECT tr = r;
     if (down) { tr.left += 1; tr.top += 1; }
     DrawTextW(dc, L"Apply", -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
@@ -3073,10 +4024,10 @@ static void ew_draw_menu_ellipsis_button(const DRAWITEMSTRUCT* dis) {
 
     const bool pressed = (dis->itemState & ODS_SELECTED) != 0;
     const bool hot = (dis->itemState & ODS_HOTLIGHT) != 0;
-    const COLORREF gold = hot ? RGB(255, 210, 90) : RGB(220, 180, 60);
+    const COLORREF gold = hot ? g_theme.gold_hot : g_theme.gold;
 
     // Background.
-    HBRUSH bg = CreateSolidBrush(g_theme.panel_bg);
+    HBRUSH bg = CreateSolidBrush(ew_theme_button_fill(false, hot, pressed, false));
     FillRect(dc, &r, bg);
     DeleteObject(bg);
 
@@ -3145,7 +4096,7 @@ static void ew_ai_chat_draw_bubble(const DRAWITEMSTRUCT* dis) {
     RECT rc = dis->rcItem;
 
     // Background.
-    HBRUSH bg = CreateSolidBrush(g_theme.panel_bg);
+    HBRUSH bg = CreateSolidBrush(g_theme.panel);
     FillRect(dc, &rc, bg);
     DeleteObject(bg);
 
@@ -3186,8 +4137,8 @@ static void ew_ai_chat_draw_bubble(const DRAWITEMSTRUCT* dis) {
     }
 
     // Bubble colors.
-    const COLORREF bubble_bg = is_user ? RGB(22, 22, 22) : RGB(16, 16, 16);
-    const COLORREF stroke = g_theme.gold;
+    const COLORREF bubble_bg = is_user ? g_theme.chat_user_bg : g_theme.chat_assistant_bg;
+    const COLORREF stroke = is_user ? g_theme.steel : g_theme.gold;
 
     // Rounded rect.
     HBRUSH bbr = CreateSolidBrush(bubble_bg);
@@ -3202,7 +4153,7 @@ static void ew_ai_chat_draw_bubble(const DRAWITEMSTRUCT* dis) {
 
     // Text.
     SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, RGB(255, 255, 255));
+    SetTextColor(dc, g_theme.text);
     RECT tr = br;
     tr.left += bubble_pad_x;
     tr.right -= bubble_pad_x;
@@ -3212,7 +4163,7 @@ static void ew_ai_chat_draw_bubble(const DRAWITEMSTRUCT* dis) {
 
     // Focus ring.
     if (dis->itemState & ODS_FOCUS) {
-        HPEN p2 = CreatePen(PS_SOLID, 1, RGB(255, 210, 90));
+        HPEN p2 = CreatePen(PS_SOLID, 1, g_theme.gold_hot);
         HGDIOBJ op2 = SelectObject(dc, p2);
         HGDIOBJ ob2 = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
         RoundRect(dc, br.left - 2, br.top - 2, br.right + 2, br.bottom + 2, 12, 12);
@@ -3230,15 +4181,15 @@ static void ew_draw_usepatch_button(const DRAWITEMSTRUCT* dis) {
     const bool pressed = (dis->itemState & ODS_SELECTED) != 0;
     const bool disabled = (dis->itemState & ODS_DISABLED) != 0;
 
-    COLORREF bg = g_theme.panel_bg;
+    COLORREF bg = g_theme.panel;
     COLORREF border = g_theme.gold;
     COLORREF text = g_theme.text;
     if (disabled) {
         // Dim the border/text while keeping background consistent.
-        border = RGB(80, 72, 40);
-        text = RGB(140, 140, 140);
+        border = g_theme.border_soft;
+        text = g_theme.dim;
     } else if (pressed) {
-        bg = g_theme.edit_bg;
+        bg = g_theme.edit_bg_alt;
     }
 
     HBRUSH br = CreateSolidBrush(bg);
@@ -3302,24 +4253,19 @@ static void ew_draw_action_text_button(const DRAWITEMSTRUCT* dis) {
     const bool pressed = (dis->itemState & ODS_SELECTED) != 0;
     const bool disabled = (dis->itemState & ODS_DISABLED) != 0;
     const bool hot = (dis->itemState & ODS_HOTLIGHT) != 0;
-    const COLORREF gold = disabled ? RGB(112, 102, 74) : (hot ? RGB(255, 210, 90) : RGB(220, 180, 60));
-    HBRUSH bg = CreateSolidBrush(RGB(14, 14, 14));
-    FillRect(dc, &rc, bg);
-    DeleteObject(bg);
-    HPEN pen = CreatePen(PS_SOLID, 1, gold);
-    HGDIOBJ oldp = SelectObject(dc, pen);
-    HGDIOBJ oldb = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
-    Rectangle(dc, rc.left, rc.top, rc.right, rc.bottom);
-    SelectObject(dc, oldb);
-    SelectObject(dc, oldp);
-    DeleteObject(pen);
+    ew_draw_rounded_surface(dc, rc,
+                            ew_theme_button_fill(false, hot, pressed, disabled),
+                            ew_theme_button_border(false, hot, disabled),
+                            14, 1);
     wchar_t txt[96]{};
     GetWindowTextW(dis->hwndItem, txt, 95);
     RECT tr = rc;
     if (pressed) { tr.left += 1; tr.top += 1; }
     SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, disabled ? RGB(148,148,148) : RGB(255,255,255));
-    DrawTextW(dc, txt, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    SetTextColor(dc, ew_theme_button_text(false, disabled));
+    HFONT oldf = (HFONT)SelectObject(dc, g_font_ui ? g_font_ui : GetStockObject(DEFAULT_GUI_FONT));
+    DrawTextW(dc, txt, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    SelectObject(dc, oldf);
 }
 
 static void ew_draw_ai_mode_button(const DRAWITEMSTRUCT* dis, const wchar_t* label, bool active) {
@@ -3330,22 +4276,20 @@ static void ew_draw_ai_mode_button(const DRAWITEMSTRUCT* dis, const wchar_t* lab
     const bool disabled = (dis->itemState & ODS_DISABLED) != 0;
     const bool hot = (dis->itemState & ODS_HOTLIGHT) != 0;
     const bool pressed = (dis->itemState & ODS_SELECTED) != 0;
-    COLORREF fill = active ? RGB(44, 34, 12) : RGB(18, 18, 18);
-    COLORREF border = active ? g_theme.gold : RGB(88, 74, 28);
-    if (hot && !disabled) fill = active ? RGB(52, 40, 14) : RGB(24, 24, 24);
-    if (pressed && !disabled) fill = active ? RGB(60, 46, 18) : RGB(28, 28, 28);
-    HBRUSH br = CreateSolidBrush(fill);
-    FillRect(dc, &rc, br);
-    DeleteObject(br);
-    HPEN pen = CreatePen(PS_SOLID, active ? 2 : 1, border);
-    HGDIOBJ oldp = SelectObject(dc, pen);
-    HGDIOBJ oldb = SelectObject(dc, GetStockObject(NULL_BRUSH));
-    Rectangle(dc, rc.left, rc.top, rc.right, rc.bottom);
-    SelectObject(dc, oldb);
-    SelectObject(dc, oldp);
-    DeleteObject(pen);
+    COLORREF fill = ew_theme_button_fill(active, hot, pressed, disabled);
+    COLORREF border = ew_theme_button_border(active, hot, disabled);
+    ew_draw_rounded_surface(dc, rc, fill, border, 16, active ? 2 : 1);
+    if (active) {
+        RECT accent = rc;
+        accent.left += 8;
+        accent.right -= 8;
+        accent.top = accent.bottom - 4;
+        HBRUSH accent_br = CreateSolidBrush(g_theme.gold);
+        FillRect(dc, &accent, accent_br);
+        DeleteObject(accent_br);
+    }
     SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, disabled ? RGB(128,128,128) : (active ? g_theme.gold : g_theme.text));
+    SetTextColor(dc, ew_theme_button_text(active, disabled));
     HFONT oldf = (HFONT)SelectObject(dc, g_font_ui ? g_font_ui : GetStockObject(DEFAULT_GUI_FONT));
     RECT tr = rc;
     DrawTextW(dc, label, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
@@ -3422,8 +4366,8 @@ static bool ew_apply_unified_diff_to_dir(const std::wstring& patch_w, const std:
     auto load_file = [&](const std::wstring& path_w, std::vector<std::wstring>* out_lines) -> bool {
         if (!out_lines) return false;
         out_lines->clear();
-        FILE* f = _wfopen(path_w.c_str(), L"rb");
-        if (!f) return false;
+        FILE* f = nullptr;
+        if (_wfopen_s(&f, path_w.c_str(), L"rb") != 0 || !f) return false;
         std::string bytes;
         fseek(f, 0, SEEK_END);
         long sz = ftell(f);
@@ -3471,8 +4415,8 @@ static bool ew_apply_unified_diff_to_dir(const std::wstring& patch_w, const std:
         std::string bytes;
         bytes.resize((size_t)blen);
         if (blen > 0) WideCharToMultiByte(CP_UTF8, 0, ws.c_str(), (int)ws.size(), bytes.data(), blen, nullptr, nullptr);
-        FILE* f = _wfopen(path_w.c_str(), L"wb");
-        if (!f) return false;
+        FILE* f = nullptr;
+        if (_wfopen_s(&f, path_w.c_str(), L"wb") != 0 || !f) return false;
         if (!bytes.empty()) fwrite(bytes.data(), 1, bytes.size(), f);
         fclose(f);
         return true;
@@ -3585,39 +4529,39 @@ void App::CreateAiPanelWindow() {
     icc.dwICC = ICC_TAB_CLASSES | ICC_PROGRESS_CLASS | ICC_LISTVIEW_CLASSES;
     InitCommonControlsEx(&icc);
 
-    hwnd_ai_panel_ = CreateWindowW(L"STATIC", L"AI",
-                                   WS_OVERLAPPEDWINDOW,
-                                   CW_USEDEFAULT, CW_USEDEFAULT, 520, 560,
-                                   hwnd_main_, nullptr, GetModuleHandleW(nullptr), nullptr);
+    static const wchar_t* kAiPanelWindowClass = L"GenesisEngineAiPanelWnd";
+    static bool ai_panel_class_registered = false;
+    HINSTANCE hinst = GetModuleHandleW(nullptr);
+    if (!ai_panel_class_registered) {
+        WNDCLASSEXW wc{};
+        wc.cbSize = sizeof(wc);
+        wc.lpfnWndProc = &App::WndProcThunk;
+        wc.hInstance = hinst;
+        wc.lpszClassName = kAiPanelWindowClass;
+        wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+        wc.hIcon = ew_get_genesis_icon(false);
+        wc.hIconSm = ew_get_genesis_icon(true);
+        wc.hbrBackground = g_brush_bg ? g_brush_bg : (HBRUSH)(COLOR_WINDOW + 1);
+        ai_panel_class_registered = (RegisterClassExW(&wc) != 0);
+    }
 
-    // Route child control theming (WM_CTLCOLOR*) through our editor WndProc.
-    // Keep auxiliary windows layout-local (WM_SIZE handler is guarded).
-    SetWindowLongPtrW(hwnd_ai_panel_, GWLP_USERDATA, (LONG_PTR)this);
-    SetWindowLongPtrW(hwnd_ai_panel_, GWLP_WNDPROC, (LONG_PTR)&App::WndProcThunk);
+    hwnd_ai_panel_ = CreateWindowW(kAiPanelWindowClass, L"Genesis AI",
+                                   WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+                                   CW_USEDEFAULT, CW_USEDEFAULT, 520, 560,
+                                   hwnd_main_, nullptr, hinst, this);
+    if (hwnd_ai_panel_) {
+        SendMessageW(hwnd_ai_panel_, WM_SETICON, ICON_BIG, (LPARAM)ew_get_genesis_icon(false));
+        SendMessageW(hwnd_ai_panel_, WM_SETICON, ICON_SMALL, (LPARAM)ew_get_genesis_icon(true));
+        ew_apply_modern_window_chrome(hwnd_ai_panel_, true);
+    }
 
     // Note: we apply fonts after all controls are created.
 
     // Compact "⋯" menu in the AI panel header (ChatGPT-mobile style).
-    // NOTE: We keep the old learning/crawling toggle controls created but hidden,
-    // so any existing code paths remain valid without introducing aliases.
     hwnd_ai_menu_ = CreateWindowW(L"BUTTON", L"⋯",
                                   WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
                                   12, 6, 28, 28,
                                   hwnd_ai_panel_, (HMENU)4054, GetModuleHandleW(nullptr), nullptr);
-
-    CreateWindowW(L"STATIC", L"Learning", WS_CHILD, 12, 10, 58, 18,
-                  hwnd_ai_panel_, nullptr, GetModuleHandleW(nullptr), nullptr);
-    hwnd_ai_toggle_learning_ = CreateWindowW(L"BUTTON", L"",
-                                             WS_CHILD | BS_OWNERDRAW,
-                                             74, 6, 56, 24,
-                                             hwnd_ai_panel_, (HMENU)4055, GetModuleHandleW(nullptr), nullptr);
-
-    CreateWindowW(L"STATIC", L"Crawling", WS_CHILD, 140, 10, 58, 18,
-                  hwnd_ai_panel_, nullptr, GetModuleHandleW(nullptr), nullptr);
-    hwnd_ai_toggle_crawling_ = CreateWindowW(L"BUTTON", L"",
-                                             WS_CHILD | BS_OWNERDRAW,
-                                             202, 6, 56, 24,
-                                             hwnd_ai_panel_, (HMENU)4056, GetModuleHandleW(nullptr), nullptr);
 
     // Compose (new chat) icon button (pen+pad) in the top-right.
     hwnd_ai_chat_compose_ = CreateWindowW(L"BUTTON", L"",
@@ -3733,6 +4677,14 @@ void App::CreateAiPanelWindow() {
                                        WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
                                        404, 430, 90, 30,
                                        hwnd_ai_panel_, (HMENU)4059, GetModuleHandleW(nullptr), nullptr);
+    hwnd_ai_chat_provider_ = CreateWindowW(WC_COMBOBOXW, L"",
+                                           WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | CBS_DROPDOWNLIST | WS_VSCROLL,
+                                           52, 480, 138, 240,
+                                           hwnd_ai_panel_, (HMENU)4910, GetModuleHandleW(nullptr), nullptr);
+    hwnd_ai_chat_model_ = CreateWindowW(WC_COMBOBOXW, L"",
+                                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | CBS_DROPDOWNLIST | WS_VSCROLL,
+                                        196, 480, 210, 240,
+                                        hwnd_ai_panel_, (HMENU)4911, GetModuleHandleW(nullptr), nullptr);
 
     // Embedded repository pane (hidden until selected).
     hwnd_ai_repo_status_ = CreateWindowW(L"STATIC", L"Repo reader status: idle",
@@ -3883,6 +4835,9 @@ void App::CreateAiPanelWindow() {
     for (uint32_t i = 0u; i < AI_CHAT_MAX; ++i) ai_chat_last_detected_patch_w_[i].clear();
     for (uint32_t i = 0u; i < AI_CHAT_MAX; ++i) ai_chat_last_detected_patch_valid_[i] = false;
     for (uint32_t i = 0u; i < AI_CHAT_MAX; ++i) ai_chat_mode_u32_[i] = SubstrateManager::EW_CHAT_MEMORY_MODE_TALK;
+    for (uint32_t i = 0u; i < AI_CHAT_MAX; ++i) ai_chat_provider_u32_[i] = AI_CHAT_PROVIDER_HYBRID;
+    for (uint32_t i = 0u; i < AI_CHAT_MAX; ++i) ai_chat_api_model_w_[i] = utf8_to_wide(ew_openai_default_model_utf8());
+    for (uint32_t i = 0u; i < AI_CHAT_MAX; ++i) ai_chat_native_model_w_[i] = L"native:auto";
     for (uint32_t i = 0u; i < AI_CHAT_MAX; ++i) ai_chat_cortex_summary_w_[i].clear();
     for (uint32_t i = 0u; i < AI_CHAT_MAX; ++i) ai_chat_project_summary_w_[i].clear();
     for (uint32_t i = 0u; i < AI_CHAT_MAX; ++i) ai_chat_project_root_w_[i].clear();
@@ -3891,6 +4846,7 @@ void App::CreateAiPanelWindow() {
     ai_chat_folder_id_u32_ = 0u;
 
     ai_chat_title_w_[0] = L"Chat 1";
+    RefreshAiChatProviderControls(0u);
     AiChatAppend(0u, L"Genesis AI ready. Learning/Crawling default OFF.");
     AiChatAppend(0u, L"Nothing learned is written to disk unless you explicitly request export/apply.");
     AiChatRenderSelected();
@@ -3916,7 +4872,6 @@ void App::LayoutAiPanelChildren() {
     const int header_y = 40;
     const int content_top = 106;
     const int content_bottom = h - 20;
-    const int content_h = (content_bottom > content_top) ? (content_bottom - content_top) : 0;
     const int top_button_y = 6;
     if (hwnd_ai_menu_) MoveWindow(hwnd_ai_menu_, 12, top_button_y, 28, 28, TRUE);
     if (hwnd_ai_chat_nextaction_) MoveWindow(hwnd_ai_chat_nextaction_, right - 346, top_button_y, 62, 28, TRUE);
@@ -3931,17 +4886,21 @@ void App::LayoutAiPanelChildren() {
     if (hwnd_ai_panel_chat_title_) MoveWindow(hwnd_ai_panel_chat_title_, 52, 10, w - 320, 18, TRUE);
     if (hwnd_ai_panel_chat_state_) MoveWindow(hwnd_ai_panel_chat_state_, 52, 28, w - 320, 18, TRUE);
 
-    const int chat_input_h = 78;
-    const int chat_send_h = 30;
+    const int chat_input_h = 46;
+    const int chat_send_h = 28;
     const int list_top = content_top;
     const int input_top = h - 98;
+    const int control_top = input_top + 50;
+    const int model_w = std::max(120, w - 316);
     const int list_h = input_top - list_top - 8;
     if (hwnd_ai_panel_tool_status_) MoveWindow(hwnd_ai_panel_tool_status_, w - 228, 44, 208, 18, TRUE);
     if (hwnd_ai_tab_) MoveWindow(hwnd_ai_tab_, 10, 72, w - 20, h - 82, TRUE);
     if (hwnd_ai_chat_list_) MoveWindow(hwnd_ai_chat_list_, left, list_top, w - 40, list_h, TRUE);
-    if (hwnd_ai_chat_link_project_) MoveWindow(hwnd_ai_chat_link_project_, left, input_top + 24, 26, 28, TRUE);
+    if (hwnd_ai_chat_link_project_) MoveWindow(hwnd_ai_chat_link_project_, left, control_top, 26, 28, TRUE);
     if (hwnd_ai_chat_input_) MoveWindow(hwnd_ai_chat_input_, left + 32, input_top, w - 172, chat_input_h, TRUE);
-    if (hwnd_ai_chat_send_) MoveWindow(hwnd_ai_chat_send_, w - 110, input_top + 24, 90, chat_send_h, TRUE);
+    if (hwnd_ai_chat_provider_) MoveWindow(hwnd_ai_chat_provider_, left + 32, control_top, 138, 240, TRUE);
+    if (hwnd_ai_chat_model_) MoveWindow(hwnd_ai_chat_model_, left + 176, control_top, model_w, 240, TRUE);
+    if (hwnd_ai_chat_send_) MoveWindow(hwnd_ai_chat_send_, w - 110, control_top, 90, chat_send_h, TRUE);
 
     if (hwnd_ai_repo_status_) MoveWindow(hwnd_ai_repo_status_, left, content_top, w - 40, 18, TRUE);
     if (hwnd_ai_repo_refresh_) MoveWindow(hwnd_ai_repo_refresh_, left, content_top + 24, 86, 28, TRUE);
@@ -3993,10 +4952,13 @@ void App::LayoutAiPanelChildren() {
 void App::RefreshAiPanelChrome() {
     if (!hwnd_ai_panel_) return;
     const uint32_t idx = (ai_tab_index_u32_ < AI_CHAT_MAX) ? ai_tab_index_u32_ : 0u;
+    if (ai_chat_provider_u32_[idx] > AI_CHAT_PROVIDER_HYBRID) ai_chat_provider_u32_[idx] = AI_CHAT_PROVIDER_HYBRID;
+    if (ai_chat_api_model_w_[idx].empty()) ai_chat_api_model_w_[idx] = utf8_to_wide(ew_openai_default_model_utf8());
+    if (ai_chat_native_model_w_[idx].empty()) ai_chat_native_model_w_[idx] = L"native:auto";
     std::wstring title = ai_chat_title_w_[idx];
     if (title.empty()) {
         wchar_t label[32];
-        _snwprintf(label, 32, L"Chat %u", (unsigned)(idx + 1u));
+        swprintf_s(label, _countof(label), L"Chat %u", (unsigned)(idx + 1u));
         title = label;
     }
     if (hwnd_ai_panel_chat_title_) {
@@ -4006,6 +4968,12 @@ void App::RefreshAiPanelChrome() {
     }
     if (hwnd_ai_panel_chat_state_) {
         std::wstring state = (ai_chat_mode_u32_[idx] == SubstrateManager::EW_CHAT_MEMORY_MODE_CODE) ? L"Mode: code cortex." : ((ai_chat_mode_u32_[idx] == SubstrateManager::EW_CHAT_MEMORY_MODE_SIM) ? L"Mode: simulation cortex." : L"Mode: conversational cortex.");
+        const uint32_t provider_u32 = ai_chat_provider_u32_[idx];
+        const wchar_t* provider_w = (provider_u32 == AI_CHAT_PROVIDER_NATIVE) ? L"Aethen" : ((provider_u32 == AI_CHAT_PROVIDER_CHATGPT) ? L"ChatGPT API" : L"Hybrid");
+        const std::wstring provider_model = (provider_u32 == AI_CHAT_PROVIDER_NATIVE) ? ai_chat_native_model_w_[idx] : ai_chat_api_model_w_[idx];
+        state += L"  Provider: ";
+        state += provider_w;
+        if (!provider_model.empty()) state += L" (" + provider_model + L").";
         if (ai_chat_patch_w_[idx].empty()) {
             state += L"  No patch buffered.";
         } else if (!ai_chat_patch_previewed_[idx]) {
@@ -4020,7 +4988,7 @@ void App::RefreshAiPanelChrome() {
         }
         if (!ai_chat_apply_target_dir_w_[idx].empty()) state += L"  Apply target: " + ai_chat_apply_target_dir_w_[idx];
         if (!ai_chat_project_summary_w_[idx].empty()) state += L"  Project linked.";
-        EigenWare::SubstrateManager::EwStagedExportBundle staged_bundle{};
+        SubstrateManager::EwStagedExportBundle staged_bundle{};
         if (scene_ && scene_->sm.ui_snapshot_latest_export_bundle(idx, staged_bundle)) {
             if (staged_bundle.whole_repo_continuation_u8 != 0u) state += L"  Whole-repo continuation staged.";
             else if (!staged_bundle.operation_label_utf8.empty()) state += L"  Export stage: " + utf8_to_wide(staged_bundle.operation_label_utf8) + L".";
@@ -4061,6 +5029,83 @@ void App::RefreshAiPanelChrome() {
     if (hwnd_ai_chat_mode_sim_) InvalidateRect(hwnd_ai_chat_mode_sim_, nullptr, TRUE);
 }
 
+void App::RefreshAiChatProviderControls(uint32_t chat_idx_u32) {
+    if (chat_idx_u32 >= AI_CHAT_MAX) return;
+    if (ai_chat_provider_u32_[chat_idx_u32] > AI_CHAT_PROVIDER_HYBRID) ai_chat_provider_u32_[chat_idx_u32] = AI_CHAT_PROVIDER_HYBRID;
+    if (ai_chat_api_model_w_[chat_idx_u32].empty()) ai_chat_api_model_w_[chat_idx_u32] = utf8_to_wide(ew_openai_default_model_utf8());
+    if (ai_chat_native_model_w_[chat_idx_u32].empty()) ai_chat_native_model_w_[chat_idx_u32] = L"native:auto";
+
+    if (hwnd_ai_chat_provider_) {
+        SendMessageW(hwnd_ai_chat_provider_, CB_RESETCONTENT, 0, 0);
+        SendMessageW(hwnd_ai_chat_provider_, CB_ADDSTRING, 0, (LPARAM)L"Aethen");
+        SendMessageW(hwnd_ai_chat_provider_, CB_ADDSTRING, 0, (LPARAM)L"ChatGPT API");
+        SendMessageW(hwnd_ai_chat_provider_, CB_ADDSTRING, 0, (LPARAM)L"Hybrid (Both)");
+        SendMessageW(hwnd_ai_chat_provider_, CB_SETCURSEL, (WPARAM)ai_chat_provider_u32_[chat_idx_u32], 0);
+    }
+
+    if (!hwnd_ai_chat_model_) return;
+
+    const bool native_provider = (ai_chat_provider_u32_[chat_idx_u32] == AI_CHAT_PROVIDER_NATIVE);
+    const wchar_t* const native_models[] = {L"native:auto", L"native:learning-cycle", L"native:coherence-focus"};
+    const wchar_t* const api_models[] = {L"gpt-5-mini", L"gpt-5", L"gpt-4.1-mini"};
+
+    SendMessageW(hwnd_ai_chat_model_, WM_SETREDRAW, FALSE, 0);
+    SendMessageW(hwnd_ai_chat_model_, CB_RESETCONTENT, 0, 0);
+
+    if (native_provider) {
+        for (const wchar_t* m : native_models) SendMessageW(hwnd_ai_chat_model_, CB_ADDSTRING, 0, (LPARAM)m);
+    } else {
+        for (const wchar_t* m : api_models) SendMessageW(hwnd_ai_chat_model_, CB_ADDSTRING, 0, (LPARAM)m);
+    }
+
+    std::wstring desired = native_provider ? ai_chat_native_model_w_[chat_idx_u32] : ai_chat_api_model_w_[chat_idx_u32];
+    if (desired.empty()) desired = native_provider ? std::wstring(native_models[0]) : utf8_to_wide(ew_openai_default_model_utf8());
+
+    int sel = -1;
+    const int count = (int)SendMessageW(hwnd_ai_chat_model_, CB_GETCOUNT, 0, 0);
+    for (int i = 0; i < count; ++i) {
+        wchar_t item[256]{};
+        SendMessageW(hwnd_ai_chat_model_, CB_GETLBTEXT, (WPARAM)i, (LPARAM)item);
+        if (_wcsicmp(item, desired.c_str()) == 0) {
+            sel = i;
+            break;
+        }
+    }
+    if (sel < 0) {
+        sel = 0;
+        wchar_t item[256]{};
+        SendMessageW(hwnd_ai_chat_model_, CB_GETLBTEXT, 0, (LPARAM)item);
+        desired = item;
+    }
+
+    SendMessageW(hwnd_ai_chat_model_, CB_SETCURSEL, (WPARAM)sel, 0);
+    if (native_provider) ai_chat_native_model_w_[chat_idx_u32] = desired;
+    else ai_chat_api_model_w_[chat_idx_u32] = desired;
+
+    EnableWindow(hwnd_ai_chat_model_, TRUE);
+    SendMessageW(hwnd_ai_chat_model_, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(hwnd_ai_chat_model_, nullptr, TRUE);
+}
+
+std::string App::ResolveAiChatApiModelUtf8(uint32_t chat_idx_u32) const {
+    if (chat_idx_u32 >= AI_CHAT_MAX) return std::string(ew_openai_default_model_utf8());
+    std::string model_utf8 = ew_trim_ascii_copy(wide_to_utf8(ai_chat_api_model_w_[chat_idx_u32]));
+    if (model_utf8.empty()) model_utf8 = ew_openai_default_model_utf8();
+    return model_utf8;
+}
+
+bool App::AiChatProviderRoutesNative(uint32_t chat_idx_u32) const {
+    if (chat_idx_u32 >= AI_CHAT_MAX) return true;
+    const uint32_t provider_u32 = ai_chat_provider_u32_[chat_idx_u32];
+    return provider_u32 == AI_CHAT_PROVIDER_NATIVE || provider_u32 == AI_CHAT_PROVIDER_HYBRID;
+}
+
+bool App::AiChatProviderRoutesApi(uint32_t chat_idx_u32) const {
+    if (chat_idx_u32 >= AI_CHAT_MAX) return true;
+    const uint32_t provider_u32 = ai_chat_provider_u32_[chat_idx_u32];
+    return provider_u32 == AI_CHAT_PROVIDER_CHATGPT || provider_u32 == AI_CHAT_PROVIDER_HYBRID;
+}
+
 void App::RefreshAiChatCortex(uint32_t chat_idx_u32) {
     if (chat_idx_u32 >= AI_CHAT_MAX) return;
     if (!scene_) {
@@ -4098,7 +5143,7 @@ void App::AiPanelSetView(uint32_t view_u32) {
     const bool repo = (ai_panel_view_u32_ == 1u);
     const bool coh = (ai_panel_view_u32_ == 2u);
     auto vis = [&](HWND h, bool on) { if (h) ShowWindow(h, on ? SW_SHOW : SW_HIDE); };
-    vis(hwnd_ai_tab_, chat); vis(hwnd_ai_chat_cortex_, chat); vis(hwnd_ai_chat_link_project_, chat); vis(hwnd_ai_chat_list_, chat); vis(hwnd_ai_chat_input_, chat); vis(hwnd_ai_chat_send_, chat); vis(hwnd_ai_chat_mode_talk_, chat); vis(hwnd_ai_chat_mode_code_, chat); vis(hwnd_ai_chat_mode_sim_, chat);
+    vis(hwnd_ai_tab_, chat); vis(hwnd_ai_chat_cortex_, chat); vis(hwnd_ai_chat_link_project_, chat); vis(hwnd_ai_chat_list_, chat); vis(hwnd_ai_chat_input_, chat); vis(hwnd_ai_chat_send_, chat); vis(hwnd_ai_chat_provider_, chat); vis(hwnd_ai_chat_model_, chat); vis(hwnd_ai_chat_mode_talk_, chat); vis(hwnd_ai_chat_mode_code_, chat); vis(hwnd_ai_chat_mode_sim_, chat);
     vis(hwnd_ai_repo_status_, repo); vis(hwnd_ai_repo_refresh_, repo); vis(hwnd_ai_repo_copy_, repo); vis(hwnd_ai_repo_highlight_, repo); vis(hwnd_ai_repo_label_files_, repo); vis(hwnd_ai_repo_label_preview_, repo); vis(hwnd_ai_repo_label_coherence_, repo); vis(hwnd_ai_repo_list_, repo); vis(hwnd_ai_repo_preview_, repo); vis(hwnd_ai_repo_coherence_, repo); vis(hwnd_ai_repo_selected_, repo); vis(hwnd_ai_repo_copy_path_, repo);
     vis(hwnd_ai_coh_stats_, coh); vis(hwnd_ai_coh_label_query_, coh); vis(hwnd_ai_coh_label_rename_, coh); vis(hwnd_ai_coh_label_results_, coh); vis(hwnd_ai_coh_label_patch_, coh); vis(hwnd_ai_coh_query_, coh); vis(hwnd_ai_coh_old_, coh); vis(hwnd_ai_coh_new_, coh); vis(hwnd_ai_coh_results_, coh); vis(hwnd_ai_coh_patch_, coh); vis(hwnd_ai_coh_copy_results_, coh); vis(hwnd_ai_coh_copy_patch_, coh); vis(hwnd_ai_coh_highlight_hit_, coh); vis(hwnd_ai_coh_copy_hit_path_, coh); vis(hwnd_ai_coh_selected_, coh); vis(hwnd_ai_coh_open_hit_, coh);
     for (int i = 4873; i <= 4878; ++i) vis(GetDlgItem(hwnd_ai_panel_, i), coh);
@@ -5129,7 +6174,7 @@ struct EwAiTwoTextInputDialog {
         while (IsWindow(d.hwnd) && GetMessageW(&msg, nullptr, 0, 0)) {
             if (!IsDialogMessageW(d.hwnd, &msg)) {
                 TranslateMessage(&msg);
-                DispatchMessageW(d.hwnd, &msg);
+                DispatchMessageW(&msg);
             }
         }
         return d;
@@ -5152,7 +6197,7 @@ struct EwAiCoherenceToolsDialog {
     HWND hwnd_results = nullptr;
     HWND hwnd_patch = nullptr;
     HWND hwnd_status = nullptr;
-    Scene* scene = nullptr;
+    App::Scene* scene = nullptr;
 
     static std::wstring trim_copy(std::wstring s) {
         while (!s.empty() && (s.back() == L' ' || s.back() == L'\t' || s.back() == L'\r' || s.back() == L'\n')) s.pop_back();
@@ -5408,7 +6453,7 @@ struct EwAiCoherenceToolsDialog {
         }
         return DefWindowProcW(h, m, w, l);
     }
-    static void OpenModeless(HWND owner, Scene* scene) {
+    static void OpenModeless(HWND owner, App::Scene* scene) {
         if (shared_hwnd() && IsWindow(shared_hwnd())) {
             ShowWindow(shared_hwnd(), SW_SHOW);
             SetForegroundWindow(shared_hwnd());
@@ -5420,7 +6465,7 @@ struct EwAiCoherenceToolsDialog {
         wc.lpfnWndProc = &EwAiCoherenceToolsDialog::WndProcThunk;
         wc.hInstance = GetModuleHandleW(nullptr);
         wc.lpszClassName = L"EwAiCoherenceToolsDialog";
-        wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
         wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
         RegisterClassW(&wc);
         HWND h = CreateWindowExW(WS_EX_TOOLWINDOW, wc.lpszClassName, L"Coherence Tools",
@@ -5449,7 +6494,7 @@ struct EwAiRepoBrowserDialog {
     HWND hwnd_btn_refresh = nullptr;
     HWND hwnd_btn_copy = nullptr;
     HWND hwnd_btn_highlight = nullptr;
-    Scene* scene = nullptr;
+    App::Scene* scene = nullptr;
 
     static LRESULT CALLBACK WndProcThunk(HWND h, UINT m, WPARAM w, LPARAM l) {
         auto* self = (EwAiRepoBrowserDialog*)GetWindowLongPtrW(h, GWLP_USERDATA);
@@ -5597,7 +6642,7 @@ struct EwAiRepoBrowserDialog {
         CloseClipboard();
         SetWindowTextW(hwnd_status, L"Repository preview copied to clipboard");
     }
-    static void OpenModeless(HWND owner, Scene* scene) {
+    static void OpenModeless(HWND owner, App::Scene* scene) {
         if (shared_hwnd() && IsWindow(shared_hwnd())) {
             ShowWindow(shared_hwnd(), SW_SHOW);
             SetForegroundWindow(shared_hwnd());
@@ -5609,7 +6654,7 @@ struct EwAiRepoBrowserDialog {
         wc.lpfnWndProc = &EwAiRepoBrowserDialog::WndProcThunk;
         wc.hInstance = GetModuleHandleW(nullptr);
         wc.lpszClassName = L"EwAiRepoBrowserDialog";
-        wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
         wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
         RegisterClassW(&wc);
         HWND h = CreateWindowExW(WS_EX_TOOLWINDOW, wc.lpszClassName, L"Repository Browser",
@@ -5635,7 +6680,7 @@ struct EwAiVaultBrowserDialog {
     HWND hwnd_btn_import = nullptr;
     HWND hwnd_btn_copy = nullptr;
     HWND hwnd_btn_refresh = nullptr;
-    Scene* scene = nullptr;
+    App::Scene* scene = nullptr;
 
     static LRESULT CALLBACK WndProcThunk(HWND h, UINT m, WPARAM w, LPARAM l) {
         auto* self = (EwAiVaultBrowserDialog*)GetWindowLongPtrW(h, GWLP_USERDATA);
@@ -5758,14 +6803,14 @@ struct EwAiVaultBrowserDialog {
         }
     }
 
-    static EwAiVaultBrowserDialog RunModal(HWND owner, Scene* scene) {
+    static EwAiVaultBrowserDialog RunModal(HWND owner, App::Scene* scene) {
         EwAiVaultBrowserDialog d;
         d.scene = scene;
         WNDCLASSW wc{};
         wc.lpfnWndProc = &EwAiVaultBrowserDialog::WndProcThunk;
         wc.hInstance = GetModuleHandleW(nullptr);
         wc.lpszClassName = L"EwAiVaultBrowserDialog";
-        wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
         wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
         RegisterClassW(&wc);
         HWND h = CreateWindowExW(WS_EX_DLGMODALFRAME, wc.lpszClassName, L"AI Vault Browser",
@@ -5823,8 +6868,8 @@ struct EwAiPatchPreviewDialog {
                 // Targets list
                 const int list_y = 100;
                 const int list_h = H - list_y - (pad + btn_h + pad);
-                if (self->hwnd_files_label) MoveWindow(self->hwnd_files_label, x0, 78, W - 2*pad, 18, TRUE);
-                if (self->hwnd_list) MoveWindow(self->hwnd_list, x0, list_y, W - 2*pad, (list_h > 80 ? list_h : 80), TRUE);
+                (void)list_y;
+                (void)list_h;
 
                 // Buttons
                 HWND btn_ok = GetDlgItem(h, 1);
@@ -6013,6 +7058,7 @@ void App::SyncLiveModeProjection() {
     RefreshNodePanel();
     RefreshSequencerPanel();
     if (hwnd_viewport_) InvalidateRect(hwnd_viewport_, nullptr, FALSE);
+    RefreshTopBarChrome();
     SyncWindowMenu();
 }
 
@@ -6226,7 +7272,7 @@ std::wstring App::BuildAiChatPatchMetadata(uint32_t chat_idx_u32, const std::wst
     } else if (!canonical_err.empty()) {
         ss << L"Canonical repo/coherence ranking unavailable: " << utf8_to_wide(canonical_err) << L"\r\n";
     }
-    EigenWare::SubstrateManager::EwStagedExportBundle staged_bundle{};
+    SubstrateManager::EwStagedExportBundle staged_bundle{};
     if (scene_ && scene_->sm.ui_snapshot_latest_export_bundle(chat_idx_u32, staged_bundle)) {
         ss << L"\r\nExport/continuation stage:\r\n";
         if (!staged_bundle.operation_label_utf8.empty()) ss << L"  Operation: " << utf8_to_wide(staged_bundle.operation_label_utf8) << L"\r\n";
@@ -6501,6 +7547,17 @@ std::vector<uint32_t> App::BuildAiWorkflowPriorityOrder() const {
     return order;
 }
 
+std::vector<uint32_t> App::BuildAiWorkflowBucketOrder(const std::wstring& bucket_w, uint32_t limit_u32) const {
+    std::vector<uint32_t> visible;
+    if (limit_u32 == 0u || bucket_w.empty()) return visible;
+    for (uint32_t idx : BuildAiWorkflowPriorityOrder()) {
+        if (BuildAiChatWorkflowBucketText(idx) != bucket_w) continue;
+        visible.push_back(idx);
+        if (visible.size() >= (size_t)limit_u32) break;
+    }
+    return visible;
+}
+
 int32_t App::FindAiHighestPriorityChat() const {
     const std::vector<uint32_t> order = BuildAiWorkflowPriorityOrder();
     for (uint32_t idx : order) {
@@ -6667,10 +7724,8 @@ std::wstring App::BuildAiChatPrimaryActionReasonText(uint32_t chat_idx_u32) cons
     if (chat_idx_u32 >= AI_CHAT_MAX) return std::wstring();
     const std::wstring action = BuildAiChatPrimaryActionLabel(chat_idx_u32);
     const std::wstring headline = BuildAiChatPatchWarningHeadline(chat_idx_u32, nullptr);
-    const bool has_patch = !ai_chat_patch_w_[chat_idx_u32].empty();
     const bool has_scope = !ai_chat_patch_explain_w_[chat_idx_u32].empty() || !ai_chat_patch_meta_w_[chat_idx_u32].empty();
     const bool has_diff = ai_chat_last_detected_patch_valid_[chat_idx_u32] && !ai_chat_last_detected_patch_w_[chat_idx_u32].empty();
-    const bool previewed = ai_chat_patch_previewed_[chat_idx_u32];
     if (action == L"Re-Preview") return headline.empty() ? L"Patch scope drifted or target binding changed." : headline;
     if (action == L"Bind Target") return L"Preview is complete, but an explicit write target still needs binding.";
     if (action == L"Apply Now") return L"Patch is previewed and target binding is valid.";
@@ -6841,6 +7896,7 @@ void App::RefreshAiChatTabLabels() {
 
 void App::SyncAiChatWorkflowState(uint32_t chat_idx_u32) {
     if (chat_idx_u32 >= AI_CHAT_MAX) return;
+    RefreshAiChatProviderControls(chat_idx_u32);
     RefreshAiNavigationSpine(chat_idx_u32);
     if (!ai_chat_patch_w_[chat_idx_u32].empty() || !ai_chat_patch_explain_w_[chat_idx_u32].empty()) {
         ai_chat_patch_meta_w_[chat_idx_u32] = BuildAiChatPatchMetadata(chat_idx_u32, nullptr);
@@ -6957,6 +8013,9 @@ void App::AiChatClose(uint32_t chat_idx) {
         ai_chat_last_detected_patch_valid_[i] = ai_chat_last_detected_patch_valid_[i + 1u];
         ai_chat_patch_previewed_[i] = ai_chat_patch_previewed_[i + 1u];
         ai_chat_mode_u32_[i] = ai_chat_mode_u32_[i + 1u];
+        ai_chat_provider_u32_[i] = ai_chat_provider_u32_[i + 1u];
+        ai_chat_api_model_w_[i].swap(ai_chat_api_model_w_[i + 1u]);
+        ai_chat_native_model_w_[i].swap(ai_chat_native_model_w_[i + 1u]);
         ai_chat_cortex_summary_w_[i].swap(ai_chat_cortex_summary_w_[i + 1u]);
         ai_chat_project_summary_w_[i].swap(ai_chat_project_summary_w_[i + 1u]);
         ai_chat_project_root_w_[i].swap(ai_chat_project_root_w_[i + 1u]);
@@ -6987,6 +8046,9 @@ void App::AiChatClose(uint32_t chat_idx) {
     ai_chat_last_detected_patch_valid_[last] = false;
     ai_chat_patch_previewed_[last] = false;
     ai_chat_mode_u32_[last] = SubstrateManager::EW_CHAT_MEMORY_MODE_TALK;
+    ai_chat_provider_u32_[last] = AI_CHAT_PROVIDER_HYBRID;
+    ai_chat_api_model_w_[last] = utf8_to_wide(ew_openai_default_model_utf8());
+    ai_chat_native_model_w_[last] = L"native:auto";
     ai_chat_cortex_summary_w_[last].clear();
     ai_chat_project_summary_w_[last].clear();
     ai_chat_project_root_w_[last].clear();
@@ -7007,6 +8069,7 @@ void App::ToggleAiPanel() {
     const BOOL vis = IsWindowVisible(hwnd_ai_panel_);
     ShowWindow(hwnd_ai_panel_, vis ? SW_HIDE : SW_SHOW);
     SyncWindowMenu();
+    RefreshTopBarChrome();
     if (!vis) {
         UpdateAiPanel();
     }
@@ -7019,13 +8082,172 @@ void App::MarkAiExperimentsSeen() {
     if (hwnd_ai_bell_) InvalidateRect(hwnd_ai_bell_, nullptr, TRUE);
 }
 
-static std::wstring ew_utf8_to_wide_lossy(const std::string& s) {
-    if (s.empty()) return L"";
-    int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), nullptr, 0);
-    if (n <= 0) return L"";
-    std::wstring out; out.resize((size_t)n);
-    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), &out[0], n);
-    return out;
+bool App::IsSimPlayEnabledCanonical() const {
+    return scene_ ? (scene_->sm.sim_world_play_u32 != 0u) : false;
+}
+
+bool App::IsAiEnabledCanonical() const {
+    return scene_ ? (scene_->sm.ai_enabled_u32 != 0u) : true;
+}
+
+bool App::IsAiLearningEnabledCanonical() const {
+    return scene_ ? (scene_->sm.ai_learning_enabled_u32 != 0u) : false;
+}
+
+bool App::IsAiCrawlingEnabledCanonical() const {
+    return scene_ ? (scene_->sm.ai_crawling_enabled_u32 != 0u) : false;
+}
+
+bool App::IsRepoReaderEnabledCanonical() const {
+    if (!scene_) return false;
+    const EwAiConfigAnchorState* cfg = scene_->sm.ai_config_state();
+    return cfg != nullptr && cfg->repo_reader_enabled_u32 != 0u;
+}
+
+void App::SubmitToggleControlPacket(EwControlPacketKind kind, bool enabled) {
+    if (!scene_) return;
+    EwControlPacket cp{};
+    cp.kind = kind;
+    cp.source_u16 = 1u;
+    cp.tick_u64 = scene_->sm.canonical_tick;
+    if (kind == EwControlPacketKind::SimSetPlay) cp.payload.sim_set_play.enabled_u8 = enabled ? 1u : 0u;
+    else if (kind == EwControlPacketKind::AiSetEnabled) cp.payload.ai_set_enabled.enabled_u8 = enabled ? 1u : 0u;
+    else if (kind == EwControlPacketKind::AiSetLearning) cp.payload.ai_set_learning.enabled_u8 = enabled ? 1u : 0u;
+    else if (kind == EwControlPacketKind::AiSetCrawling) cp.payload.ai_set_crawling.enabled_u8 = enabled ? 1u : 0u;
+    (void)ew_runtime_submit_control_packet(&scene_->sm, &cp);
+}
+
+void App::SetAiStateCanonical(bool ai_enabled, bool learning_enabled, bool crawling_enabled) {
+    if (!ai_enabled) {
+        learning_enabled = false;
+        crawling_enabled = false;
+    }
+    if (learning_enabled || crawling_enabled) ai_enabled = true;
+    SubmitToggleControlPacket(EwControlPacketKind::AiSetEnabled, ai_enabled);
+    SubmitToggleControlPacket(EwControlPacketKind::AiSetLearning, learning_enabled);
+    SubmitToggleControlPacket(EwControlPacketKind::AiSetCrawling, crawling_enabled);
+    RefreshAiToggleWidgets();
+}
+
+void App::SetRepoReaderEnabledCanonical(bool enabled) {
+    if (!scene_) return;
+    scene_->SetRepoReaderEnabled(enabled);
+}
+
+void App::RefreshAiToggleWidgets() {
+    if (hwnd_toggle_play_) InvalidateRect(hwnd_toggle_play_, nullptr, TRUE);
+    if (hwnd_toggle_ai_) InvalidateRect(hwnd_toggle_ai_, nullptr, TRUE);
+    if (hwnd_toggle_learning_) InvalidateRect(hwnd_toggle_learning_, nullptr, TRUE);
+    if (hwnd_toggle_crawling_) InvalidateRect(hwnd_toggle_crawling_, nullptr, TRUE);
+    RefreshTopBarChrome();
+}
+
+void App::RefreshTopBarChrome() {
+    if (hwnd_topbar_maximize_) SetWindowTextW(hwnd_topbar_maximize_, IsZoomed(hwnd_main_) ? L"R" : L"[]");
+    if (hwnd_topbar_sim_) InvalidateRect(hwnd_topbar_sim_, nullptr, TRUE);
+    if (hwnd_topbar_ai_) InvalidateRect(hwnd_topbar_ai_, nullptr, TRUE);
+    if (hwnd_topbar_live_) InvalidateRect(hwnd_topbar_live_, nullptr, TRUE);
+    if (hwnd_topbar_photon_) InvalidateRect(hwnd_topbar_photon_, nullptr, TRUE);
+    if (hwnd_topbar_content_) InvalidateRect(hwnd_topbar_content_, nullptr, TRUE);
+    if (hwnd_topbar_assistant_) InvalidateRect(hwnd_topbar_assistant_, nullptr, TRUE);
+    if (hwnd_topbar_menu_) InvalidateRect(hwnd_topbar_menu_, nullptr, TRUE);
+    if (hwnd_topbar_project_) InvalidateRect(hwnd_topbar_project_, nullptr, TRUE);
+    if (hwnd_topbar_minimize_) InvalidateRect(hwnd_topbar_minimize_, nullptr, TRUE);
+    if (hwnd_topbar_maximize_) InvalidateRect(hwnd_topbar_maximize_, nullptr, TRUE);
+    if (hwnd_topbar_close_) InvalidateRect(hwnd_topbar_close_, nullptr, TRUE);
+    if (hwnd_topbar_status_) {
+        std::wstring status;
+        if (!visualization_fault_utf8_.empty()) {
+            status = std::wstring(L"Renderer offline: ") + utf8_to_wide(visualization_fault_utf8_);
+        } else {
+            status = live_mode_enabled_
+                ? L"Viewport: live substrate"
+                : L"Viewport: sandbox projection";
+            status += confinement_particles_enabled_
+                ? L"  |  photon confinement: on"
+                : L"  |  photon confinement: off";
+        }
+        status += (hwnd_ai_panel_ && IsWindowVisible(hwnd_ai_panel_))
+            ? L"  |  assistant: visible"
+            : L"  |  assistant: hidden";
+        SetWindowTextW(hwnd_topbar_status_, status.c_str());
+    }
+}
+
+void App::ShowTopBarWorkbenchMenu() {
+    if (!hwnd_main_) return;
+    HMENU menu = CreatePopupMenu();
+    HMENU panels = CreatePopupMenu();
+    if (!menu || !panels) {
+        if (panels) DestroyMenu(panels);
+        if (menu) DestroyMenu(menu);
+        return;
+    }
+
+    AppendMenuW(menu, MF_STRING | (content_visible_ ? MF_CHECKED : 0), 9201, L"Content Browser");
+    AppendMenuW(menu, MF_STRING | ((hwnd_ai_panel_ && IsWindowVisible(hwnd_ai_panel_)) ? MF_CHECKED : 0), 9202, L"Assistant Panel");
+    AppendMenuW(menu, MF_STRING | (live_mode_enabled_ ? MF_CHECKED : 0), 9209, L"Live View");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(panels, MF_STRING | (rdock_panel_visible_[0] ? MF_CHECKED : 0), 9203, L"Outliner");
+    AppendMenuW(panels, MF_STRING | (rdock_panel_visible_[1] ? MF_CHECKED : 0), 9204, L"Details");
+    AppendMenuW(panels, MF_STRING | (rdock_panel_visible_[2] ? MF_CHECKED : 0), 9205, L"Asset");
+    AppendMenuW(panels, MF_STRING | (rdock_panel_visible_[3] ? MF_CHECKED : 0), 9206, L"Voxel");
+    AppendMenuW(panels, MF_STRING | (rdock_panel_visible_[4] ? MF_CHECKED : 0), 9207, L"Node");
+    AppendMenuW(panels, MF_STRING | (rdock_panel_visible_[5] ? MF_CHECKED : 0), 9208, L"Sequencer");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)panels, L"Workspace Panels");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING, 9301, L"Reindex Content");
+    AppendMenuW(menu, MF_STRING, 9302, L"Refresh Browser");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING, 9101, L"Copy Focused Surface");
+    AppendMenuW(menu, MF_STRING, 9102, L"Paste Into Focused Surface");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING, 9001, L"Exit Genesis");
+
+    RECT rc{};
+    GetWindowRect(hwnd_topbar_menu_ ? hwnd_topbar_menu_ : hwnd_main_, &rc);
+    const UINT cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_LEFTALIGN | TPM_TOPALIGN,
+                                    rc.left, rc.bottom + 6, 0, hwnd_main_, nullptr);
+    DestroyMenu(menu);
+    if (cmd != 0u) {
+        SendMessageW(hwnd_main_, WM_COMMAND, MAKEWPARAM((int)cmd, 0), 0);
+    }
+}
+
+void App::DisableVisualizationWithReason(const std::string& reason_utf8) {
+    const std::string trimmed = ew_trim_ascii_copy(reason_utf8);
+    visualization_fault_utf8_ = trimmed.empty()
+        ? std::string("Visualization disabled after an unknown renderer fault.")
+        : trimmed;
+    visualize_enabled_ = false;
+    live_mode_enabled_ = false;
+    if (scene_) {
+        scene_->sm.visualization_headless = true;
+        scene_->SetLiveViewportMode(false, spectrum_band_i32_);
+    }
+    if (vk_) {
+        vk_->DestroyAll();
+        delete vk_;
+        vk_ = nullptr;
+    }
+    if (hwnd_viewport_) {
+        const std::wstring viewport_msg_w = utf8_to_wide(std::string("Genesis viewport offline.\r\n\r\n") + visualization_fault_utf8_ +
+            "\r\n\r\nThe editor shell is still running.");
+        SendMessageW(hwnd_viewport_, WM_SETFONT, (WPARAM)(g_font_ui ? g_font_ui : GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+        SetWindowTextW(hwnd_viewport_, viewport_msg_w.c_str());
+        InvalidateRect(hwnd_viewport_, nullptr, TRUE);
+    }
+    if (hwnd_viewport_resonance_overlay_) {
+        const std::wstring overlay_msg_w = utf8_to_wide(std::string("Renderer offline.\r\n") + visualization_fault_utf8_);
+        SetWindowTextW(hwnd_viewport_resonance_overlay_, overlay_msg_w.c_str());
+    }
+    if (hwnd_ai_status_) {
+        const std::wstring status_w = utf8_to_wide(std::string("Visualization disabled: ") + visualization_fault_utf8_);
+        SetWindowTextW(hwnd_ai_status_, status_w.c_str());
+    }
+    AppendOutputUtf8(std::string("VISUALIZATION_FAILSAFE reason=") + visualization_fault_utf8_);
+    RefreshTopBarChrome();
+    SyncWindowMenu();
 }
 
 // NOTE: AI progress/experiment lists previously scanned disk directly.
@@ -7056,28 +8278,74 @@ void App::UpdateAiPanel() {
 }
 
 void App::LayoutChildren(int w, int h) {
-    const int panel_w = 420;
+    const int panel_w = ew_ui_clamp_right_dock_width_px(right_dock_width_px_, w);
+    right_dock_width_px_ = panel_w;
     const int content_h = (content_visible_ && ew_editor_build_enabled ? 260 : 0);
-    const int top_h = (h > content_h) ? (h - content_h) : h;
+    const UINT main_dpi = hwnd_main_ ? GetDpiForWindow(hwnd_main_) : 96u;
+    const int topbar_h = ew_editor_build_enabled ? MulDiv(44, (int)main_dpi, 96) : 0;
+    const int workspace_h = std::max(0, h - content_h - topbar_h);
 
     if (!ew_editor_build_enabled) {
         if (hwnd_viewport_) MoveWindow(hwnd_viewport_, 0, 0, w, h, TRUE);
+        if (hwnd_dock_splitter_) ShowWindow(hwnd_dock_splitter_, SW_HIDE);
+        if (hwnd_panel_) ShowWindow(hwnd_panel_, SW_HIDE);
         return;
     }
 
-    if (hwnd_viewport_) MoveWindow(hwnd_viewport_, 0, 0, w - panel_w, top_h, TRUE);
-    if (hwnd_panel_) MoveWindow(hwnd_panel_, w - panel_w, 0, panel_w, top_h, TRUE);
+    if (hwnd_topbar_) MoveWindow(hwnd_topbar_, 0, 0, w, topbar_h, TRUE);
+    const int top_button_y = 8;
+    const int menu_w = 108;
+    const int title_w = 146;
+    const int project_w = 166;
+    const int control_gap = 4;
+    const int minimize_w = 32;
+    const int maximize_w = 32;
+    const int close_w = 36;
+    const int control_cluster_w = minimize_w + maximize_w + close_w + control_gap * 2;
+    const int control_cluster_x = std::max(16, w - 14 - control_cluster_w);
+    if (hwnd_topbar_menu_) MoveWindow(hwnd_topbar_menu_, 16, top_button_y, menu_w, 28, TRUE);
+    if (hwnd_topbar_title_) MoveWindow(hwnd_topbar_title_, 136, 12, title_w, 18, TRUE);
+    if (hwnd_topbar_project_) MoveWindow(hwnd_topbar_project_, 290, top_button_y, project_w, 28, TRUE);
+    if (hwnd_topbar_sim_) MoveWindow(hwnd_topbar_sim_, 470, top_button_y, 62, 28, TRUE);
+    if (hwnd_topbar_ai_) MoveWindow(hwnd_topbar_ai_, 538, top_button_y, 54, 28, TRUE);
+    if (hwnd_topbar_live_) MoveWindow(hwnd_topbar_live_, 598, top_button_y, 58, 28, TRUE);
+    if (hwnd_topbar_photon_) MoveWindow(hwnd_topbar_photon_, 662, top_button_y, 72, 28, TRUE);
+    if (hwnd_topbar_content_) MoveWindow(hwnd_topbar_content_, 740, top_button_y, 78, 28, TRUE);
+    if (hwnd_topbar_assistant_) MoveWindow(hwnd_topbar_assistant_, 824, top_button_y, 90, 28, TRUE);
+    if (hwnd_topbar_minimize_) MoveWindow(hwnd_topbar_minimize_, control_cluster_x, top_button_y, minimize_w, 28, TRUE);
+    if (hwnd_topbar_maximize_) MoveWindow(hwnd_topbar_maximize_, control_cluster_x + minimize_w + control_gap, top_button_y, maximize_w, 28, TRUE);
+    if (hwnd_topbar_close_) MoveWindow(hwnd_topbar_close_, control_cluster_x + minimize_w + maximize_w + control_gap * 2, top_button_y, close_w, 28, TRUE);
+    if (hwnd_topbar_status_) {
+        const int status_x = 922;
+        const int status_w = control_cluster_x - status_x - 10;
+        ShowWindow(hwnd_topbar_status_, status_w >= 140 ? SW_SHOW : SW_HIDE);
+        if (status_w >= 140) {
+            MoveWindow(hwnd_topbar_status_, status_x, 12, status_w, 18, TRUE);
+        }
+    }
+
+    const int viewport_w = std::max(0, w - panel_w);
+    if (hwnd_viewport_) MoveWindow(hwnd_viewport_, 0, topbar_h, viewport_w, workspace_h, TRUE);
+    if (hwnd_panel_) {
+        ShowWindow(hwnd_panel_, SW_SHOW);
+        MoveWindow(hwnd_panel_, viewport_w, topbar_h, panel_w, workspace_h, TRUE);
+    }
+    if (hwnd_dock_splitter_) {
+        const int splitter_x = std::max(0, viewport_w - (EW_UI_RIGHT_DOCK_SPLITTER_W_PX / 2));
+        ShowWindow(hwnd_dock_splitter_, SW_SHOW);
+        MoveWindow(hwnd_dock_splitter_, splitter_x, topbar_h, EW_UI_RIGHT_DOCK_SPLITTER_W_PX, workspace_h, TRUE);
+    }
     if (hwnd_viewport_resonance_overlay_) {
-        const int view_w = std::max(0, w - panel_w);
+        const int view_w = viewport_w;
         const int overlay_w = std::min(360, std::max(220, view_w / 3));
         const int overlay_x = std::max(12, view_w - overlay_w - 12);
-        const int overlay_h = std::min(186, std::max(136, top_h / 3));
+        const int overlay_h = std::min(186, std::max(136, workspace_h / 3));
         MoveWindow(hwnd_viewport_resonance_overlay_, overlay_x, 12, overlay_w, overlay_h, TRUE);
     }
 
     // Bottom content browser.
     if (hwnd_content_) {
-        MoveWindow(hwnd_content_, 0, top_h, w, content_h, TRUE);
+        MoveWindow(hwnd_content_, 0, topbar_h + workspace_h, w, content_h, TRUE);
         if (hwnd_content_search_) MoveWindow(hwnd_content_search_, 10, 10, 260, 24, TRUE);
         if (hwnd_content_refresh_) MoveWindow(hwnd_content_refresh_, 278, 10, 80, 24, TRUE);
         if (hwnd_content_view_list_) MoveWindow(hwnd_content_view_list_, 366, 10, 60, 24, TRUE);
@@ -7113,7 +8381,7 @@ void App::LayoutChildren(int w, int h) {
     int panel_x = PAD;
     int panel_y = PAD + TAB_H + PAD_SM - 2;
     int panel_w_in = panel_w - 2 * PAD;
-    int panel_h_in = top_h - panel_y - PAD;
+    int panel_h_in = workspace_h - panel_y - PAD;
     if (panel_h_in < 64) panel_h_in = 64;
 
     if (hwnd_rdock_tab_) MoveWindow(hwnd_rdock_tab_, tab_x, tab_y, tab_w, TAB_H, TRUE);
@@ -7145,7 +8413,6 @@ void App::LayoutChildren(int w, int h) {
         const int GAP = PAD_SM - 2;
         const int W = panel_w_in - 2 * PAD_SM;
         const int BTN_W = 108;
-        const int TRACK_W = std::max(180, W - (BTN_W + PAD_SM + 8));
 
         if (hwnd_input_) MoveWindow(hwnd_input_, X, y, W, ROW, TRUE);
         y += ROW + GAP;
@@ -7154,13 +8421,17 @@ void App::LayoutChildren(int w, int h) {
         if (hwnd_bootstrap_) MoveWindow(hwnd_bootstrap_, X + 206, y, W - 206, ROW, TRUE);
         y += ROW + GAP;
 
+        if (hwnd_asset_label_run_) MoveWindow(hwnd_asset_label_run_, X, y + 4, 28, 18, TRUE);
         if (hwnd_toggle_play_) MoveWindow(hwnd_toggle_play_, X + 32, y, 86, 24, TRUE);
-        if (hwnd_toggle_ai_) MoveWindow(hwnd_toggle_ai_, X + 152, y, 86, 24, TRUE);
+        if (hwnd_asset_label_ai_) MoveWindow(hwnd_asset_label_ai_, X + 126, y + 4, 18, 18, TRUE);
+        if (hwnd_toggle_ai_) MoveWindow(hwnd_toggle_ai_, X + 150, y, 86, 24, TRUE);
         y += 26;
+        if (hwnd_asset_label_learning_) MoveWindow(hwnd_asset_label_learning_, X, y + 4, 34, 18, TRUE);
         if (hwnd_toggle_learning_) MoveWindow(hwnd_toggle_learning_, X + 42, y, 86, 24, TRUE);
+        if (hwnd_asset_label_crawling_) MoveWindow(hwnd_asset_label_crawling_, X + 136, y + 4, 34, 18, TRUE);
         if (hwnd_toggle_crawling_) MoveWindow(hwnd_toggle_crawling_, X + 176, y, 86, 24, TRUE);
-        if (hwnd_vault_) MoveWindow(hwnd_vault_, X + W - 120, y, 56, 24, TRUE);
-        if (hwnd_ai_panel_) { /* separate window */ }
+        if (hwnd_vault_) MoveWindow(hwnd_vault_, X + W - 136, y, 56, 24, TRUE);
+        if (hwnd_asset_ai_panel_button_) MoveWindow(hwnd_asset_ai_panel_button_, X + W - 72, y, 72, ROW, TRUE);
         y += 28;
         if (hwnd_ai_status_) MoveWindow(hwnd_ai_status_, X, y, W, 18, TRUE);
         y += 22;
@@ -7171,29 +8442,47 @@ void App::LayoutChildren(int w, int h) {
         if (hwnd_asset_builder_status_) MoveWindow(hwnd_asset_builder_status_, X, y, W, 18, TRUE);
         y += 24;
         if (hwnd_asset_review_refs_) MoveWindow(hwnd_asset_review_refs_, X, y, 104, ROW, TRUE);
-        if (hwnd_asset_tool_mode_) MoveWindow(hwnd_asset_tool_mode_, X + 110, y, std::min(176, W - 110), ROW, TRUE);
+        if (hwnd_asset_label_tool_mode_) MoveWindow(hwnd_asset_label_tool_mode_, X + 112, y + 4, 62, 18, TRUE);
+        if (hwnd_asset_tool_mode_) MoveWindow(hwnd_asset_tool_mode_, X + 180, y, std::max(120, W - 180), ROW, TRUE);
         y += ROW + 4;
-        if (hwnd_asset_planet_atmo_) MoveWindow(hwnd_asset_planet_atmo_, X, y, TRACK_W, 28, TRUE);
-        if (hwnd_asset_planet_apply_) MoveWindow(hwnd_asset_planet_apply_, X + TRACK_W + PAD_SM, y, BTN_W, ROW, TRUE);
+        const int LABEL_W = 88;
+        const int TRACK_X = X + LABEL_W + 6;
+        const int TRACK_LAYOUT_W = std::max(120, W - (TRACK_X - X) - BTN_W - PAD_SM);
+        if (hwnd_asset_label_planet_atmo_) MoveWindow(hwnd_asset_label_planet_atmo_, X, y + 4, LABEL_W, 18, TRUE);
+        if (hwnd_asset_planet_atmo_) MoveWindow(hwnd_asset_planet_atmo_, TRACK_X, y, TRACK_LAYOUT_W, 28, TRUE);
+        if (hwnd_asset_planet_apply_) MoveWindow(hwnd_asset_planet_apply_, TRACK_X + TRACK_LAYOUT_W + PAD_SM, y, BTN_W, ROW, TRUE);
         y += 30;
-        if (hwnd_asset_planet_iono_) MoveWindow(hwnd_asset_planet_iono_, X, y, TRACK_W, 28, TRUE);
-        if (hwnd_asset_planet_sculpt_) MoveWindow(hwnd_asset_planet_sculpt_, X + TRACK_W + PAD_SM, y, BTN_W, ROW, TRUE);
+        if (hwnd_asset_label_planet_iono_) MoveWindow(hwnd_asset_label_planet_iono_, X, y + 4, LABEL_W, 18, TRUE);
+        if (hwnd_asset_planet_iono_) MoveWindow(hwnd_asset_planet_iono_, TRACK_X, y, TRACK_LAYOUT_W, 28, TRUE);
+        if (hwnd_asset_planet_sculpt_) MoveWindow(hwnd_asset_planet_sculpt_, TRACK_X + TRACK_LAYOUT_W + PAD_SM, y, BTN_W, ROW, TRUE);
         y += 30;
-        if (hwnd_asset_planet_magneto_) MoveWindow(hwnd_asset_planet_magneto_, X, y, TRACK_W, 28, TRUE);
-        if (hwnd_asset_planet_paint_) MoveWindow(hwnd_asset_planet_paint_, X + TRACK_W + PAD_SM, y, BTN_W, ROW, TRUE);
+        if (hwnd_asset_label_planet_magneto_) MoveWindow(hwnd_asset_label_planet_magneto_, X, y + 4, LABEL_W, 18, TRUE);
+        if (hwnd_asset_planet_magneto_) MoveWindow(hwnd_asset_planet_magneto_, TRACK_X, y, TRACK_LAYOUT_W, 28, TRUE);
+        if (hwnd_asset_planet_paint_) MoveWindow(hwnd_asset_planet_paint_, TRACK_X + TRACK_LAYOUT_W + PAD_SM, y, BTN_W, ROW, TRUE);
         y += 32;
-        if (hwnd_asset_character_archetype_) MoveWindow(hwnd_asset_character_archetype_, X, y, std::min(176, W), ROW, TRUE);
+        if (hwnd_asset_label_character_archetype_) MoveWindow(hwnd_asset_label_character_archetype_, X, y + 4, LABEL_W, 18, TRUE);
+        if (hwnd_asset_character_archetype_) MoveWindow(hwnd_asset_character_archetype_, TRACK_X, y, std::max(120, std::min(220, W - (TRACK_X - X))), ROW, TRUE);
         y += ROW + 4;
-        if (hwnd_asset_character_height_) MoveWindow(hwnd_asset_character_height_, X, y, TRACK_W, 28, TRUE);
-        if (hwnd_asset_character_bind_) MoveWindow(hwnd_asset_character_bind_, X + TRACK_W + PAD_SM, y, BTN_W, ROW, TRUE);
+        if (hwnd_asset_label_character_height_) MoveWindow(hwnd_asset_label_character_height_, X, y + 4, LABEL_W, 18, TRUE);
+        if (hwnd_asset_character_height_) MoveWindow(hwnd_asset_character_height_, TRACK_X, y, TRACK_LAYOUT_W, 28, TRUE);
+        if (hwnd_asset_character_bind_) MoveWindow(hwnd_asset_character_bind_, TRACK_X + TRACK_LAYOUT_W + PAD_SM, y, BTN_W, ROW, TRUE);
         y += 30;
-        if (hwnd_asset_character_rigidity_) MoveWindow(hwnd_asset_character_rigidity_, X, y, TRACK_W, 28, TRUE);
-        if (hwnd_asset_character_pose_) MoveWindow(hwnd_asset_character_pose_, X + TRACK_W + PAD_SM, y, BTN_W, ROW, TRUE);
+        if (hwnd_asset_label_character_rigidity_) MoveWindow(hwnd_asset_label_character_rigidity_, X, y + 4, LABEL_W, 18, TRUE);
+        if (hwnd_asset_character_rigidity_) MoveWindow(hwnd_asset_character_rigidity_, TRACK_X, y, TRACK_LAYOUT_W, 28, TRUE);
+        if (hwnd_asset_character_pose_) MoveWindow(hwnd_asset_character_pose_, TRACK_X + TRACK_LAYOUT_W + PAD_SM, y, BTN_W, ROW, TRUE);
         y += 30;
-        if (hwnd_asset_character_gait_) MoveWindow(hwnd_asset_character_gait_, X, y, TRACK_W, 28, TRUE);
+        if (hwnd_asset_label_character_gait_) MoveWindow(hwnd_asset_label_character_gait_, X, y + 4, LABEL_W, 18, TRUE);
+        if (hwnd_asset_character_gait_) MoveWindow(hwnd_asset_character_gait_, TRACK_X, y, TRACK_LAYOUT_W, 28, TRUE);
         y += 34;
         if (hwnd_asset_tool_summary_) MoveWindow(hwnd_asset_tool_summary_, X, y, W, 118, TRUE);
         y += 122;
+        if (hwnd_asset_thumb_) {
+            MoveWindow(hwnd_asset_thumb_, X + W - 220, TOOLBAR_H + PAD_SM, 200, panel_h_in - (TOOLBAR_H + 2 * PAD_SM), TRUE);
+            const UINT dpi_thumb = GetDpiForWindow(hwnd_asset_thumb_);
+            const int sx_thumb = MulDiv(92, (int)dpi_thumb, 96);
+            const int sy_thumb = MulDiv(92, (int)dpi_thumb, 96);
+            ListView_SetIconSpacing(hwnd_asset_thumb_, sx_thumb, sy_thumb);
+        }
         if (hwnd_output_) {
             int out_h = panel_h_in - y - PAD_SM;
             if (out_h < 64) out_h = 64;
@@ -7289,6 +8578,37 @@ void App::LayoutChildren(int w, int h) {
 }
 
 
+static std::string ew_format_object_dna_status_utf8_local(const EwObjectDna& dna) {
+    const EwObjectDnaDerived derived = ew_object_dna_derive(dna);
+    char buf[512];
+    std::snprintf(buf, sizeof(buf),
+                  " dna_eff_hz=%.3f dna_exist_hz=%.3f dna_6dof_l1_hz=%.3f dna_axes=[%.3f,%.3f,%.3f,%.3f,%.3f,%.3f]",
+                  (double)derived.confinement_effective_hz_f32,
+                  (double)derived.existence_resonance_hz_f32,
+                  (double)derived.manifold_6dof_l1_hz_f32,
+                  (double)derived.manifold_6dof_hz_f32[0],
+                  (double)derived.manifold_6dof_hz_f32[1],
+                  (double)derived.manifold_6dof_hz_f32[2],
+                  (double)derived.manifold_6dof_hz_f32[3],
+                  (double)derived.manifold_6dof_hz_f32[4],
+                  (double)derived.manifold_6dof_hz_f32[5]);
+    return std::string(buf);
+}
+
+std::string App::BuildPhotonConfinementStatusUtf8() const {
+    std::string out = std::string("REMOTE_VIEWPORT_PHOTON confinement=") + (confinement_particles_enabled_ ? "1" : "0");
+    out += " projected_points=" + std::to_string((unsigned long long)viewport_projected_points_u32_);
+    out += " anchor_visible=" + std::to_string((unsigned long long)viewport_anchor_points_visible_u32_);
+    out += " anchor_hidden=" + std::to_string((unsigned long long)viewport_anchor_points_hidden_u32_);
+    out += " resonance=" + std::string(resonance_view_ ? "1" : "0");
+    if (scene_ && scene_->selected >= 0 && scene_->selected < (int)scene_->objects.size()) {
+        const auto& o = scene_->objects[(size_t)scene_->selected];
+        out += " selected_oid=" + std::to_string((unsigned long long)o.object_id_u64);
+        out += ew_format_object_dna_status_utf8_local(o.object_dna);
+    }
+    return out;
+}
+
 void App::RefreshViewportResonanceOverlay() {
     if (!hwnd_viewport_resonance_overlay_) return;
     std::wstring out;
@@ -7305,7 +8625,7 @@ void App::RefreshViewportResonanceOverlay() {
         if (sel < (int)node_graph_operator_path_w_.size()) out += L"Operator path: " + node_graph_operator_path_w_[(size_t)sel] + L"\r\n";
         swprintf(line, 256, L"Carrier anchor id=%u  coupling=%d%%\r\n", anchor_id, strength);
         out += line;
-        const auto src_pins = ew_split_trim_pin_list((sel < (int)node_graph_output_pins_w_.size()) ? node_graph_output_pins_w_[(size_t)sel] : L"");
+        const auto src_pins = ew_split_trim_pin_list_local((sel < (int)node_graph_output_pins_w_.size()) ? node_graph_output_pins_w_[(size_t)sel] : L"");
         if (!src_pins.empty()) {
             out += L"Viewport-selected output pin: ";
             out += src_pins[(size_t)std::max(0, std::min((int)src_pins.size() - 1, node_source_pin_selected_i32_))] + L"\r\n";
@@ -7314,8 +8634,14 @@ void App::RefreshViewportResonanceOverlay() {
     }
     if (scene_ && scene_->selected >= 0 && scene_->selected < (int)scene_->objects.size()) {
         const auto& o = scene_->objects[(size_t)scene_->selected];
+        const EwObjectDnaDerived dna = ew_object_dna_derive(o.object_dna);
         out += L"Selected object: " + utf8_to_wide(o.name_utf8) + L"\r\n";
         swprintf(line, 256, L"Object anchor=%u  radius=%.2fm  emissive=%.2f\r\n", o.anchor_id_u32, (double)o.radius_m_f32, (double)o.emissive_f32);
+        out += line;
+        swprintf(line, 256, L"DNA confinement=%.2fHz  existence=%.2fHz  6DoF L1=%.3fHz\r\n",
+                 (double)dna.confinement_effective_hz_f32,
+                 (double)dna.existence_resonance_hz_f32,
+                 (double)dna.manifold_6dof_l1_hz_f32);
         out += line;
         const int couplings = 3 + (int)(coh_highlight_set_w_.size() > 0 ? std::min<size_t>(4u, coh_highlight_set_w_.size()) : 0u);
         swprintf(line, 256, L"Viewport spheres=%d  resonance links=%d\r\n", 1 + couplings, couplings);
@@ -7324,6 +8650,12 @@ void App::RefreshViewportResonanceOverlay() {
         out += L"Selected object: none\r\nViewport spheres=0  resonance links=0\r\n";
     }
     out += node_play_excitation_ ? L"Carrier pulse overlay: active\r\n" : L"Carrier pulse overlay: idle\r\n";
+    out += confinement_particles_enabled_ ? L"Photon confinement particles: ON\r\n" : L"Photon confinement particles: OFF\r\n";
+    swprintf(line, 256, L"Projected points=%u  anchor-visible=%u  anchor-hidden=%u\r\n",
+             (unsigned)viewport_projected_points_u32_,
+             (unsigned)viewport_anchor_points_visible_u32_,
+             (unsigned)viewport_anchor_points_hidden_u32_);
+    out += line;
     if (seq_stress_overlay_enabled_) {
         const int stress_pct = std::max(0, std::min(100, (int)std::lround(std::fabs((double)spectrum_phase_f32_) * 18.0) + (seq_play_enabled_ ? 24 : 9)));
         const int pain_pct = std::max(0, std::min(100, stress_pct / 2 + (node_play_excitation_ ? 12 : 0)));
@@ -7415,21 +8747,6 @@ std::wstring App::GetNodeSearchQuery() const {
     return std::wstring(qbuf.data());
 }
 
-namespace {
-static std::vector<std::wstring> ew_split_trim_pin_list(const std::wstring& s) {
-    std::vector<std::wstring> out;
-    std::wstring cur;
-    auto flush = [&]() {
-        size_t a = 0; while (a < cur.size() && iswspace(cur[a])) ++a;
-        size_t b = cur.size(); while (b > a && iswspace(cur[b - 1])) --b;
-        if (b > a) out.push_back(cur.substr(a, b - a));
-        cur.clear();
-    };
-    for (wchar_t ch : s) { if (ch == L',') flush(); else cur.push_back(ch); }
-    flush();
-    return out;
-}
-
 static bool ew_pin_pair_compatible(const std::wstring& o, const std::wstring& i) {
     return (o == L"exec_out" && i == L"exec_in") ||
            (o == L"scalar_out" && i == L"scalar_in") ||
@@ -7445,8 +8762,8 @@ static bool ew_find_pin_pair(const std::wstring& source_output_pins, const std::
                              int selected_source_idx, int selected_target_idx,
                              std::wstring* out_src, std::wstring* out_dst,
                              int* out_src_idx, int* out_dst_idx) {
-    const auto outs = ew_split_trim_pin_list(source_output_pins);
-    const auto ins = ew_split_trim_pin_list(target_input_pins);
+    const auto outs = ew_split_trim_pin_list_local(source_output_pins);
+    const auto ins = ew_split_trim_pin_list_local(target_input_pins);
     if (outs.empty() || ins.empty()) return false;
     if (selected_source_idx >= 0 && selected_source_idx < (int)outs.size() &&
         selected_target_idx >= 0 && selected_target_idx < (int)ins.size() &&
@@ -7466,11 +8783,10 @@ static bool ew_find_pin_pair(const std::wstring& source_output_pins, const std::
     }
     return false;
 }
-}
 
 void App::ClampNodePinSelections() {
     const std::wstring src = ((size_t)node_graph_selected_i32_ < node_graph_output_pins_w_.size()) ? node_graph_output_pins_w_[(size_t)node_graph_selected_i32_] : L"";
-    const auto outs = ew_split_trim_pin_list(src);
+    const auto outs = ew_split_trim_pin_list_local(src);
     if (outs.empty()) { node_source_pin_selected_i32_ = 0; node_source_pin_hover_i32_ = -1; }
     else {
         if (node_source_pin_selected_i32_ < 0) node_source_pin_selected_i32_ = 0;
@@ -7479,7 +8795,7 @@ void App::ClampNodePinSelections() {
     }
     const int result_sel = hwnd_node_results_ ? (int)SendMessageW(hwnd_node_results_, LB_GETCURSEL, 0, 0) : -1;
     const std::wstring dst = (result_sel >= 0 && (size_t)result_sel < node_palette_entries_.size()) ? node_palette_entries_[(size_t)result_sel].input_pins_w : L"";
-    const auto ins = ew_split_trim_pin_list(dst);
+    const auto ins = ew_split_trim_pin_list_local(dst);
     if (ins.empty()) node_target_pin_selected_i32_ = 0;
     else {
         if (node_target_pin_selected_i32_ < 0) node_target_pin_selected_i32_ = 0;
@@ -7497,8 +8813,8 @@ std::wstring App::DescribeNodeCompatibility(const std::wstring& source_output_pi
     if (ew_find_pin_pair(source_output_pins, target_input_pins, node_source_pin_selected_i32_, node_target_pin_selected_i32_, &src_pin, &dst_pin, nullptr, nullptr)) {
         return L"Yes — connectable from current source via " + src_pin + L" -> " + dst_pin + L".";
     }
-    const auto outs = ew_split_trim_pin_list(source_output_pins);
-    const auto ins = ew_split_trim_pin_list(target_input_pins);
+    const auto outs = ew_split_trim_pin_list_local(source_output_pins);
+    const auto ins = ew_split_trim_pin_list_local(target_input_pins);
     if (outs.empty() || ins.empty()) return L"No — current source has no compatible output/input pins.";
     return L"No — current source/output pins do not match this node's required input pins.";
 }
@@ -7628,8 +8944,8 @@ void App::RebuildNodePaletteEntries() {
         add_palette(L"Flow -> Branch", L"flow_branch", L"basic syntax -> flow -> branch",
             L"on_trigger, on_coherence_match, route_to_carrier", L"starts a divergent logic branch that may not reconverge into the same processing stream", L"place after events or condition-like trigger nodes when creating a new divergence lane", L"n/a", L"flow control", L"language inherited from upstream/downstream lane", L"exec_in", L"exec_out", L"flow_branch", 56, true, false, false);
     }
-    for (size_t i = 0; i < ai_coherence_items_.size() && i < 8u; ++i) {
-        std::wstring label = L"Coherence -> " + ai_coherence_items_[i].path_w;
+    for (size_t i = 0; i < ai_coh_result_paths_utf8_.size() && i < 8u; ++i) {
+        std::wstring label = L"Coherence -> " + utf8_to_wide(ai_coh_result_paths_utf8_[i]);
         add_palette(label, L"coherence_hint", L"coherence -> lookup -> derived suggestion",
             L"event_carrier, export_repo_patch, route_to_carrier", L"suggests a node spawn path using the currently visible coherence result", L"place under Event/Project carriers when acting on file/reference relationships", L"inherits from matched file/integration context", L"coherence-derived", L"inherits export/language rules from matched context", L"event_in, repo_in", L"repo_out", L"coherence_hint", 44 + (int)(i % 4) * 4, true, true, false);
     }
@@ -8078,7 +9394,7 @@ void App::RefreshNodePanel() {
         }
         if (node_sel < (int)node_graph_doc_key_w_.size()) out += L"Doc key: " + node_graph_doc_key_w_[(size_t)node_sel] + L"\r\n";
         if (node_sel < (int)node_graph_contract_ready_u8_.size()) out += (node_graph_contract_ready_u8_[(size_t)node_sel] ? L"Contract lockstep: docs/search/backend READY\r\n" : L"Contract lockstep: metadata incomplete\r\n");
-        const auto src_pins = ew_split_trim_pin_list((node_sel < (int)node_graph_output_pins_w_.size()) ? node_graph_output_pins_w_[(size_t)node_sel] : L"");
+        const auto src_pins = ew_split_trim_pin_list_local((node_sel < (int)node_graph_output_pins_w_.size()) ? node_graph_output_pins_w_[(size_t)node_sel] : L"");
         if (!src_pins.empty()) {
             out += L"Source output pins: ";
             for (size_t i = 0; i < src_pins.size(); ++i) {
@@ -8169,7 +9485,7 @@ void App::ShowNodeSpawnMenu(POINT screen_pt) {
         if (e.language_locked) item += L"  <locked>";
         InsertMenuW(hm, (UINT)i, MF_BYPOSITION | MF_STRING, 2760 + (UINT)i, item.c_str());
     }
-    TrackPopupMenu(hm, TPM_RIGHTBUTTON, screen_pt.x, screen_pt.y, 0, hwnd_, nullptr);
+    TrackPopupMenu(hm, TPM_RIGHTBUTTON, screen_pt.x, screen_pt.y, 0, hwnd_main_, nullptr);
     DestroyMenu(hm);
 }
 
@@ -8194,23 +9510,25 @@ void App::RefreshAssetDesignerPanel() {
     const bool mode_character = _wcsicmp(mode_w.c_str(), L"Character Tools") == 0;
     const bool mode_asset = !mode_planet && !mode_character;
 
-    auto set_visible = [&](HWND h, bool show)->void {
-        if (!h) return;
-        ShowWindow(h, show ? SW_SHOW : SW_HIDE);
-        EnableWindow(h, show ? TRUE : FALSE);
-    };
-    set_visible(hwnd_asset_planet_atmo_, mode_planet);
-    set_visible(hwnd_asset_planet_iono_, mode_planet);
-    set_visible(hwnd_asset_planet_magneto_, mode_planet);
-    set_visible(hwnd_asset_planet_apply_, mode_planet);
-    set_visible(hwnd_asset_planet_sculpt_, mode_planet);
-    set_visible(hwnd_asset_planet_paint_, mode_planet);
-    set_visible(hwnd_asset_character_archetype_, mode_character);
-    set_visible(hwnd_asset_character_height_, mode_character);
-    set_visible(hwnd_asset_character_rigidity_, mode_character);
-    set_visible(hwnd_asset_character_gait_, mode_character);
-    set_visible(hwnd_asset_character_bind_, mode_character);
-    set_visible(hwnd_asset_character_pose_, mode_character);
+    ew_set_visible_enabled(hwnd_asset_label_planet_atmo_, mode_planet, false);
+    ew_set_visible_enabled(hwnd_asset_planet_atmo_, mode_planet);
+    ew_set_visible_enabled(hwnd_asset_label_planet_iono_, mode_planet, false);
+    ew_set_visible_enabled(hwnd_asset_planet_iono_, mode_planet);
+    ew_set_visible_enabled(hwnd_asset_label_planet_magneto_, mode_planet, false);
+    ew_set_visible_enabled(hwnd_asset_planet_magneto_, mode_planet);
+    ew_set_visible_enabled(hwnd_asset_planet_apply_, mode_planet);
+    ew_set_visible_enabled(hwnd_asset_planet_sculpt_, mode_planet);
+    ew_set_visible_enabled(hwnd_asset_planet_paint_, mode_planet);
+    ew_set_visible_enabled(hwnd_asset_label_character_archetype_, mode_character, false);
+    ew_set_visible_enabled(hwnd_asset_character_archetype_, mode_character);
+    ew_set_visible_enabled(hwnd_asset_label_character_height_, mode_character, false);
+    ew_set_visible_enabled(hwnd_asset_character_height_, mode_character);
+    ew_set_visible_enabled(hwnd_asset_label_character_rigidity_, mode_character, false);
+    ew_set_visible_enabled(hwnd_asset_character_rigidity_, mode_character);
+    ew_set_visible_enabled(hwnd_asset_label_character_gait_, mode_character, false);
+    ew_set_visible_enabled(hwnd_asset_character_gait_, mode_character);
+    ew_set_visible_enabled(hwnd_asset_character_bind_, mode_character);
+    ew_set_visible_enabled(hwnd_asset_character_pose_, mode_character);
 
     bool has_selection = false;
     std::wstring selected_w = L"Selected Object: none";
@@ -8257,23 +9575,19 @@ void App::RefreshAssetDesignerPanel() {
     if (hwnd_asset_builder_status_) SetWindowTextW(hwnd_asset_builder_status_, status_w.c_str());
 
     std::wstring summary;
-    summary += L"Canonical authoring lane: " + mode_w + L"
-";
-    summary += L"Shared review/apply path: content browser -> coherence/reference review -> apply hook -> viewport refresh
-";
+    summary += L"Canonical authoring lane: " + mode_w + L"\r\n";
+    summary += L"Shared review/apply path: content browser -> coherence/reference review -> apply hook -> viewport refresh\r\n";
     summary += L"Project/work substrate: ";
     if (scene_) {
-        const auto& root = scene_->runtime().project_settings.assets.project_asset_substrate_root_utf8;
+        const auto& root = scene_->sm.project_settings.assets.project_asset_substrate_root_utf8;
         summary += root.empty() ? L"(unset)" : utf8_to_wide(root);
     } else {
         summary += L"(no scene)";
     }
-    summary += L"
-";
+    summary += L"\r\n";
     summary += L"Content browser linkage: ";
     summary += has_content_link ? utf8_to_wide(content_selected_rel_utf8_) : L"(none)";
-    summary += L"
-";
+    summary += L"\r\n";
     summary += L"Coherence/reference review: ";
     if (review_current) {
         summary += L"current for selected content target";
@@ -8282,69 +9596,55 @@ void App::RefreshAssetDesignerPanel() {
     } else {
         summary += L"waiting for content target selection";
     }
-    summary += L"
-";
+    summary += L"\r\n";
 
     if (has_selection) {
         summary += L"Selection anchor: " + std::to_wstring((unsigned long long)selection_anchor_id_u32);
         summary += L"  radius=" + std::to_wstring((double)selection_radius_m);
         summary += L"  emissive=" + std::to_wstring((double)selection_emissive);
-        summary += L"
-";
+        summary += L"\r\n";
     }
 
     if (mode_asset) {
-        summary += L"Asset Builder schema: source object, linked content path, coherence safety review, viewport resonance sync.
-";
+        summary += L"Asset Builder schema: source object, linked content path, coherence safety review, viewport resonance sync.\r\n";
         if (has_selection) {
-            summary += L"Current object summary: " + selection_name_w + L" remains on the canonical asset lane; destructive rename/reference-affecting work must go through Review Refs before apply.
-";
+            summary += L"Current object summary: " + selection_name_w + L" remains on the canonical asset lane; destructive rename/reference-affecting work must go through Review Refs before apply.\r\n";
         } else {
-            summary += L"Current object summary: select or import an object to bind the asset lane.
-";
+            summary += L"Current object summary: select or import an object to bind the asset lane.\r\n";
         }
     } else if (mode_planet) {
         const int atmo = ew_read_trackbar_pos_safe(hwnd_asset_planet_atmo_, 32);
         const int iono = ew_read_trackbar_pos_safe(hwnd_asset_planet_iono_, 28);
         const int magneto = ew_read_trackbar_pos_safe(hwnd_asset_planet_magneto_, 36);
-        summary += L"Planet Builder schema: atmosphere, ionosphere, magnetosphere, sculpt hook, paint hook.
-";
+        summary += L"Planet Builder schema: atmosphere, ionosphere, magnetosphere, sculpt hook, paint hook.\r\n";
         summary += L"Atmosphere=" + std::to_wstring((long long)atmo);
         summary += L"  Ionosphere=" + std::to_wstring((long long)iono);
-        summary += L"  Magnetosphere=" + std::to_wstring((long long)magneto) + L"
-";
+        summary += L"  Magnetosphere=" + std::to_wstring((long long)magneto) + L"\r\n";
         if (has_selection && selection_anchor_id_u32 < scene_->sm.anchors.size()) {
             const Anchor& A = scene_->sm.anchors[selection_anchor_id_u32];
             summary += L"Selected anchor resonance: f=" + std::to_wstring((long long)A.last_f_code);
             summary += L"  a=" + std::to_wstring((long long)A.last_a_code);
             summary += L"  v=" + std::to_wstring((long long)A.last_v_code);
-            summary += L"  i=" + std::to_wstring((long long)A.last_i_code) + L"
-";
+            summary += L"  i=" + std::to_wstring((long long)A.last_i_code) + L"\r\n";
         }
-        summary += L"Apply ergonomics: Planet Apply is gated through coherence/reference review before mutating the selected proxy.
-";
+        summary += L"Apply ergonomics: Planet Apply is gated through coherence/reference review before mutating the selected proxy.\r\n";
     } else {
         const std::wstring archetype_w = ew_combo_selected_text_safe(hwnd_asset_character_archetype_, L"Biped Explorer");
         const int h_cm = ew_read_trackbar_pos_safe(hwnd_asset_character_height_, 172);
         const int rigidity = ew_read_trackbar_pos_safe(hwnd_asset_character_rigidity_, 54);
         const int gait = ew_read_trackbar_pos_safe(hwnd_asset_character_gait_, 48);
-        summary += L"Character Tools schema: archetype, height, rigidity, gait, bind rig, pose hook.
-";
+        summary += L"Character Tools schema: archetype, height, rigidity, gait, bind rig, pose hook.\r\n";
         summary += L"Archetype=" + archetype_w;
         summary += L"  Height(cm)=" + std::to_wstring((long long)h_cm);
         summary += L"  Rigidity=" + std::to_wstring((long long)rigidity);
-        summary += L"  Gait=" + std::to_wstring((long long)gait) + L"
-";
-        summary += L"Bind ergonomics: Character Bind is gated through coherence/reference review before altering the selected proxy bounds.
-";
+        summary += L"  Gait=" + std::to_wstring((long long)gait) + L"\r\n";
+        summary += L"Bind ergonomics: Character Bind is gated through coherence/reference review before altering the selected proxy bounds.\r\n";
     }
 
     summary += L"Viewport synchronization: ";
     summary += resonance_view_ ? L"resonance mode ON" : L"standard mode";
-    summary += L"  band=" + std::to_wstring((long long)spectrum_band_i32_) + L"
-";
-    summary += L"Editor/runtime split preserved: authoring panels remain editor-only; runtime stays clean.
-";
+    summary += L"  band=" + std::to_wstring((long long)spectrum_band_i32_) + L"\r\n";
+    summary += L"Editor/runtime split preserved: authoring panels remain editor-only; runtime stays clean.\r\n";
     if (hwnd_asset_tool_summary_) SetWindowTextW(hwnd_asset_tool_summary_, summary.c_str());
 }
 
@@ -8500,16 +9800,14 @@ void App::RefreshSequencerPanel() {
     if (hwnd_seq_stress_overlay_) SetWindowTextW(hwnd_seq_stress_overlay_, seq_stress_overlay_enabled_ ? L"Stress On" : L"Stress Off");
 
     std::wstring summary;
-    summary += L"Sequencer contract: editor-only derived timeline authoring; runtime consumes bounded control packets only.
-";
+    summary += L"Sequencer contract: editor-only derived timeline authoring; runtime consumes bounded control packets only.\r\n";
     summary += L"Transport: ";
     summary += seq_play_enabled_ ? L"playing" : L"paused";
     summary += L"  |  Loop builder: ";
     summary += seq_loop_builder_enabled_ ? L"armed" : L"idle";
     summary += L"  |  Stress overlay: ";
     summary += seq_stress_overlay_enabled_ ? L"visible" : L"hidden";
-    summary += L"
-";
+    summary += L"\r\n";
 
     const std::wstring archetype_w = ew_combo_selected_text_safe(hwnd_asset_character_archetype_, L"Biped Explorer");
     const int h_cm = ew_read_trackbar_pos_safe(hwnd_asset_character_height_, 172);
@@ -8526,12 +9824,10 @@ void App::RefreshSequencerPanel() {
     summary += L"Character motion binding: archetype=" + archetype_w +
                L"  height(cm)=" + std::to_wstring((long long)h_cm) +
                L"  rigidity=" + std::to_wstring((long long)rigidity) +
-               L"  gait=" + std::to_wstring((long long)gait) + L"
-";
+               L"  gait=" + std::to_wstring((long long)gait) + L"\r\n";
     summary += L"Selected object: " + selection_name_w;
     if (has_selection) summary += L"  (anchor=" + std::to_wstring((unsigned long long)selection_anchor_id_u32) + L")";
-    summary += L"
-";
+    summary += L"\r\n";
     static const wchar_t* lane_effects[] = {
         L"Root motion and clip timing stay bounded to the selected anchor/object relationship.",
         L"Pose correction stitches contact/recovery without turning the sequencer into a physics authority.",
@@ -8540,24 +9836,20 @@ void App::RefreshSequencerPanel() {
         L"Motion hook emits one bounded locomotion packet path and hands execution back to the canonical runtime."
     };
     const int lane_idx = (seq_selected_i32_ >= 0 && seq_selected_i32_ < 5) ? seq_selected_i32_ : 0;
-    summary += L"Selected lane: " + std::wstring(lane_effects[lane_idx]) + L"
-";
+    summary += L"Selected lane: " + std::wstring(lane_effects[lane_idx]) + L"\r\n";
     const bool review_current = !content_selected_rel_utf8_.empty() &&
                                 asset_last_review_rel_utf8_ == content_selected_rel_utf8_ &&
                                 asset_last_review_revision_u64_ == coh_highlight_seen_revision_u64_;
     if (!content_selected_rel_utf8_.empty()) {
         summary += L"Linked content target: " + utf8_to_wide(content_selected_rel_utf8_);
         summary += review_current ? L"  [review current]" : L"  [review stale or missing]";
-        summary += L"
-";
+        summary += L"\r\n";
     }
     summary += L"Viewport feedback: ";
     summary += resonance_view_ ? L"resonance view ON" : L"standard view";
     summary += live_mode_enabled_ ? L"  |  live substrate source active" : L"  |  sandbox projection active";
-    summary += L"
-";
-    summary += L"Runtime/editor split: sequencer widgets and authoring summaries stay editor-side; runtime/export paths only receive bounded packets and staged bundles.
-";
+    summary += L"\r\n";
+    summary += L"Runtime/editor split: sequencer widgets and authoring summaries stay editor-side; runtime/export paths only receive bounded packets and staged bundles.\r\n";
     if (hwnd_seq_summary_) SetWindowTextW(hwnd_seq_summary_, summary.c_str());
 }
 
@@ -8627,6 +9919,7 @@ bool App::SelectContentRelativePath(const std::string& rel_utf8) {
     };
     clear_list(hwnd_content_list_);
     clear_list(hwnd_content_thumb_);
+    clear_list(hwnd_asset_thumb_);
     if (hwnd_content_3d_) SendMessageW(hwnd_content_3d_, LB_SETCURSEL, (WPARAM)-1, 0);
 
     bool found = false;
@@ -8635,7 +9928,7 @@ bool App::SelectContentRelativePath(const std::string& rel_utf8) {
         const int n = ListView_GetItemCount(h);
         for (int i = 0; i < n; ++i) {
             wchar_t w2[512]; w2[0] = 0;
-            ListView_GetItemText(h, i, 0, w2, 512);
+            ew_listview_get_item_text_w(h, i, 0, w2, 512);
             if (wide_to_utf8(std::wstring(w2)) == rel_utf8) {
                 ListView_SetItemState(h, i, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
                 ListView_EnsureVisible(h, i, FALSE);
@@ -8646,6 +9939,7 @@ bool App::SelectContentRelativePath(const std::string& rel_utf8) {
     };
     found = select_list(hwnd_content_list_) || found;
     found = select_list(hwnd_content_thumb_) || found;
+    found = select_list(hwnd_asset_thumb_) || found;
     if (hwnd_content_3d_) {
         const int n = (int)SendMessageW(hwnd_content_3d_, LB_GETCOUNT, 0, 0);
         for (int i = 0; i < n; ++i) {
@@ -8692,26 +9986,123 @@ void App::RefreshContentBrowserFromRuntime(uint32_t limit_u32) {
     RefreshContentBrowserChrome();
 }
 
+void App::RebuildContentBrowserViews() {
+    content_visible_indices_.clear();
+
+    std::string query_utf8;
+    if (hwnd_content_search_) {
+        const int qlen = GetWindowTextLengthW(hwnd_content_search_);
+        if (qlen > 0) {
+            std::vector<wchar_t> qbuf((size_t)qlen + 1u, 0);
+            GetWindowTextW(hwnd_content_search_, qbuf.data(), qlen + 1);
+            query_utf8 = ew_lower_ascii_copy(wide_to_utf8(std::wstring(qbuf.data())));
+        }
+    }
+
+    auto matches_query = [&](const ContentItem& item) -> bool {
+        if (query_utf8.empty()) return true;
+        const std::string rel = ew_lower_ascii_copy(item.rel_utf8);
+        const std::string label = ew_lower_ascii_copy(item.label_utf8.empty() ? item.rel_utf8 : item.label_utf8);
+        return rel.find(query_utf8) != std::string::npos || label.find(query_utf8) != std::string::npos;
+    };
+
+    for (size_t i = 0; i < content_items_.size(); ++i) {
+        if (matches_query(content_items_[i])) content_visible_indices_.push_back(i);
+    }
+
+    if (hwnd_content_list_) ListView_DeleteAllItems(hwnd_content_list_);
+    if (hwnd_content_thumb_) ListView_DeleteAllItems(hwnd_content_thumb_);
+    if (hwnd_asset_thumb_) ListView_DeleteAllItems(hwnd_asset_thumb_);
+
+    for (size_t row = 0; row < content_visible_indices_.size(); ++row) {
+        const size_t src = content_visible_indices_[row];
+        if (src >= content_items_.size()) continue;
+        const ContentItem& item = content_items_[src];
+        const std::wstring rel_w = utf8_to_wide(item.rel_utf8);
+        const std::wstring label_w = utf8_to_wide(item.label_utf8.empty() ? item.rel_utf8 : item.label_utf8);
+
+        if (hwnd_content_list_) {
+            LVITEMW lv{};
+            lv.mask = LVIF_TEXT | LVIF_IMAGE | LVIF_PARAM;
+            lv.iItem = ListView_GetItemCount(hwnd_content_list_);
+            lv.iSubItem = 0;
+            lv.pszText = const_cast<LPWSTR>(rel_w.c_str());
+            lv.iImage = 0;
+            lv.lParam = (LPARAM)src;
+            const int idx = ListView_InsertItem(hwnd_content_list_, &lv);
+            if (idx >= 0) ew_listview_set_item_text_w(hwnd_content_list_, idx, 1, label_w);
+        }
+
+        if (hwnd_content_thumb_) {
+            LVITEMW lv{};
+            lv.mask = LVIF_TEXT | LVIF_IMAGE | LVIF_PARAM;
+            lv.iItem = ListView_GetItemCount(hwnd_content_thumb_);
+            lv.iSubItem = 0;
+            lv.pszText = const_cast<LPWSTR>(label_w.c_str());
+            lv.iImage = 0;
+            lv.lParam = (LPARAM)src;
+            (void)ListView_InsertItem(hwnd_content_thumb_, &lv);
+        }
+        if (hwnd_asset_thumb_) {
+            LVITEMW lv{};
+            lv.mask = LVIF_TEXT | LVIF_IMAGE | LVIF_PARAM;
+            lv.iItem = ListView_GetItemCount(hwnd_asset_thumb_);
+            lv.iSubItem = 0;
+            lv.pszText = const_cast<LPWSTR>(label_w.c_str());
+            lv.iImage = 0;
+            lv.lParam = (LPARAM)src;
+            (void)ListView_InsertItem(hwnd_asset_thumb_, &lv);
+        }
+    }
+
+    RefreshContent3DBrowserSurface();
+}
+
 int App::Run(HINSTANCE hInst) {
     // Win64 enforcement at runtime too (belt + suspenders)
     static_assert(sizeof(void*) == 8, "Win64 required");
 
     std::wstring app_id_w = utf8_to_wide(cfg_.app_user_model_id_utf8.empty()
-        ? std::string(ew_editor_build_enabled ? "GenesisEngine.Viewport.Editor" : "GenesisEngine.Viewport.Runtime")
+        ? std::string(ew_editor_build_enabled ? "GenesisEngine.Editor" : "GenesisEngine.Runtime")
         : cfg_.app_user_model_id_utf8);
     if (!app_id_w.empty()) {
         SetCurrentProcessExplicitAppUserModelID(app_id_w.c_str());
     }
 
-    CreateMainWindow(hInst);
-    CreateChildWindows();
+    const bool use_startup_splash = false;
+    EwStartupSplash splash{};
+    if (use_startup_splash) {
+        ew_startup_splash_show(&splash, hInst, utf8_to_wide(cfg_.app_title_utf8), L"Booting Genesis Engine Vulkan application...");
+    }
 
+    auto splash_set_subtitle = [&](const wchar_t* text_w) {
+        if (use_startup_splash) ew_startup_splash_set_subtitle(&splash, text_w ? text_w : L"");
+    };
+    auto splash_destroy = [&]() {
+        if (use_startup_splash) ew_startup_splash_destroy(&splash);
+    };
+
+    splash_set_subtitle(L"Creating editor shell...");
+    CreateMainWindow(hInst);
+    if (!hwnd_main_) {
+        splash_destroy();
+        MessageBoxA(nullptr, "Failed to create the Genesis Engine main window.", "Genesis Engine", MB_ICONERROR | MB_OK);
+        return 1;
+    }
+    CreateChildWindows();
+    if (!hwnd_viewport_) {
+        splash_destroy();
+        MessageBoxA(hwnd_main_, "Failed to create the Genesis Engine viewport window.", "Genesis Engine", MB_ICONERROR | MB_OK);
+        DestroyWindow(hwnd_main_);
+        return 1;
+    }
+
+    splash_set_subtitle(L"Initializing simulation, AI, and repository surfaces...");
     scene_ = new Scene();
-    scene_->sm.visualization_headless = !cfg_.start_visualization;
 
     {
         std::filesystem::path log_path = cfg_.output_log_path_utf8.empty()
-            ? (std::filesystem::current_path() / "GenesisEngineState" / "Logs" / (ew_editor_build_enabled ? "genesis_viewport.log" : "genesis_runtime.log"))
+            ? (std::filesystem::current_path() / "GenesisEngineState" / "Logs" / (ew_editor_build_enabled ? "genesis_engine.log" : "genesis_runtime.log"))
             : std::filesystem::path(cfg_.output_log_path_utf8);
         std::error_code ec;
         std::filesystem::create_directories(log_path.parent_path(), ec);
@@ -8719,7 +10110,7 @@ int App::Run(HINSTANCE hInst) {
         FILE* f = nullptr;
         _wfopen_s(&f, output_log_path_w_.c_str(), L"wb");
         if (f) {
-            const char* hdr = "GENESIS_VIEWPORT_LOG v1\n";
+            const char* hdr = "GENESIS_ENGINE_LOG v1\n";
             fwrite(hdr, 1, std::strlen(hdr), f);
             fclose(f);
         }
@@ -8733,9 +10124,7 @@ int App::Run(HINSTANCE hInst) {
         RefreshContentBrowserFromRuntime(200u);
     }
 
-    // Ensure AI learning/crawling boot OFF (UI + substrate).
-    ai_learning_enabled_ = false;
-    ai_crawling_enabled_ = false;
+    // Ensure AI learning/crawling boot OFF through the runtime's canonical state.
     {
         EwControlPacket cp{};
         cp.source_u16 = 1;
@@ -8754,19 +10143,24 @@ int App::Run(HINSTANCE hInst) {
 
     // Headless visualization mode: keep simulation running but skip continuous presentation.
     visualize_enabled_ = cfg_.start_visualization && !(env_truthy("GENESIS_HEADLESS") || env_truthy("HEADLESS"));
+    scene_->sm.visualization_headless = !visualize_enabled_;
+    visualization_fault_utf8_.clear();
     confinement_particles_enabled_ = cfg_.start_confinement_particles;
     resonance_view_ = cfg_.start_resonance_view;
     live_mode_enabled_ = cfg_.start_live_mode;
+    if (hwnd_viewport_) SetWindowTextW(hwnd_viewport_, L"");
     SyncLiveModeProjection();
+    RefreshTopBarChrome();
     if (!output_log_path_w_.empty()) {
         AppendOutputUtf8(std::string("APP_LOG path=") + wide_to_utf8(output_log_path_w_));
     }
-    AppendOutputUtf8(std::string("CONFINEMENT_VIEW:") + (confinement_particles_enabled_ ? "ON" : "OFF"));
+    AppendOutputUtf8(BuildPhotonConfinementStatusUtf8());
+    AppendOutputUtf8("PHOTON_CONTROLS key=F8 cmds=\"viewport photon on|off|toggle|status\"");
     {
         std::wstring key_file_w;
         std::string err_utf8;
         if (ew_openai_chat_available(&key_file_w, &err_utf8)) {
-            AppendOutputUtf8(std::string("CHATGPT_READY model=") + ew_openai_default_model_utf8());
+            AppendOutputUtf8(std::string("CHATGPT_CONFIGURED model=") + ew_openai_default_model_utf8() + " auth=unverified");
         } else {
             AppendOutputUtf8(std::string("CHATGPT_UNAVAILABLE reason=") + err_utf8);
         }
@@ -8775,53 +10169,66 @@ int App::Run(HINSTANCE hInst) {
         ExecuteExternalCommandUtf8(cmd);
     }
 
-    vk_ = new VkCtx();
-    vk_->enable_validation = env_truthy("EW_VK_VALIDATION");
+    if (visualize_enabled_) {
+        splash_set_subtitle(L"Initializing Vulkan device and shader pipeline...");
+        try {
+            vk_ = new VkCtx();
+            vk_->enable_validation = env_truthy("EW_VK_VALIDATION");
 
-    // Optional OpenXR init (Vulkan path). If OpenXR is present, we pull the
-    // required Vulkan instance/device extension lists and include them in the
-    // Vulkan creation path. This keeps the build production-grade without
-    // requiring display firmware changes.
-    const bool want_xr = env_truthy("GENESIS_OPENXR") || env_truthy("GENESIS_XR") || env_truthy("OPENXR");
-    bool xr_ok_init = false;
-    if (want_xr) {
-        xr_ok_init = xr_.Init();
+            // Optional OpenXR init (Vulkan path). If OpenXR is present, we pull the
+            // required Vulkan instance/device extension lists and include them in the
+            // Vulkan creation path. This keeps the build production-grade without
+            // requiring display firmware changes.
+            const bool want_xr = env_truthy("GENESIS_OPENXR") || env_truthy("GENESIS_XR") || env_truthy("OPENXR");
+            bool xr_ok_init = false;
+            if (want_xr) {
+                xr_ok_init = xr_.Init();
+            }
+
+            vk_->instance = create_instance(vk_->enable_validation, &vk_->dbg,
+                                            xr_ok_init ? xr_.VulkanInstanceExtensions() : "");
+            vk_->surface = create_surface(vk_->instance, hwnd_viewport_);
+            vk_->phys = pick_phys(vk_->instance);
+            if (!vk_->phys) {
+                throw std::runtime_error("No Vulkan physical device found.");
+            }
+            vk_->gfxq_family = find_gfx_queue(vk_->phys, vk_->surface);
+            vk_->dev = create_device(vk_->phys, vk_->gfxq_family, &vk_->gfxq,
+                                     xr_ok_init ? xr_.VulkanDeviceExtensions() : "");
+
+            // Bind Vulkan to OpenXR and create session. This is required for eye-gaze.
+            if (xr_ok_init) {
+                xr_.BindVulkan(vk_->instance, vk_->phys, vk_->dev, vk_->gfxq_family, 0);
+            }
+
+            VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+            pci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+            pci.queueFamilyIndex = vk_->gfxq_family;
+            vk_check(vkCreateCommandPool(vk_->dev, &pci, nullptr, &vk_->cmdpool), "vkCreateCommandPool");
+
+            VkSemaphoreCreateInfo sci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+            vk_check(vkCreateSemaphore(vk_->dev, &sci, nullptr, &vk_->sem_image), "vkCreateSemaphore(image)");
+            vk_check(vkCreateSemaphore(vk_->dev, &sci, nullptr, &vk_->sem_render), "vkCreateSemaphore(render)");
+
+            VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+            fci.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+            vk_check(vkCreateFence(vk_->dev, &fci, nullptr, &vk_->fence), "vkCreateFence");
+
+            // Initial swap.
+            RECT vrc{}; GetClientRect(hwnd_viewport_, &vrc);
+            create_swap(*vk_, (uint32_t)(vrc.right - vrc.left), (uint32_t)(vrc.bottom - vrc.top));
+            create_pipeline(*vk_);
+        } catch (const std::exception& ex) {
+            splash_set_subtitle(L"Renderer disabled. Continuing with editor shell...");
+            DisableVisualizationWithReason(std::string("startup: ") + ex.what());
+        } catch (...) {
+            splash_set_subtitle(L"Renderer disabled. Continuing with editor shell...");
+            DisableVisualizationWithReason("startup: unknown renderer initialization fault");
+        }
+    } else if (hwnd_viewport_) {
+        SetWindowTextW(hwnd_viewport_, L"Genesis viewport paused.\r\n\r\nVisualization is disabled for this session.");
     }
-
-    vk_->instance = create_instance(vk_->enable_validation, &vk_->dbg,
-                                    xr_ok_init ? xr_.VulkanInstanceExtensions() : "");
-    vk_->surface = create_surface(vk_->instance, hwnd_viewport_);
-    vk_->phys = pick_phys(vk_->instance);
-    if (!vk_->phys) {
-        MessageBoxA(hwnd_main_, "No Vulkan physical device found.", "GenesisEngineVulkan", MB_ICONERROR | MB_OK);
-        return 1;
-    }
-    vk_->gfxq_family = find_gfx_queue(vk_->phys, vk_->surface);
-    vk_->dev = create_device(vk_->phys, vk_->gfxq_family, &vk_->gfxq,
-                             xr_ok_init ? xr_.VulkanDeviceExtensions() : "");
-
-    // Bind Vulkan to OpenXR and create session. This is required for eye-gaze.
-    if (xr_ok_init) {
-        xr_.BindVulkan(vk_->instance, vk_->phys, vk_->dev, vk_->gfxq_family, 0);
-    }
-
-    VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
-    pci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-    pci.queueFamilyIndex = vk_->gfxq_family;
-    vk_check(vkCreateCommandPool(vk_->dev, &pci, nullptr, &vk_->cmdpool), "vkCreateCommandPool");
-
-    VkSemaphoreCreateInfo sci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-    vk_check(vkCreateSemaphore(vk_->dev, &sci, nullptr, &vk_->sem_image), "vkCreateSemaphore(image)");
-    vk_check(vkCreateSemaphore(vk_->dev, &sci, nullptr, &vk_->sem_render), "vkCreateSemaphore(render)");
-
-    VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-    fci.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-    vk_check(vkCreateFence(vk_->dev, &fci, nullptr, &vk_->fence), "vkCreateFence");
-
-    // Initial swap.
-    RECT vrc{}; GetClientRect(hwnd_viewport_, &vrc);
-    create_swap(*vk_, (uint32_t)(vrc.right - vrc.left), (uint32_t)(vrc.bottom - vrc.top));
-    create_pipeline(*vk_);
+    splash_destroy();
 
     // Message loop
     MSG msg{};
@@ -8831,8 +10238,14 @@ int App::Run(HINSTANCE hInst) {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
-        Tick();
-        Render();
+        try {
+            Tick();
+            Render();
+        } catch (const std::exception& ex) {
+            DisableVisualizationWithReason(std::string("frame loop: ") + ex.what());
+        } catch (...) {
+            DisableVisualizationWithReason("frame loop: unknown rendering fault");
+        }
     }
 
     if (vk_) {
@@ -8842,6 +10255,7 @@ int App::Run(HINSTANCE hInst) {
     }
     delete scene_;
     scene_ = nullptr;
+    splash_destroy();
 
     return 0;
 }
@@ -8861,13 +10275,12 @@ static void ew_draw_toggle_switch(const DRAWITEMSTRUCT* dis, bool on) {
     RECT tr = rc;
     const int pad = 2;
     tr.left += pad; tr.top += pad; tr.right -= pad; tr.bottom -= pad;
-    const int w = tr.right - tr.left;
     const int h = tr.bottom - tr.top;
     const int r = (h > 4) ? (h/2) : 2;
 
-    COLORREF track_col = on ? g_theme.gold : g_theme.edit_bg;
+    COLORREF track_col = on ? g_theme.gold_fill : g_theme.edit_bg_alt;
     HBRUSH track = CreateSolidBrush(track_col);
-    HPEN pen = CreatePen(PS_SOLID, 1, g_theme.gold);
+    HPEN pen = CreatePen(PS_SOLID, 1, on ? g_theme.gold : g_theme.border);
     HGDIOBJ oldb = SelectObject(hdc, track);
     HGDIOBJ oldp = SelectObject(hdc, pen);
     RoundRect(hdc, tr.left, tr.top, tr.right, tr.bottom, r*2, r*2);
@@ -8888,7 +10301,7 @@ static void ew_draw_toggle_switch(const DRAWITEMSTRUCT* dis, bool on) {
         kb.left = tr.left + 1;
         kb.right = kb.left + knob_d;
     }
-    HBRUSH knob = CreateSolidBrush(on ? g_theme.bg : g_theme.gold);
+    HBRUSH knob = CreateSolidBrush(on ? g_theme.gold_hot : g_theme.muted);
     HGDIOBJ oldk = SelectObject(hdc, knob);
     Ellipse(hdc, kb.left, kb.top, kb.right, kb.bottom);
     SelectObject(hdc, oldk);
@@ -8946,30 +10359,36 @@ static LRESULT ew_tab_custom_draw(const NMHDR* nh, LRESULT* out_res) {
             if (!TabCtrl_GetItemRect(htab, i, &rc)) { *out_res = CDRF_DODEFAULT; return 1; }
             const int sel = TabCtrl_GetCurSel(htab);
             const bool selected = (i == sel);
-            // Background
-            HBRUSH bg = CreateSolidBrush(selected ? RGB(32,32,32) : g_theme.panel);
-            FillRect(cd->hdc, &rc, bg);
-            DeleteObject(bg);
-            // Gold underline for selected tab
+            RECT chip = rc;
+            chip.left += 2;
+            chip.right -= 2;
+            chip.top += 2;
+            chip.bottom -= selected ? 1 : 3;
+            ew_draw_rounded_surface(cd->hdc, chip,
+                                    ew_theme_tab_fill(selected),
+                                    selected ? g_theme.gold : g_theme.border_soft,
+                                    16, selected ? 2 : 1);
             if (selected) {
-                HPEN pen = CreatePen(PS_SOLID, 2, g_theme.gold);
-                HGDIOBJ oldp = SelectObject(cd->hdc, pen);
-                MoveToEx(cd->hdc, rc.left + 6, rc.bottom - 2, nullptr);
-                LineTo(cd->hdc, rc.right - 6, rc.bottom - 2);
-                SelectObject(cd->hdc, oldp);
-                DeleteObject(pen);
+                RECT accent = chip;
+                accent.left += 10;
+                accent.right -= 10;
+                accent.top = accent.bottom - 4;
+                HBRUSH accent_br = CreateSolidBrush(g_theme.gold);
+                FillRect(cd->hdc, &accent, accent_br);
+                DeleteObject(accent_br);
             }
-            // Text
             wchar_t buf[128] = {0};
             TCITEMW ti{}; ti.mask = TCIF_TEXT; ti.pszText = buf; ti.cchTextMax = 127;
             TabCtrl_GetItem(htab, i, &ti);
             SetBkMode(cd->hdc, TRANSPARENT);
-            SetTextColor(cd->hdc, selected ? g_theme.gold : g_theme.text);
+            SetTextColor(cd->hdc, selected ? g_theme.gold_hot : g_theme.muted);
             HFONT f = selected ? g_font_ui_bold : g_font_ui;
             HGDIOBJ oldf = nullptr;
             if (f) oldf = SelectObject(cd->hdc, f);
-            RECT tr = rc; tr.left += 10; tr.right -= 10; tr.top += 6;
-            DrawTextW(cd->hdc, buf, -1, &tr, DT_SINGLELINE | DT_VCENTER | DT_LEFT);
+            RECT tr = chip;
+            tr.left += 12;
+            tr.right -= 12;
+            DrawTextW(cd->hdc, buf, -1, &tr, DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
             if (oldf) SelectObject(cd->hdc, oldf);
             *out_res = CDRF_SKIPDEFAULT;
             return 1;
@@ -9003,8 +10422,17 @@ void App::Tick() {
     static bool prev_h = false;
     const bool h_now = input_.key_down['H'] || input_.key_down['h'];
     if (h_now && !prev_h) {
-        visualize_enabled_ = !visualize_enabled_;
-        AppendOutputUtf8(visualize_enabled_ ? "VISUALIZATION:ON" : "VISUALIZATION:OFF");
+        if (!vk_) {
+            visualize_enabled_ = false;
+            AppendOutputUtf8(visualization_fault_utf8_.empty()
+                ? "VISUALIZATION:UNAVAILABLE renderer not initialized for this session"
+                : std::string("VISUALIZATION:UNAVAILABLE reason=") + visualization_fault_utf8_);
+        } else {
+            visualize_enabled_ = !visualize_enabled_;
+            if (scene_) scene_->sm.visualization_headless = !visualize_enabled_;
+            AppendOutputUtf8(visualize_enabled_ ? "VISUALIZATION:ON" : "VISUALIZATION:OFF");
+        }
+        RefreshTopBarChrome();
     }
     prev_h = h_now;
 
@@ -9078,6 +10506,30 @@ void App::Tick() {
         SetWindowTextW(hwnd_ai_status_, utf8_to_wide(s).c_str());
     }
 
+    {
+        static bool toggle_state_inited = false;
+        static bool prev_sim_play = false;
+        static bool prev_ai_enabled = true;
+        static bool prev_ai_learning = false;
+        static bool prev_ai_crawling = false;
+        const bool sim_play = IsSimPlayEnabledCanonical();
+        const bool ai_enabled = IsAiEnabledCanonical();
+        const bool ai_learning = IsAiLearningEnabledCanonical();
+        const bool ai_crawling = IsAiCrawlingEnabledCanonical();
+        if (!toggle_state_inited ||
+            sim_play != prev_sim_play ||
+            ai_enabled != prev_ai_enabled ||
+            ai_learning != prev_ai_learning ||
+            ai_crawling != prev_ai_crawling) {
+            RefreshAiToggleWidgets();
+            toggle_state_inited = true;
+            prev_sim_play = sim_play;
+            prev_ai_enabled = ai_enabled;
+            prev_ai_learning = ai_learning;
+            prev_ai_crawling = ai_crawling;
+        }
+    }
+
     // ------------------------------------------------------------------
     // Editor interaction polish (production-grade feel)
     // - Orbit/Pan/Dolly camera rig emitting CameraSet packets
@@ -9085,7 +10537,7 @@ void App::Tick() {
     // - Translate/Rotate gizmo drag emitting ObjectSetTransform packets
     // All authoritative state remains in anchors; UI only emits control packets.
     // ------------------------------------------------------------------
-    const int panel_w = 420;
+    const int panel_w = ew_editor_build_enabled ? ew_ui_clamp_right_dock_width_px(right_dock_width_px_, client_w_) : 0;
     const int viewport_w = (client_w_ > panel_w) ? (client_w_ - panel_w) : client_w_;
     const int viewport_h = client_h_;
     const bool mouse_in_view = (input_.mouse_x >= 0 && input_.mouse_y >= 0 &&
@@ -9248,7 +10700,7 @@ prev_uy = uy_now;
             } else {
                 EmitEditorSelection(editor_selected_object_id_u64_);
             }
-            RefreshDetailsFromSelection();
+            RebuildPropertyGrid();
             RefreshAssetDesignerPanel();
             RefreshVoxelDesignerPanel();
             RefreshNodePanel();
@@ -9274,8 +10726,8 @@ prev_uy = uy_now;
                         SendMessageW(hwnd_objlist_, LB_SETCURSEL, (WPARAM)scene_->selected, 0);
                     }
                     if (hwnd_ai_status_) SetWindowTextW(hwnd_ai_status_, L"Duplicated selected object with Ctrl+Alt drag and armed gizmo drag on the duplicate.");
-                    RefreshOutlinerFromScene();
-                    RefreshDetailsFromSelection();
+                    RebuildOutlinerList();
+                    RebuildPropertyGrid();
                     RefreshAssetDesignerPanel();
                     RefreshVoxelDesignerPanel();
                     RefreshNodePanel();
@@ -9516,12 +10968,6 @@ if (editor_axis_constraint_u8_ == 1) {
     scene_->instances.clear();
     scene_->instances.reserve(scene_->objects.size() + 20000u);
 
-    auto ew_clamp_i32 = [](int64_t v, int32_t lo, int32_t hi) -> int32_t {
-        if (v < (int64_t)lo) return lo;
-        if (v > (int64_t)hi) return hi;
-        return (int32_t)v;
-    };
-
     // Compute emergent realism carrier triples (x=leak Q16.16, y=doppler_k Q16.16, z=harm_mean Q0.15)
     // for all visible object anchors in a single deterministic batch.
     std::vector<uint32_t> carrier_anchor_ids;
@@ -9627,11 +11073,18 @@ scene_->instances.push_back(inst);
     {
         const uint32_t max_pts = 20000u;
         const std::vector<EwVizPoint> pts = ew_runtime_project_points(&scene_->sm, max_pts);
+        viewport_projected_points_u32_ = (uint32_t)pts.size();
+        viewport_anchor_points_visible_u32_ = 0u;
+        viewport_anchor_points_hidden_u32_ = 0u;
         if (!pts.empty()) {
             const float viz_scale_m = 50.0f;
             for (const EwVizPoint& p : pts) {
                 const bool is_anchor_particle = (p.anchor_id != 0u);
-                if (is_anchor_particle && !confinement_particles_enabled_) continue;
+                if (is_anchor_particle && !confinement_particles_enabled_) {
+                    viewport_anchor_points_hidden_u32_++;
+                    continue;
+                }
+                if (is_anchor_particle) viewport_anchor_points_visible_u32_++;
 
                 const float wx = ((float)p.x_q16_16 / 65536.0f) * viz_scale_m;
                 const float wy = ((float)p.y_q16_16 / 65536.0f) * viz_scale_m;
@@ -9699,19 +11152,20 @@ void App::Render() {
 
     if (!vk_ || !vk_->swap) return;
 
-    bool xr_ended_this_frame = false;
+    try {
+        bool xr_ended_this_frame = false;
 
-    // Resize handling
-    if (resized_) {
-        resized_ = false;
-        vkDeviceWaitIdle(vk_->dev);
-        vk_->DestroySwap();
-        RECT vrc{}; GetClientRect(hwnd_viewport_, &vrc);
-        uint32_t w = (uint32_t)std::max(1L, vrc.right - vrc.left);
-        uint32_t h = (uint32_t)std::max(1L, vrc.bottom - vrc.top);
-        create_swap(*vk_, w, h);
-        create_pipeline(*vk_);
-    }
+        // Resize handling
+        if (resized_) {
+            resized_ = false;
+            vkDeviceWaitIdle(vk_->dev);
+            vk_->DestroySwap();
+            RECT vrc{}; GetClientRect(hwnd_viewport_, &vrc);
+            uint32_t w = (uint32_t)std::max(1L, vrc.right - vrc.left);
+            uint32_t h = (uint32_t)std::max(1L, vrc.bottom - vrc.top);
+            create_swap(*vk_, w, h);
+            create_pipeline(*vk_);
+        }
 
     vk_check(vkWaitForFences(vk_->dev, 1, &vk_->fence, VK_TRUE, UINT64_MAX), "vkWaitForFences");
     vk_check(vkResetFences(vk_->dev, 1, &vk_->fence), "vkResetFences");
@@ -9723,7 +11177,8 @@ void App::Render() {
         const uint32_t median_q16 = out_u32[0];
         const uint32_t total = out_u32[1];
         if (total > 0u) {
-            ew_runtime_submit_camera_sensor_median_norm(&scene_->sm, (int32_t)median_q16, scene_->sm.canonical_tick);
+            scene_->sm.camera_sensor.median_depth_norm_q16_16 = (int32_t)median_q16;
+            scene_->sm.camera_sensor.tick_u64 = scene_->sm.canonical_tick;
         }
     }
 
@@ -9761,6 +11216,8 @@ void App::Render() {
             // It submits poses as observations; the substrate projects per-eye view matrices.
             EwRenderXrEyePacket xrep{};
             const bool have_eye = ew_runtime_get_render_xr_eye_packet(&scene_->sm, eye_index_u32, &xrep);
+            EwRenderAssistPacket ra{};
+            const bool have_ra = ew_runtime_get_render_assist_packet(&scene_->sm, &ra);
 
             auto row_dot_eye = [&](int row, int64_t bx, int64_t by, int64_t bz) -> int64_t {
                 const int64_t m0 = (int64_t)xrep.view_mat_q16_16[row*4 + 0];
@@ -9793,6 +11250,9 @@ void App::Render() {
             };
             for (const auto& o : scene_->objects) {
                 int32_t rel_q16_16[3] = {0,0,0};
+                const double dx = (double)o.xf.pos[0] - (double)cam_.pos[0];
+                const double dy = (double)o.xf.pos[1] - (double)cam_.pos[1];
+                const double dz = (double)o.xf.pos[2] - (double)cam_.pos[2];
 
                 if (have_eye) {
                     const int64_t wx_q = (int64_t)o.pos_q16_16[0];
@@ -9806,20 +11266,18 @@ void App::Render() {
                     rel_q16_16[2] = (int32_t)cz_q;
                 } else {
                     // Fail-closed fallback: translation only.
-                    rel_q16_16[0] = (int32_t)llround((double)dx * 65536.0);
-                    rel_q16_16[1] = (int32_t)llround((double)dy * 65536.0);
-                    rel_q16_16[2] = (int32_t)llround((double)dz * 65536.0);
+                    rel_q16_16[0] = (int32_t)llround(dx * 65536.0);
+                    rel_q16_16[1] = (int32_t)llround(dy * 65536.0);
+                    rel_q16_16[2] = (int32_t)llround(dz * 65536.0);
                 }
 
-                const float cx = (float)rel_q16_16[0] / 65536.0f;
-                const float cy = (float)rel_q16_16[1] / 65536.0f;
                 const float cz = (float)rel_q16_16[2] / 65536.0f;
 
                 // XR instance LOD/clarity MUST NOT be computed from local app camera state.
                 // Use substrate-derived RenderAssistPacket coefficients and only simple
                 // fixed-point multiply-add + clamps here (no sqrt/fabs focus-band math).
                 // Distance is evaluated in squared-distance domain (m^2) to avoid sqrt.
-                const double dist2_m2 = (double)dx*(double)dx + (double)dy*(double)dy + (double)dz*(double)dz;
+                const double dist2_m2 = dx*dx + dy*dy + dz*dz;
                 const uint64_t dist2_m2_q32_32 = (uint64_t)std::llround(dist2_m2 * (double)(1ull<<32));
 
                 int32_t focus_w_q16_16 = 0;
@@ -9946,7 +11404,7 @@ void App::Render() {
 
             // Build instances for this eye.
             // Submit XR pose as observation for substrate projection.
-            ew_runtime_submit_xr_eye_pose_f32(&scene_->sm, vi, pos, quat, scene_->sm.canonical_tick);
+            scene_->sm.submit_xr_eye_pose_f32(vi, pos, quat, scene_->sm.canonical_tick);
             build_instances_for_eye(vi);
 
             // Upload instances.
@@ -10095,7 +11553,6 @@ void App::Render() {
             vkCmdEndRendering(cmd);
             vk_check(vkEndCommandBuffer(cmd), "vkEndCommandBuffer(XR)");
 
-            VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
             VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
             si.commandBufferCount = 1;
             si.pCommandBuffers = &cmd;
@@ -10443,13 +11900,18 @@ push.pointSize = 20000.0f;
     if (pres == VK_ERROR_OUT_OF_DATE_KHR || pres == VK_SUBOPTIMAL_KHR) resized_ = true;
     else vk_check(pres, "vkQueuePresentKHR");
 
-    // If OpenXR is active but swapchains weren't ready (or no stereo views yet),
-    // we still must end the OpenXR frame to keep the runtime state machine healthy.
-    if (xr_.HasOpenXR() && !xr_ended_this_frame) {
-        xr_.EndFrame();
-    }
+        // If OpenXR is active but swapchains weren't ready (or no stereo views yet),
+        // we still must end the OpenXR frame to keep the runtime state machine healthy.
+        if (xr_.HasOpenXR() && !xr_ended_this_frame) {
+            xr_.EndFrame();
+        }
 
-    // OpenXR frame end is performed above.
+        // OpenXR frame end is performed above.
+    } catch (const std::exception& ex) {
+        DisableVisualizationWithReason(std::string("render: ") + ex.what());
+    } catch (...) {
+        DisableVisualizationWithReason("render: unknown renderer fault");
+    }
 }
 
 void App::OnSend() {
@@ -10490,7 +11952,7 @@ void App::OnImportObj() {
             RefreshAssetDesignerPanel();
             RefreshVoxelDesignerPanel();
         } else {
-            MessageBoxA(hwnd_main_, "Failed to import OBJ.", "GenesisEngineVulkan", MB_ICONWARNING | MB_OK);
+            MessageBoxA(hwnd_main_, "Failed to import OBJ.", "Genesis Engine", MB_ICONWARNING | MB_OK);
         }
     }
 }
@@ -10533,7 +11995,7 @@ void App::RebuildOutlinerList() {
 // -----------------------------------------------------------------------------
 
 static void lv_set_text(HWND lv, int item, int sub, const std::wstring& s) {
-    ListView_SetItemText(lv, item, sub, (LPWSTR)s.c_str());
+    ew_listview_set_item_text_w(lv, item, sub, s);
 }
 
 void App::RebuildPropertyGrid() {
@@ -10625,7 +12087,7 @@ void App::BeginPropEdit(int item, int subitem) {
 
     // Do not edit read-only rows.
     wchar_t name[128]; name[0]=0;
-    ListView_GetItemText(hwnd_propgrid_, item, 0, name, 128);
+    ew_listview_get_item_text_w(hwnd_propgrid_, item, 0, name, 128);
     const std::wstring n(name);
     if (n==L"Snap Enabled" || n==L"Gizmo Mode" || n==L"Axis Constraint" || n==L"Undo Stack" || n==L"Redo Stack") return;
 
@@ -10641,7 +12103,7 @@ void App::BeginPropEdit(int item, int subitem) {
     }
 
     wchar_t val[256]; val[0]=0;
-    ListView_GetItemText(hwnd_propgrid_, item, 1, val, 256);
+    ew_listview_get_item_text_w(hwnd_propgrid_, item, 1, val, 256);
     SetWindowTextW(hwnd_propedit_, val);
 
     // Position edit over the value cell.
@@ -10659,7 +12121,7 @@ void App::CommitPropEdit(bool apply) {
     if (!propedit_active_ || !hwnd_propedit_ || propedit_item_ < 0) return;
 
     wchar_t name[128]; name[0]=0;
-    ListView_GetItemText(hwnd_propgrid_, propedit_item_, 0, name, 128);
+    ew_listview_get_item_text_w(hwnd_propgrid_, propedit_item_, 0, name, 128);
     std::wstring n(name);
 
     wchar_t val[256]; val[0]=0;
@@ -10667,7 +12129,7 @@ void App::CommitPropEdit(bool apply) {
     std::wstring v(val);
 
     if (apply) {
-        // Plumb back into existing backing fields so all existing handlers remain valid.
+        // Commit property-grid edits into the editor input controls that feed the canonical transform handlers.
         if (n==L"Position X" && hwnd_posx_) SetWindowTextW(hwnd_posx_, v.c_str());
         else if (n==L"Position Y" && hwnd_posy_) SetWindowTextW(hwnd_posy_, v.c_str());
         else if (n==L"Position Z" && hwnd_posz_) SetWindowTextW(hwnd_posz_, v.c_str());
@@ -10702,8 +12164,8 @@ bool App::CopyDetailsBlockToClipboard() {
     for (int row : rows) {
         wchar_t name[128]{};
         wchar_t value[256]{};
-        ListView_GetItemText(hwnd_propgrid_, row, 0, name, 128);
-        ListView_GetItemText(hwnd_propgrid_, row, 1, value, 256);
+        ew_listview_get_item_text_w(hwnd_propgrid_, row, 0, name, 128);
+        ew_listview_get_item_text_w(hwnd_propgrid_, row, 1, value, 256);
         if (name[0] == 0) continue;
         out += name;
         out += L"=";
@@ -10806,7 +12268,7 @@ bool App::CopyFocusedSurfaceToClipboard() {
         GetWindowTextW(h, buf.data(), len + 1);
         return ew_clip_set_text_utf16(hwnd_main_, std::wstring(buf.data()));
     };
-    if (focus && (focus == hwnd_content_list_ || focus == hwnd_content_thumb_ || IsChild(hwnd_content_, focus))) {
+    if (focus && (focus == hwnd_content_list_ || focus == hwnd_content_thumb_ || focus == hwnd_asset_thumb_ || IsChild(hwnd_content_, focus))) {
         if (!content_selected_rel_utf8_.empty()) {
             (void)ew_clip_set_text_utf16(hwnd_main_, utf8_to_wide(content_selected_rel_utf8_));
             return true;
@@ -10856,13 +12318,15 @@ bool App::PasteFocusedSurfaceFromClipboard() {
 
     auto select_content_rel = [&](const std::string& rel_utf8)->bool {
         if (rel_utf8.empty()) return false;
-        HWND target = (focus == hwnd_content_thumb_ || IsChild(hwnd_content_thumb_, focus)) ? hwnd_content_thumb_ : hwnd_content_list_;
-        if (!target) target = hwnd_content_list_ ? hwnd_content_list_ : hwnd_content_thumb_;
+        HWND target = nullptr;
+        if (focus == hwnd_asset_thumb_ || IsChild(hwnd_asset_thumb_, focus)) target = hwnd_asset_thumb_;
+        else if (focus == hwnd_content_thumb_ || IsChild(hwnd_content_thumb_, focus)) target = hwnd_content_thumb_;
+        else target = hwnd_content_list_ ? hwnd_content_list_ : hwnd_content_thumb_;
         if (!target) return false;
         const int n = ListView_GetItemCount(target);
         for (int i = 0; i < n; ++i) {
             wchar_t wrel[512]{};
-            ListView_GetItemText(target, i, 0, wrel, 512);
+            ew_listview_get_item_text_w(target, i, 0, wrel, 512);
             if (wide_to_utf8(std::wstring(wrel)) != rel_utf8) continue;
             content_selection_sync_guard_ = true;
             if (hwnd_content_list_) {
@@ -10873,11 +12337,15 @@ bool App::PasteFocusedSurfaceFromClipboard() {
                 const int m = ListView_GetItemCount(hwnd_content_thumb_);
                 for (int j = 0; j < m; ++j) ListView_SetItemState(hwnd_content_thumb_, j, 0, LVIS_SELECTED | LVIS_FOCUSED);
             }
+            if (hwnd_asset_thumb_) {
+                const int m = ListView_GetItemCount(hwnd_asset_thumb_);
+                for (int j = 0; j < m; ++j) ListView_SetItemState(hwnd_asset_thumb_, j, 0, LVIS_SELECTED | LVIS_FOCUSED);
+            }
             if (hwnd_content_list_) {
                 const int m = ListView_GetItemCount(hwnd_content_list_);
                 for (int j = 0; j < m; ++j) {
                     wchar_t w2[512]{};
-                    ListView_GetItemText(hwnd_content_list_, j, 0, w2, 512);
+                    ew_listview_get_item_text_w(hwnd_content_list_, j, 0, w2, 512);
                     if (wide_to_utf8(std::wstring(w2)) == rel_utf8) {
                         ListView_SetItemState(hwnd_content_list_, j, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
                         ListView_EnsureVisible(hwnd_content_list_, j, FALSE);
@@ -10889,10 +12357,22 @@ bool App::PasteFocusedSurfaceFromClipboard() {
                 const int m = ListView_GetItemCount(hwnd_content_thumb_);
                 for (int j = 0; j < m; ++j) {
                     wchar_t w2[512]{};
-                    ListView_GetItemText(hwnd_content_thumb_, j, 0, w2, 512);
+                    ew_listview_get_item_text_w(hwnd_content_thumb_, j, 0, w2, 512);
                     if (wide_to_utf8(std::wstring(w2)) == rel_utf8) {
                         ListView_SetItemState(hwnd_content_thumb_, j, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
                         ListView_EnsureVisible(hwnd_content_thumb_, j, FALSE);
+                        break;
+                    }
+                }
+            }
+            if (hwnd_asset_thumb_) {
+                const int m = ListView_GetItemCount(hwnd_asset_thumb_);
+                for (int j = 0; j < m; ++j) {
+                    wchar_t w2[512]{};
+                    ew_listview_get_item_text_w(hwnd_asset_thumb_, j, 0, w2, 512);
+                    if (wide_to_utf8(std::wstring(w2)) == rel_utf8) {
+                        ListView_SetItemState(hwnd_asset_thumb_, j, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+                        ListView_EnsureVisible(hwnd_asset_thumb_, j, FALSE);
                         break;
                     }
                 }
@@ -10910,7 +12390,7 @@ bool App::PasteFocusedSurfaceFromClipboard() {
         for (size_t i = 0; i < ai_repo_rel_paths_utf8_.size(); ++i) {
             if (ai_repo_rel_paths_utf8_[i] != rel_utf8) continue;
             SendMessageW(hwnd_ai_repo_list_, LB_SETCURSEL, (WPARAM)i, 0);
-            SetAiPanelView(1u);
+            AiPanelSetView(1u);
             UpdateAiRepoSelection();
             AppendOutputUtf8("REPO: selected from clipboard path");
             return true;
@@ -10923,7 +12403,7 @@ bool App::PasteFocusedSurfaceFromClipboard() {
         for (size_t i = 0; i < ai_coh_result_paths_utf8_.size(); ++i) {
             if (ai_coh_result_paths_utf8_[i] != rel_utf8) continue;
             SendMessageW(hwnd_ai_coh_results_, LB_SETCURSEL, (WPARAM)i, 0);
-            SetAiPanelView(2u);
+            AiPanelSetView(2u);
             UpdateAiCoherenceSelection();
             if (scene_) scene_->SetCoherenceHighlightPath(rel_utf8);
             AppendOutputUtf8("COH: selected from clipboard path");
@@ -10932,7 +12412,7 @@ bool App::PasteFocusedSurfaceFromClipboard() {
         return false;
     };
 
-    if (focus && (focus == hwnd_content_list_ || focus == hwnd_content_thumb_ || IsChild(hwnd_content_, focus))) {
+    if (focus && (focus == hwnd_content_list_ || focus == hwnd_content_thumb_ || focus == hwnd_asset_thumb_ || IsChild(hwnd_content_, focus))) {
         if (select_content_rel(clip_utf8)) return true;
     }
     if (focus && (focus == hwnd_ai_repo_list_ || focus == hwnd_ai_repo_preview_ || IsChild(hwnd_ai_view_repo_, focus))) {
@@ -11199,8 +12679,6 @@ void App::EmitEditorRedo() {
     (void)ew_runtime_submit_control_packet(&scene_->sm, &cp);
 }
 
-}
-
 void App::EmitEditorGizmo() {
     if (!scene_) return;
     EwControlPacket cp{};
@@ -11320,7 +12798,6 @@ void App::AppendOutputUtf8(const std::string& line) {
 }
 
 void App::SubmitAiChatTextUtf8(uint32_t chat_idx_u32, const std::string& utf8, bool append_user_line) {
-    if (!scene_) return;
     if (chat_idx_u32 >= AI_CHAT_MAX) chat_idx_u32 = ai_tab_index_u32_;
 
     const std::string trimmed = ew_trim_ascii_copy(utf8);
@@ -11331,114 +12808,193 @@ void App::SubmitAiChatTextUtf8(uint32_t chat_idx_u32, const std::string& utf8, b
         if (chat_idx_u32 == ai_tab_index_u32_) AiChatRenderSelected();
     }
 
-    scene_->SubmitAiChatLine(trimmed, chat_idx_u32, ai_chat_mode_u32_[chat_idx_u32]);
-    RefreshAiChatCortex(chat_idx_u32);
-    RequestChatGptResearchReply(chat_idx_u32, trimmed);
+    const bool route_native = AiChatProviderRoutesNative(chat_idx_u32);
+    const bool route_api = AiChatProviderRoutesApi(chat_idx_u32);
+
+    if (route_native && scene_) {
+        scene_->SubmitAiChatLine(trimmed, chat_idx_u32, ai_chat_mode_u32_[chat_idx_u32]);
+        RefreshAiChatCortex(chat_idx_u32);
+    } else if (route_native && !scene_) {
+        SetAiChatWorkflowEvent(chat_idx_u32, L"Aethen route unavailable (scene not ready)", false);
+    }
+
+    if (route_api) {
+        RequestChatGptResearchReply(chat_idx_u32, trimmed, ResolveAiChatApiModelUtf8(chat_idx_u32));
+    } else {
+        SetAiChatWorkflowEvent(chat_idx_u32, L"Aethen route selected", false);
+        if (hwnd_ai_panel_tool_status_ && chat_idx_u32 == ai_tab_index_u32_) {
+            std::wstring model_w = ai_chat_native_model_w_[chat_idx_u32];
+            if (model_w.empty()) model_w = L"native:auto";
+            SetWindowTextW(hwnd_ai_panel_tool_status_, (std::wstring(L"Aethen route active (") + model_w + L").").c_str());
+        }
+    }
 }
 
-std::string App::BuildChatGptResearchPromptUtf8(uint32_t chat_idx_u32, const std::string& user_utf8) {
-    std::string prompt;
-    prompt.reserve(8192u);
-    prompt += "USER_QUERY\n";
-    prompt += user_utf8;
-    prompt += "\n\n";
-    prompt += "Treat the project spectrum lines as compressed eigen-spectra identifiers. "
-              "Treat coherence hits and navigation spine details as the repository coherence view. "
-              "Use only the provided repo context and say exactly which file or coherence query should be inspected next if evidence is thin.\n\n";
+std::string App::BuildChatGptReasoningInputUtf8(uint32_t chat_idx_u32, const std::string& user_utf8) {
+    EwChatGptReasoningContext ctx{};
+    ctx.user_query_utf8 = user_utf8;
+    ctx.chat_mode_utf8 = ew_chat_mode_name_ascii_local(ai_chat_mode_u32_[chat_idx_u32]);
+    ctx.provider_utf8 = ew_ai_provider_name_ascii_local(ai_chat_provider_u32_[chat_idx_u32]);
+    ctx.model_utf8 = ResolveAiChatApiModelUtf8(chat_idx_u32);
+    if (ctx.model_utf8.empty()) ctx.model_utf8 = ew_openai_default_model_utf8();
+    ctx.viewport_live_mode_enabled = live_mode_enabled_;
+    ctx.viewport_resonance_view_enabled = resonance_view_;
+    ctx.viewport_confinement_particles_enabled = confinement_particles_enabled_;
+    ctx.sequencer_play_enabled = seq_play_enabled_;
+    ctx.sequencer_stress_overlay_enabled = seq_stress_overlay_enabled_;
+    ctx.spectrum_band_i32 = spectrum_band_i32_;
+    ctx.spectrum_phase_f32 = spectrum_phase_f32_;
+    ctx.editor_selection_count_u32 = editor_selection_count_u32_;
+    ctx.sandbox_center_xyz_q32_32_utf8 = "unavailable";
+    ctx.sandbox_size_xyz_q32_32_utf8 = "unavailable";
+    ctx.pending_patch_scope_root_utf8 = wide_to_utf8(ai_chat_patch_scope_root_w_[chat_idx_u32]);
+    ctx.pending_patch_scope_file_count_u32 = ai_chat_patch_scope_file_count_u32_[chat_idx_u32];
+    ctx.pending_patch_utf8 = wide_to_utf8(ai_chat_patch_w_[chat_idx_u32]);
+    ew_clip_text_bytes_local(ctx.pending_patch_utf8, 4096u);
 
-    if (!scene_) return prompt;
+    if (!scene_) {
+        return ew_serialize_chatgpt_reasoning_context_json_local(ctx);
+    }
 
     RefreshAiNavigationSpine(chat_idx_u32);
 
+    ctx.canonical_tick_u64 = scene_->sm.canonical_tick;
+    ctx.runtime_play_enabled = (scene_->sm.sim_world_play_u32 != 0u);
+    ctx.fixed_dt_ms_s32 = scene_->sm.project_settings.simulation.fixed_dt_ms_s32;
+    ctx.object_count_u32 = (uint32_t)scene_->objects.size();
+
+    ctx.global_coherence_q15 = scene_->sm.global_coherence.global_q15;
+    ctx.lang_coherence_q15 = scene_->sm.global_coherence.lang_q15;
+    ctx.phys_coherence_q15 = scene_->sm.global_coherence.phys_q15;
+    ctx.crawl_coherence_q15 = scene_->sm.global_coherence.crawl_q15;
+    ctx.exp_coherence_q15 = scene_->sm.global_coherence.exp_q15;
+    ctx.coherence_gate_min_q15 = scene_->sm.global_coherence_gate_min_q15;
+
+    if (scene_->selected >= 0 && scene_->selected < (int)scene_->objects.size()) {
+        const auto& o = scene_->objects[(size_t)scene_->selected];
+        ctx.selected_object_present = true;
+        ctx.selected_object_name_utf8 = o.name_utf8;
+        ctx.selected_object_id_u64 = o.object_id_u64;
+        ctx.selected_object_anchor_id_u32 = o.anchor_id_u32;
+        ctx.selected_object_position_m_utf8 = ew_format_vec3_f32_local(o.xf.pos[0], o.xf.pos[1], o.xf.pos[2]);
+        ctx.selected_object_radius_m_f32 = o.radius_m_f32;
+        ctx.selected_object_atmosphere_thickness_m_f32 = o.atmosphere_thickness_m_f32;
+        ctx.selected_object_emissive_f32 = o.emissive_f32;
+        ctx.selected_object_pbr_scan_u32 = (uint32_t)o.pbr_scan_u8;
+        ctx.selected_object_ai_training_meta_ready_u32 = (uint32_t)o.ai_training_meta_ready_u8;
+        ctx.selected_object_material_meta_hint_utf8 = o.material_meta_hint_utf8;
+        ctx.selected_object_dna_present = true;
+        ctx.selected_object_dna = o.object_dna;
+        const EwObjectDnaDerived dna = ew_object_dna_derive(o.object_dna);
+        ctx.selected_object_confinement_effective_hz_f32 = dna.confinement_effective_hz_f32;
+        ctx.selected_object_existence_resonance_hz_f32 = dna.existence_resonance_hz_f32;
+        for (size_t i = 0; i < 6u; ++i) {
+            ctx.selected_object_manifold_6dof_hz_f32[i] = dna.manifold_6dof_hz_f32[i];
+        }
+        ctx.selected_object_manifold_6dof_l1_hz_f32 = dna.manifold_6dof_l1_hz_f32;
+    }
+
+    ctx.ai_enabled = (scene_->sm.ai_enabled_u32 != 0u);
+    ctx.ai_learning_enabled = (scene_->sm.ai_learning_enabled_u32 != 0u);
+    ctx.ai_crawling_enabled = (scene_->sm.ai_crawling_enabled_u32 != 0u);
+    ctx.vault_experiments_committed_u64 = scene_->sm.vault_experiments_committed_u64;
+    ctx.vault_experiments_ephemeral_u64 = scene_->sm.vault_experiments_ephemeral_u64;
+    ctx.vault_allowlist_pages_u64 = scene_->sm.vault_allowlist_pages_u64;
+    ctx.vault_resonant_pages_u64 = scene_->sm.vault_resonant_pages_u64;
+
+    (void)scene_->SnapshotRepoReaderStatus(ctx.repo_reader_status_utf8);
+
     std::vector<SubstrateManager::EwChatMemoryEntry> entries;
-    std::string cortex_summary_utf8;
-    (void)scene_->SnapshotAiChatMemory(ai_chat_mode_u32_[chat_idx_u32], 6u, entries, cortex_summary_utf8);
-    ew_append_prompt_section(prompt, "CHAT_CORTEX_SUMMARY", cortex_summary_utf8);
+    (void)scene_->SnapshotAiChatMemory(ai_chat_mode_u32_[chat_idx_u32], 6u, entries, ctx.chat_cortex_summary_utf8);
+    for (const auto& entry : entries) {
+        ctx.recent_chat_memory_utf8.push_back(entry.text_utf8);
+    }
 
-    if (!entries.empty()) {
-        std::string recent_utf8;
-        for (size_t i = 0; i < entries.size(); ++i) {
-            recent_utf8 += std::to_string((unsigned long long)(i + 1u));
-            recent_utf8 += ". ";
-            recent_utf8 += entries[i].text_utf8;
-            recent_utf8 += "\n";
+    SubstrateManager::EwProjectLinkEntry linked_project{};
+    if (scene_->SnapshotAiChatProject(chat_idx_u32, linked_project)) {
+        ctx.linked_project_root_utf8 = linked_project.project_root_utf8;
+        const uint32_t rel_cap_u32 = (uint32_t)(sizeof(linked_project.rel_paths_utf8) / sizeof(linked_project.rel_paths_utf8[0]));
+        const uint32_t rel_n = std::min<uint32_t>(std::min<uint32_t>(linked_project.rel_path_count_u32, rel_cap_u32), 12u);
+        for (uint32_t i = 0u; i < rel_n; ++i) {
+            if (!linked_project.rel_paths_utf8[i].empty()) ctx.linked_project_paths_utf8.push_back(linked_project.rel_paths_utf8[i]);
         }
-        ew_append_prompt_section(prompt, "RECENT_CHAT_MEMORY", recent_utf8);
     }
 
-    std::vector<std::string> spectrum_lines_utf8;
-    if (scene_->SnapshotAiProjectSpectrumLines(chat_idx_u32, 8u, spectrum_lines_utf8) && !spectrum_lines_utf8.empty()) {
-        std::string spectrum_utf8;
-        for (const std::string& line : spectrum_lines_utf8) {
-            spectrum_utf8 += "- ";
-            spectrum_utf8 += line;
-            spectrum_utf8 += "\n";
-        }
-        ew_append_prompt_section(prompt, "PROJECT_EIGEN_SPECTRA", spectrum_utf8);
-    }
+    (void)scene_->SnapshotAiProjectSpectrumLines(chat_idx_u32, 8u, ctx.project_eigen_spectra_utf8);
+    (void)scene_->SnapshotCoherenceStats(ctx.coherence_view_stats_utf8);
+    ctx.coherence_navigation_spine_utf8 = wide_to_utf8(BuildAiNavigationSpineText(chat_idx_u32));
+    ctx.primary_path_utf8 = ResolveAiChatPrimaryPathUtf8(chat_idx_u32);
 
-    std::string coherence_stats_utf8;
-    if (scene_->SnapshotCoherenceStats(coherence_stats_utf8)) {
-        ew_append_prompt_section(prompt, "COHERENCE_VIEW_STATS", coherence_stats_utf8);
-    }
-
-    const std::string spine_utf8 = wide_to_utf8(BuildAiNavigationSpineText(chat_idx_u32));
-    ew_append_prompt_section(prompt, "COHERENCE_NAVIGATION_SPINE", spine_utf8);
-
-    const std::string primary_path_utf8 = ResolveAiChatPrimaryPathUtf8(chat_idx_u32);
-    ew_append_prompt_section(prompt, "PRIMARY_PATH", primary_path_utf8);
-
-    if (!primary_path_utf8.empty()) {
+    if (!ctx.primary_path_utf8.empty()) {
         std::vector<genesis::GeCoherenceHit> hits;
         std::string err_utf8;
-        if (scene_->SnapshotRepoFileCoherenceHits(primary_path_utf8, 8u, hits, &err_utf8) && !hits.empty()) {
-            std::string hits_utf8;
-            for (size_t i = 0; i < hits.size(); ++i) {
-                hits_utf8 += std::to_string((unsigned long long)(i + 1u));
-                hits_utf8 += ". ";
-                hits_utf8 += hits[i].rel_path_utf8;
-                hits_utf8 += " score=";
-                hits_utf8 += std::to_string((unsigned long long)hits[i].score_u32);
-                hits_utf8 += "\n";
+        if (scene_->SnapshotRepoFileCoherenceHits(ctx.primary_path_utf8, 8u, hits, &err_utf8)) {
+            for (const auto& hit : hits) {
+                ctx.primary_path_coherence_links_utf8.push_back(hit.rel_path_utf8 + " score=" + std::to_string((unsigned long long)hit.score_u32));
             }
-            ew_append_prompt_section(prompt, "PRIMARY_PATH_COHERENCE_LINKS", hits_utf8);
         }
-
-        std::string preview_utf8;
-        if (scene_->SnapshotRepoFilePreview(primary_path_utf8, 2048u, preview_utf8, &err_utf8) && !preview_utf8.empty()) {
-            ew_append_prompt_section(prompt, "PRIMARY_PATH_PREVIEW", preview_utf8);
-        }
+        (void)scene_->SnapshotRepoFilePreview(ctx.primary_path_utf8, 2048u, ctx.primary_path_preview_utf8, &err_utf8);
+        ew_clip_text_bytes_local(ctx.primary_path_preview_utf8, 2048u);
     }
 
-    prompt += "ANSWER_POLICY\n";
-    prompt += "- Be concise and practical.\n";
-    prompt += "- Distinguish facts from inferences.\n";
-    prompt += "- Prefer repo-aware research guidance over generic advice.\n";
-    return prompt;
+    std::string vault_err_utf8;
+    (void)scene_->SnapshotVaultEntries(6u, ctx.vault_entries_utf8, &vault_err_utf8);
+    if (!ctx.vault_entries_utf8.empty()) {
+        ctx.vault_latest_entry_utf8 = ctx.vault_entries_utf8.front();
+        (void)scene_->SnapshotVaultEntryPreview(ctx.vault_latest_entry_utf8, 2048u, ctx.vault_latest_preview_utf8, &vault_err_utf8);
+        ew_clip_text_bytes_local(ctx.vault_latest_preview_utf8, 2048u);
+    }
+
+    std::vector<std::string> domain_lines_utf8;
+    domain_lines_utf8.reserve((size_t)scene_->sm.domain_crawl_stats_n_u32);
+    for (uint32_t i = 0u; i < scene_->sm.domain_crawl_stats_n_u32; ++i) {
+        const auto& s = scene_->sm.domain_crawl_stats[i];
+        const uint32_t target_u32 = (s.pages_target_u32 == 0u) ? 1u : s.pages_target_u32;
+        const uint32_t pct_u32 = (uint32_t)std::min<uint64_t>(100ull, ((uint64_t)s.pages_seen_u32 * 100ull) / (uint64_t)target_u32);
+        domain_lines_utf8.push_back(s.domain_ascii +
+                                    " seen=" + std::to_string((unsigned long long)s.pages_seen_u32) +
+                                    " target=" + std::to_string((unsigned long long)target_u32) +
+                                    " pct=" + std::to_string((unsigned long long)pct_u32));
+    }
+    std::sort(domain_lines_utf8.begin(), domain_lines_utf8.end());
+    if (domain_lines_utf8.size() > 8u) domain_lines_utf8.resize(8u);
+    ctx.domain_crawl_lines_utf8 = std::move(domain_lines_utf8);
+
+    ew_clip_text_bytes_local(ctx.repo_reader_status_utf8, 512u);
+    ew_clip_text_bytes_local(ctx.chat_cortex_summary_utf8, 1024u);
+    ew_clip_text_bytes_local(ctx.coherence_view_stats_utf8, 1024u);
+    ew_clip_text_bytes_local(ctx.coherence_navigation_spine_utf8, 2048u);
+    ew_clip_text_bytes_local(ctx.selected_object_material_meta_hint_utf8, 512u);
+
+    return ew_serialize_chatgpt_reasoning_context_json_local(ctx);
 }
 
-void App::RequestChatGptResearchReply(uint32_t chat_idx_u32, const std::string& user_utf8) {
+void App::RequestChatGptResearchReply(uint32_t chat_idx_u32, const std::string& user_utf8, const std::string& model_utf8) {
     std::string key_err_utf8;
     if (!ew_openai_chat_available(nullptr, &key_err_utf8)) return;
 
-    const std::string prompt_utf8 = BuildChatGptResearchPromptUtf8(chat_idx_u32, user_utf8);
+    const std::string prompt_utf8 = BuildChatGptReasoningInputUtf8(chat_idx_u32, user_utf8);
+    const std::string model_trimmed_utf8 = ew_trim_ascii_copy(model_utf8);
+    const std::string selected_model_utf8 = model_trimmed_utf8.empty() ? std::string(ew_openai_default_model_utf8()) : model_trimmed_utf8;
     const std::string instructions_utf8 =
         "You are ChatGPT embedded inside the Genesis Engine Vulkan application. "
-        "The user wants research and reasoning grounded in the app's existing AI substrate. "
-        "Use the provided chat cortex, project eigen-spectra digest, coherence view, and primary file preview as canonical context. "
-        "Do not invent repository facts. If web research is helpful, use it and clearly separate repo facts from external facts.";
+        "The request input is a canonical JSON snapshot exported from the engine's live simulation, AI runtime, coherence view, project work surface, and AI vault. "
+        "Treat project_eigen_spectra as compressed Eigen spectra identifiers and treat coherence_navigation_spine plus coherence_view_stats as the coherence view. "
+        "Reason over the simulation and AI-accessible work surfaces in that JSON first, then use web research only for external facts. "
+        "Do not invent repository or simulation facts. Distinguish facts, inferences, and external research. "
+        "If evidence is thin, say exactly which file, object, vault artifact, or coherence query should be inspected next.";
 
     SetAiChatWorkflowEvent(chat_idx_u32, L"ChatGPT request queued", false);
     if (hwnd_ai_panel_tool_status_ && chat_idx_u32 == ai_tab_index_u32_) {
-        SetWindowTextW(hwnd_ai_panel_tool_status_, L"ChatGPT: researching with project spectra and coherence context...");
+        SetWindowTextW(hwnd_ai_panel_tool_status_, L"ChatGPT: reasoning over live simulation, coherence, spectra, and AI vault context...");
     }
 
     const HWND notify_hwnd = hwnd_main_;
-    std::thread([notify_hwnd, chat_idx_u32, instructions_utf8, prompt_utf8]() {
+    std::thread([notify_hwnd, chat_idx_u32, instructions_utf8, prompt_utf8, selected_model_utf8]() {
         EwOpenAiTextRequest request{};
         request.instructions_utf8 = instructions_utf8;
         request.input_utf8 = prompt_utf8;
-        request.model_utf8 = ew_openai_default_model_utf8();
+        request.model_utf8 = selected_model_utf8;
         request.enable_web_search = true;
         request.max_output_tokens_u32 = 900u;
 
@@ -11496,11 +13052,19 @@ void App::ExecuteExternalCommandUtf8(const std::string& line) {
             AppendOutputUtf8(std::string("REMOTE_VIEWPORT live=") + (live_mode_enabled_ ? "1" : "0"));
             return;
         }
-        if (args_lower.rfind("confinement ", 0) == 0 || args_lower.rfind("particles ", 0) == 0) {
-            const size_t arg_off = (args_lower.rfind("confinement ", 0) == 0) ? 12u : 10u;
-            confinement_particles_enabled_ = ew_parse_bool_ascii(args.substr(arg_off), confinement_particles_enabled_);
-            AppendOutputUtf8(std::string("REMOTE_VIEWPORT confinement=") + (confinement_particles_enabled_ ? "1" : "0"));
+        if (args_lower.rfind("confinement ", 0) == 0 || args_lower.rfind("particles ", 0) == 0 || args_lower.rfind("photon ", 0) == 0) {
+            const size_t arg_off = (args_lower.rfind("confinement ", 0) == 0) ? 12u : ((args_lower.rfind("particles ", 0) == 0) ? 10u : 7u);
+            const std::string mode = ew_lower_ascii_copy(ew_trim_ascii_copy(args.substr(arg_off)));
+            if (mode == "status") {
+                AppendOutputUtf8(BuildPhotonConfinementStatusUtf8());
+                return;
+            }
+            if (mode == "toggle") confinement_particles_enabled_ = !confinement_particles_enabled_;
+            else confinement_particles_enabled_ = ew_parse_bool_ascii(mode, confinement_particles_enabled_);
+            AppendOutputUtf8(BuildPhotonConfinementStatusUtf8());
             if (hwnd_viewport_) InvalidateRect(hwnd_viewport_, nullptr, FALSE);
+            RefreshViewportResonanceOverlay();
+            RefreshTopBarChrome();
             return;
         }
         if (args_lower.rfind("resonance ", 0) == 0) {
@@ -11520,6 +13084,7 @@ void App::ExecuteExternalCommandUtf8(const std::string& line) {
                              " confinement=" + (confinement_particles_enabled_ ? "1" : "0") +
                              " resonance=" + (resonance_view_ ? "1" : "0") +
                              " tick=" + std::to_string((unsigned long long)scene_->sm.canonical_tick));
+            AppendOutputUtf8(BuildPhotonConfinementStatusUtf8());
             return;
         }
     }
@@ -11589,6 +13154,18 @@ LRESULT App::WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         case WM_CTLCOLORSTATIC: {
             ew_theme_init_once();
             HDC hdc = (HDC)wparam;
+            HWND hctrl = (HWND)lparam;
+            if (hctrl == hwnd_dock_splitter_) {
+                SetBkMode(hdc, OPAQUE);
+                SetBkColor(hdc, g_theme.border_soft);
+                return (INT_PTR)g_brush_splitter;
+            }
+            if (hctrl == hwnd_topbar_ || hctrl == hwnd_topbar_title_ || hctrl == hwnd_topbar_status_) {
+                SetBkMode(hdc, TRANSPARENT);
+                SetBkColor(hdc, g_theme.bg_elevated);
+                SetTextColor(hdc, hctrl == hwnd_topbar_title_ ? g_theme.gold_hot : g_theme.text);
+                return (INT_PTR)g_brush_topbar;
+            }
             SetBkMode(hdc, TRANSPARENT);
             SetTextColor(hdc, g_theme.text);
             SetBkColor(hdc, g_theme.panel);
@@ -11622,11 +13199,27 @@ LRESULT App::WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 client_w_ = rc.right - rc.left;
                 client_h_ = rc.bottom - rc.top;
                 LayoutChildren(client_w_, client_h_);
+                RefreshTopBarChrome();
                 resized_ = true;
             } else if (hwnd == hwnd_ai_panel_) {
                 LayoutAiPanelChildren();
             }
         } break;
+        case WM_NCHITTEST: {
+            const LRESULT hit = DefWindowProcW(hwnd, msg, wparam, lparam);
+            if (hit != HTCLIENT || hwnd != hwnd_main_ || !ew_editor_build_enabled || !hwnd_topbar_) return hit;
+            POINT pt{ GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) };
+            ScreenToClient(hwnd_main_, &pt);
+            const UINT main_dpi_now = hwnd_main_ ? GetDpiForWindow(hwnd_main_) : 96u;
+            const int topbar_h = MulDiv(44, (int)main_dpi_now, 96);
+            if (pt.y < 0 || pt.y >= topbar_h) return hit;
+            HWND target = ChildWindowFromPointEx(hwnd_main_, pt, CWP_SKIPDISABLED | CWP_SKIPINVISIBLE | CWP_SKIPTRANSPARENT);
+            if (!target || target == hwnd_main_ || target == hwnd_topbar_ ||
+                target == hwnd_topbar_title_ || target == hwnd_topbar_status_ || target == hwnd_topbar_project_) {
+                return HTCAPTION;
+            }
+            return hit;
+        }
         case WM_COMMAND: {
             const int id = LOWORD(wparam);
             const int code = HIWORD(wparam);
@@ -11735,6 +13328,23 @@ LRESULT App::WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 
             // Menu actions (HIWORD==0).
             if (code == 0) {
+                if (id == 1607) { ShowTopBarWorkbenchMenu(); return 0; }
+                if (id == 1601) { SendMessageW(hwnd_main_, WM_COMMAND, MAKEWPARAM(2040, BN_CLICKED), 0); return 0; }
+                if (id == 1602) { SendMessageW(hwnd_main_, WM_COMMAND, MAKEWPARAM(2041, BN_CLICKED), 0); return 0; }
+                if (id == 1603) { SendMessageW(hwnd_main_, WM_COMMAND, MAKEWPARAM(9209, 0), 0); return 0; }
+                if (id == 1604) {
+                    confinement_particles_enabled_ = !confinement_particles_enabled_;
+                    AppendOutputUtf8(BuildPhotonConfinementStatusUtf8());
+                    if (hwnd_viewport_) InvalidateRect(hwnd_viewport_, nullptr, FALSE);
+                    RefreshViewportResonanceOverlay();
+                    RefreshTopBarChrome();
+                    return 0;
+                }
+                if (id == 1605) { SendMessageW(hwnd_main_, WM_COMMAND, MAKEWPARAM(9201, 0), 0); return 0; }
+                if (id == 1606) { SendMessageW(hwnd_main_, WM_COMMAND, MAKEWPARAM(9202, 0), 0); return 0; }
+                if (id == 1609) { ShowWindow(hwnd_main_, SW_MINIMIZE); return 0; }
+                if (id == 1610) { ShowWindow(hwnd_main_, IsZoomed(hwnd_main_) ? SW_RESTORE : SW_MAXIMIZE); return 0; }
+                if (id == 1611) { SendMessageW(hwnd_main_, WM_CLOSE, 0, 0); return 0; }
                 if (id >= 2760 && id < 2760 + (int)node_palette_entries_.size()) {
                     const size_t palette_idx = (size_t)(id - 2760);
                     (void)SpawnNodePaletteEntry(palette_idx);
@@ -11745,6 +13355,7 @@ LRESULT App::WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                     content_visible_ = !content_visible_;
                     if (hwnd_content_) ShowWindow(hwnd_content_, content_visible_ ? SW_SHOW : SW_HIDE);
                     LayoutChildren(client_w_, client_h_);
+                    RefreshTopBarChrome();
                     return 0;
                 }
                 if (id == 9202) { ToggleAiPanel(); return 0; }
@@ -11772,6 +13383,40 @@ LRESULT App::WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             if (id == 4898 && code == BN_CLICKED) { ai_chat_mode_u32_[ai_tab_index_u32_] = SubstrateManager::EW_CHAT_MEMORY_MODE_TALK; RefreshAiChatCortex(ai_tab_index_u32_); return 0; }
             if (id == 4899 && code == BN_CLICKED) { ai_chat_mode_u32_[ai_tab_index_u32_] = SubstrateManager::EW_CHAT_MEMORY_MODE_CODE; RefreshAiChatCortex(ai_tab_index_u32_); return 0; }
             if (id == 4900 && code == BN_CLICKED) { ai_chat_mode_u32_[ai_tab_index_u32_] = SubstrateManager::EW_CHAT_MEMORY_MODE_SIM; RefreshAiChatCortex(ai_tab_index_u32_); return 0; }
+            if (id == 4910 && code == CBN_SELCHANGE) {
+                const uint32_t idx = (ai_tab_index_u32_ < AI_CHAT_MAX) ? ai_tab_index_u32_ : 0u;
+                const int sel = hwnd_ai_chat_provider_ ? (int)SendMessageW(hwnd_ai_chat_provider_, CB_GETCURSEL, 0, 0) : -1;
+                if (sel == 0) ai_chat_provider_u32_[idx] = AI_CHAT_PROVIDER_NATIVE;
+                else if (sel == 1) ai_chat_provider_u32_[idx] = AI_CHAT_PROVIDER_CHATGPT;
+                else ai_chat_provider_u32_[idx] = AI_CHAT_PROVIDER_HYBRID;
+                RefreshAiChatProviderControls(idx);
+                const wchar_t* provider_w = (ai_chat_provider_u32_[idx] == AI_CHAT_PROVIDER_NATIVE) ? L"Aethen" :
+                                            ((ai_chat_provider_u32_[idx] == AI_CHAT_PROVIDER_CHATGPT) ? L"ChatGPT API" : L"Hybrid (Both)");
+                SetAiChatWorkflowEvent(idx, std::wstring(L"Provider selected: ") + provider_w, false);
+                if (hwnd_ai_panel_tool_status_) {
+                    SetWindowTextW(hwnd_ai_panel_tool_status_, (std::wstring(L"Chat provider: ") + provider_w + L".").c_str());
+                }
+                RefreshAiPanelChrome();
+                return 0;
+            }
+            if (id == 4911 && code == CBN_SELCHANGE) {
+                const uint32_t idx = (ai_tab_index_u32_ < AI_CHAT_MAX) ? ai_tab_index_u32_ : 0u;
+                if (hwnd_ai_chat_model_) {
+                    const int sel = (int)SendMessageW(hwnd_ai_chat_model_, CB_GETCURSEL, 0, 0);
+                    if (sel >= 0) {
+                        wchar_t model_w[256]{};
+                        SendMessageW(hwnd_ai_chat_model_, CB_GETLBTEXT, (WPARAM)sel, (LPARAM)model_w);
+                        if (ai_chat_provider_u32_[idx] == AI_CHAT_PROVIDER_NATIVE) ai_chat_native_model_w_[idx] = model_w;
+                        else ai_chat_api_model_w_[idx] = model_w;
+                        SetAiChatWorkflowEvent(idx, std::wstring(L"Model selected: ") + model_w, false);
+                        if (hwnd_ai_panel_tool_status_) {
+                            SetWindowTextW(hwnd_ai_panel_tool_status_, (std::wstring(L"Chat model: ") + model_w + L".").c_str());
+                        }
+                    }
+                }
+                RefreshAiPanelChrome();
+                return 0;
+            }
             if (id == 4864 && code == BN_CLICKED) { RefreshAiRepoPane(); return 0; }
             if (id == 4865 && code == BN_CLICKED) {
                 std::wstring txt = ew_clip_get_text_utf16(hwnd_ai_panel_);
@@ -11963,19 +13608,6 @@ LRESULT App::WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 return 0;
             }
 
-            auto send_toggle = [&](EwControlPacketKind k, bool enabled) {
-                if (!scene_) return;
-                EwControlPacket cp{};
-                cp.kind = k;
-                cp.source_u16 = 1;
-                cp.tick_u64 = scene_->sm.canonical_tick;
-                if (k == EwControlPacketKind::SimSetPlay) cp.payload.sim_set_play.enabled_u8 = enabled ? 1u : 0u;
-                else if (k == EwControlPacketKind::AiSetEnabled) cp.payload.ai_set_enabled.enabled_u8 = enabled ? 1u : 0u;
-                else if (k == EwControlPacketKind::AiSetLearning) cp.payload.ai_set_learning.enabled_u8 = enabled ? 1u : 0u;
-                else if (k == EwControlPacketKind::AiSetCrawling) cp.payload.ai_set_crawling.enabled_u8 = enabled ? 1u : 0u;
-                (void)ew_runtime_submit_control_packet(&scene_->sm, &cp);
-            };
-
             // AI/sim toggle switches.
             if (id == 2731 && code == EN_CHANGE) { RefreshNodePanel(); return 0; }
             if (code == BN_CLICKED) {
@@ -12029,65 +13661,45 @@ LRESULT App::WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                         return 0;
                     }
                     node_export_preview_w_.clear();
-                    node_export_preview_w_ += L"Node: " + label_w + L"
-";
-                    node_export_preview_w_ += L"Scope: " + scope_w + L"
-";
-                    node_export_preview_w_ += L"Placement: " + placement_w + L"
-";
-                    node_export_preview_w_ += L"Language hint: " + hint_w + (locked ? L"  [locked]" : L"") + L"
-";
-                    node_export_preview_w_ += L"Language rule: " + policy_w + L"
-";
+                    node_export_preview_w_ += L"Node: " + label_w + L"\r\n";
+                    node_export_preview_w_ += L"Scope: " + scope_w + L"\r\n";
+                    node_export_preview_w_ += L"Placement: " + placement_w + L"\r\n";
+                    node_export_preview_w_ += L"Language hint: " + hint_w + (locked ? L"  [locked]" : L"") + L"\r\n";
+                    node_export_preview_w_ += L"Language rule: " + policy_w + L"\r\n";
                     if (ai_tab_index_u32_ < AI_CHAT_MAX && !ai_chat_project_root_w_[ai_tab_index_u32_].empty()) {
-                        node_export_preview_w_ += L"Linked project root: " + ai_chat_project_root_w_[ai_tab_index_u32_] + L"
-";
+                        node_export_preview_w_ += L"Linked project root: " + ai_chat_project_root_w_[ai_tab_index_u32_] + L"\r\n";
                     }
                     std::string stage_summary, stage_err;
-                    EigenWare::SubstrateManager::EwStagedExportBundle bundle{};
+                    SubstrateManager::EwStagedExportBundle bundle{};
                     const bool staged = scene_ && scene_->sm.ui_stage_node_export_bundle(ai_tab_index_u32_, wide_to_utf8(lookup_w), wide_to_utf8(label_w), wide_to_utf8(scope_w), wide_to_utf8(hint_w), wide_to_utf8(policy_w), locked, stage_summary, &stage_err);
                     const bool has_bundle = scene_ && scene_->sm.ui_snapshot_latest_export_bundle(ai_tab_index_u32_, bundle);
                     if (!staged && !stage_err.empty()) {
-                        node_export_preview_w_ += L"Stage status: blocked
-Reason: " + utf8_to_wide(stage_err) + L"
-";
+                        node_export_preview_w_ += L"Stage status: blocked\r\nReason: " + utf8_to_wide(stage_err) + L"\r\n";
                         if (hwnd_ai_status_) SetWindowTextW(hwnd_ai_status_, L"Node Graph: export staging blocked. Link a project/work substrate or choose a materializable export lane.");
                     } else if (has_bundle) {
                         wchar_t line_stage[256]{};
-                        swprintf(line_stage, 256, L"Stage id: %llu
-", (unsigned long long)bundle.stage_id_u64);
+                        swprintf(line_stage, 256, L"Stage id: %llu\r\n", (unsigned long long)bundle.stage_id_u64);
                         node_export_preview_w_ += line_stage;
-                        node_export_preview_w_ += L"Stage status: " + utf8_to_wide(bundle.stage_status_utf8) + L"
-";
-                        node_export_preview_w_ += L"Bundle: " + utf8_to_wide(bundle.bundle_summary_utf8) + L"
-";
-                        if (!bundle.operation_label_utf8.empty()) node_export_preview_w_ += L"Operation: " + utf8_to_wide(bundle.operation_label_utf8) + L"
-";
-                        if (!bundle.continuation_summary_utf8.empty()) node_export_preview_w_ += L"Continuation: " + utf8_to_wide(bundle.continuation_summary_utf8) + L"
-";
-                        if (!bundle.runtime_split_summary_utf8.empty()) node_export_preview_w_ += L"Runtime/editor audit: " + utf8_to_wide(bundle.runtime_split_summary_utf8) + L"
-";
-                        if (!bundle.linked_project_root_utf8.empty()) node_export_preview_w_ += L"Bound substrate root: " + utf8_to_wide(bundle.linked_project_root_utf8) + L"
-";
-                        node_export_preview_w_ += L"Staged targets:
-";
+                        node_export_preview_w_ += L"Stage status: " + utf8_to_wide(bundle.stage_status_utf8) + L"\r\n";
+                        node_export_preview_w_ += L"Bundle: " + utf8_to_wide(bundle.bundle_summary_utf8) + L"\r\n";
+                        if (!bundle.operation_label_utf8.empty()) node_export_preview_w_ += L"Operation: " + utf8_to_wide(bundle.operation_label_utf8) + L"\r\n";
+                        if (!bundle.continuation_summary_utf8.empty()) node_export_preview_w_ += L"Continuation: " + utf8_to_wide(bundle.continuation_summary_utf8) + L"\r\n";
+                        if (!bundle.runtime_split_summary_utf8.empty()) node_export_preview_w_ += L"Runtime/editor audit: " + utf8_to_wide(bundle.runtime_split_summary_utf8) + L"\r\n";
+                        if (!bundle.linked_project_root_utf8.empty()) node_export_preview_w_ += L"Bound substrate root: " + utf8_to_wide(bundle.linked_project_root_utf8) + L"\r\n";
+                        node_export_preview_w_ += L"Staged targets:\r\n";
                         const uint32_t shown = std::min<uint32_t>(bundle.target_count_u32, 6u);
                         for (uint32_t i = 0u; i < shown; ++i) {
                             const auto& tgt = bundle.targets[i];
                             node_export_preview_w_ += L"  - " + utf8_to_wide(tgt.rel_path_utf8) + L"  ::  " + utf8_to_wide(tgt.effective_language_utf8);
                             if (tgt.language_locked_u8 != 0u) node_export_preview_w_ += L"  [locked]";
-                            node_export_preview_w_ += L"
-    " + utf8_to_wide(tgt.constraint_reason_utf8) + L"
-";
+                            node_export_preview_w_ += L"\r\n    " + utf8_to_wide(tgt.constraint_reason_utf8) + L"\r\n";
                         }
                         if (bundle.target_count_u32 > shown) {
-                            node_export_preview_w_ += L"  ... +" + std::to_wstring((unsigned long long)(bundle.target_count_u32 - shown)) + L" more target(s)
-";
+                            node_export_preview_w_ += L"  ... +" + std::to_wstring((unsigned long long)(bundle.target_count_u32 - shown)) + L" more target(s)\r\n";
                         }
                         if (hwnd_ai_status_) SetWindowTextW(hwnd_ai_status_, L"Node Graph: export bundle staged from the linked project/work substrate.");
                     } else {
-                        node_export_preview_w_ += L"Stage status: preview only
-";
+                        node_export_preview_w_ += L"Stage status: preview only\r\n";
                         if (hwnd_ai_status_) SetWindowTextW(hwnd_ai_status_, L"Node Graph: export preview refreshed, but no staged bundle was returned.");
                     }
                     node_export_preview_w_ += L"Action: export remains preview-first, but the backend now stages a bounded export bundle/policy object tied to the linked project substrate.";
@@ -12164,57 +13776,30 @@ Reason: " + utf8_to_wide(stage_err) + L"
                 }
 
                 if (id == 2040) {
-                    sim_play_enabled_ = !sim_play_enabled_;
-                    send_toggle(EwControlPacketKind::SimSetPlay, sim_play_enabled_);
-                    InvalidateRect(hwnd_toggle_play_, nullptr, TRUE);
+                    const bool next_enabled = !IsSimPlayEnabledCanonical();
+                    SubmitToggleControlPacket(EwControlPacketKind::SimSetPlay, next_enabled);
+                    RefreshAiToggleWidgets();
                 } else if (id == 2041) {
-                    ai_enabled_ = !ai_enabled_;
-                    // Turning AI off also disables learning/crawling at UI level.
-                    if (!ai_enabled_) { ai_learning_enabled_ = false; ai_crawling_enabled_ = false; }
-                    send_toggle(EwControlPacketKind::AiSetEnabled, ai_enabled_);
-                    send_toggle(EwControlPacketKind::AiSetLearning, ai_learning_enabled_);
-                    send_toggle(EwControlPacketKind::AiSetCrawling, ai_crawling_enabled_);
-                    InvalidateRect(hwnd_toggle_ai_, nullptr, TRUE);
-                    InvalidateRect(hwnd_toggle_learning_, nullptr, TRUE);
-                    InvalidateRect(hwnd_toggle_crawling_, nullptr, TRUE);
+                    const bool next_ai_enabled = !IsAiEnabledCanonical();
+                    SetAiStateCanonical(next_ai_enabled,
+                                        next_ai_enabled && IsAiLearningEnabledCanonical(),
+                                        next_ai_enabled && IsAiCrawlingEnabledCanonical());
                 } else if (id == 2042) {
-                    ai_learning_enabled_ = !ai_learning_enabled_;
-                    if (ai_learning_enabled_) ai_enabled_ = true;
-                    send_toggle(EwControlPacketKind::AiSetEnabled, ai_enabled_);
-                    send_toggle(EwControlPacketKind::AiSetLearning, ai_learning_enabled_);
-                    InvalidateRect(hwnd_toggle_ai_, nullptr, TRUE);
-                    InvalidateRect(hwnd_toggle_learning_, nullptr, TRUE);
+                    const bool next_learning_enabled = !IsAiLearningEnabledCanonical();
+                    SetAiStateCanonical(next_learning_enabled ? true : IsAiEnabledCanonical(),
+                                        next_learning_enabled,
+                                        IsAiCrawlingEnabledCanonical());
                 } else if (id == 2043) {
-                    ai_crawling_enabled_ = !ai_crawling_enabled_;
-                    if (ai_crawling_enabled_) ai_enabled_ = true;
-                    send_toggle(EwControlPacketKind::AiSetEnabled, ai_enabled_);
-                    send_toggle(EwControlPacketKind::AiSetCrawling, ai_crawling_enabled_);
-                    InvalidateRect(hwnd_toggle_ai_, nullptr, TRUE);
-                    InvalidateRect(hwnd_toggle_crawling_, nullptr, TRUE);
-                } else if (id == 4055) {
-                    // AI panel learning toggle
-                    ai_learning_enabled_ = !ai_learning_enabled_;
-                    if (ai_learning_enabled_) ai_enabled_ = true;
-                    send_toggle(EwControlPacketKind::AiSetEnabled, ai_enabled_);
-                    send_toggle(EwControlPacketKind::AiSetLearning, ai_learning_enabled_);
-                    if (hwnd_toggle_ai_) InvalidateRect(hwnd_toggle_ai_, nullptr, TRUE);
-                    if (hwnd_toggle_learning_) InvalidateRect(hwnd_toggle_learning_, nullptr, TRUE);
-                    if (hwnd_ai_toggle_learning_) InvalidateRect(hwnd_ai_toggle_learning_, nullptr, TRUE);
-                } else if (id == 4056) {
-                    // AI panel crawling toggle
-                    ai_crawling_enabled_ = !ai_crawling_enabled_;
-                    if (ai_crawling_enabled_) ai_enabled_ = true;
-                    send_toggle(EwControlPacketKind::AiSetEnabled, ai_enabled_);
-                    send_toggle(EwControlPacketKind::AiSetCrawling, ai_crawling_enabled_);
-                    if (hwnd_toggle_ai_) InvalidateRect(hwnd_toggle_ai_, nullptr, TRUE);
-                    if (hwnd_toggle_crawling_) InvalidateRect(hwnd_toggle_crawling_, nullptr, TRUE);
-                    if (hwnd_ai_toggle_crawling_) InvalidateRect(hwnd_ai_toggle_crawling_, nullptr, TRUE);
+                    const bool next_crawling_enabled = !IsAiCrawlingEnabledCanonical();
+                    SetAiStateCanonical(next_crawling_enabled ? true : IsAiEnabledCanonical(),
+                                        IsAiLearningEnabledCanonical(),
+                                        next_crawling_enabled);
                 } else if (id == 4054) {
                     // AI panel "⋯" menu
                     HMENU menu = CreatePopupMenu();
-                    AppendMenuW(menu, MF_STRING | (ai_learning_enabled_ ? MF_CHECKED : 0), 4801, L"Learning");
-                    AppendMenuW(menu, MF_STRING | (ai_crawling_enabled_ ? MF_CHECKED : 0), 4802, L"Crawling");
-                    AppendMenuW(menu, MF_STRING | (ai_repo_reader_enabled_ ? MF_CHECKED : 0), 4803, L"Repo reader");
+                    AppendMenuW(menu, MF_STRING | (IsAiLearningEnabledCanonical() ? MF_CHECKED : 0), 4801, L"Learning");
+                    AppendMenuW(menu, MF_STRING | (IsAiCrawlingEnabledCanonical() ? MF_CHECKED : 0), 4802, L"Crawling");
+                    AppendMenuW(menu, MF_STRING | (IsRepoReaderEnabledCanonical() ? MF_CHECKED : 0), 4803, L"Repo reader");
                     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
                     AppendMenuW(menu, MF_STRING, 4811, L"Repository Browser…");
                     AppendMenuW(menu, MF_STRING, 4812, L"Coherence Tools…");
@@ -12292,9 +13877,6 @@ Reason: " + utf8_to_wide(stage_err) + L"
                     AppendMenuW(menu, MF_POPUP, (UINT_PTR)workflow_menu, workflow_queue_label.c_str());
                     AppendMenuW(menu, MF_POPUP, (UINT_PTR)workflow_blocked_menu, blocked_queue_label.c_str());
                     AppendMenuW(menu, MF_POPUP, (UINT_PTR)workflow_ready_menu, ready_queue_label.c_str());
-                    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-                    // Stub hook only (no network layer enforced here yet).
-                    AppendMenuW(menu, MF_STRING | (ai_safe_mode_enabled_ ? MF_CHECKED : 0), 4804, L"Safe Mode / No Network (hook)");
 
                     POINT pt{};
                     GetCursorPos(&pt);
@@ -12303,32 +13885,25 @@ Reason: " + utf8_to_wide(stage_err) + L"
                     if (cmd == 0) return 0;
 
                     if (cmd == 4801) {
-                        ai_learning_enabled_ = !ai_learning_enabled_;
-                        if (ai_learning_enabled_) ai_enabled_ = true;
-                        send_toggle(EwControlPacketKind::AiSetEnabled, ai_enabled_);
-                        send_toggle(EwControlPacketKind::AiSetLearning, ai_learning_enabled_);
-                        if (hwnd_toggle_ai_) InvalidateRect(hwnd_toggle_ai_, nullptr, TRUE);
-                        if (hwnd_toggle_learning_) InvalidateRect(hwnd_toggle_learning_, nullptr, TRUE);
-                        if (hwnd_ai_panel_tool_status_) SetWindowTextW(hwnd_ai_panel_tool_status_, ai_learning_enabled_ ? L"Learning enabled." : L"Learning disabled.");
+                        const bool next_learning_enabled = !IsAiLearningEnabledCanonical();
+                        SetAiStateCanonical(next_learning_enabled ? true : IsAiEnabledCanonical(),
+                                            next_learning_enabled,
+                                            IsAiCrawlingEnabledCanonical());
+                        if (hwnd_ai_panel_tool_status_) SetWindowTextW(hwnd_ai_panel_tool_status_, next_learning_enabled ? L"Learning enable requested." : L"Learning disable requested.");
                         return 0;
                     }
                     if (cmd == 4802) {
-                        ai_crawling_enabled_ = !ai_crawling_enabled_;
-                        if (ai_crawling_enabled_) ai_enabled_ = true;
-                        send_toggle(EwControlPacketKind::AiSetEnabled, ai_enabled_);
-                        send_toggle(EwControlPacketKind::AiSetCrawling, ai_crawling_enabled_);
-                        if (hwnd_toggle_ai_) InvalidateRect(hwnd_toggle_ai_, nullptr, TRUE);
-                        if (hwnd_toggle_crawling_) InvalidateRect(hwnd_toggle_crawling_, nullptr, TRUE);
-                        if (hwnd_ai_panel_tool_status_) SetWindowTextW(hwnd_ai_panel_tool_status_, ai_crawling_enabled_ ? L"Crawling enabled." : L"Crawling disabled.");
+                        const bool next_crawling_enabled = !IsAiCrawlingEnabledCanonical();
+                        SetAiStateCanonical(next_crawling_enabled ? true : IsAiEnabledCanonical(),
+                                            IsAiLearningEnabledCanonical(),
+                                            next_crawling_enabled);
+                        if (hwnd_ai_panel_tool_status_) SetWindowTextW(hwnd_ai_panel_tool_status_, next_crawling_enabled ? L"Crawling enable requested." : L"Crawling disable requested.");
                         return 0;
                     }
                     if (cmd == 4803) {
-                        ai_repo_reader_enabled_ = !ai_repo_reader_enabled_;
-                        // Repo reader remains stage-gated in runtime; UI only flips the request.
-                        if (scene_) {
-                            scene_->SetRepoReaderEnabled(ai_repo_reader_enabled_);
-                        }
-                        if (hwnd_ai_panel_tool_status_) SetWindowTextW(hwnd_ai_panel_tool_status_, ai_repo_reader_enabled_ ? L"Repo reader enabled." : L"Repo reader disabled.");
+                        const bool next_repo_reader_enabled = !IsRepoReaderEnabledCanonical();
+                        SetRepoReaderEnabledCanonical(next_repo_reader_enabled);
+                        if (hwnd_ai_panel_tool_status_) SetWindowTextW(hwnd_ai_panel_tool_status_, next_repo_reader_enabled ? L"Repo reader enable requested." : L"Repo reader disable requested.");
                         return 0;
                     }
 
@@ -12445,11 +14020,6 @@ Reason: " + utf8_to_wide(stage_err) + L"
                         return 0;
                     }
 
-                    if (cmd == 4804) {
-                        ai_safe_mode_enabled_ = !ai_safe_mode_enabled_;
-                        if (hwnd_ai_panel_tool_status_) SetWindowTextW(hwnd_ai_panel_tool_status_, ai_safe_mode_enabled_ ? L"Safe mode requested (hook only)." : L"Safe mode request cleared.");
-                        return 0;
-                    }
                     return 0;
                 } else if (id == 4059) {
                     // AI chat send
@@ -12469,6 +14039,19 @@ Reason: " + utf8_to_wide(stage_err) + L"
                     // Control belongs to dedicated widgets, not slash-command parsing.
                     SubmitAiChatTextUtf8(chat_idx, wide_to_utf8(ws), true);
                     SetWindowTextW(hwnd_ai_chat_input_, L"");
+                    return 0;
+                } else if (id == 4060 && code == LBN_DBLCLK) {
+                    if (!hwnd_ai_chat_list_) return 0;
+                    const int sel = (int)SendMessageW(hwnd_ai_chat_list_, LB_GETCURSEL, 0, 0);
+                    if (sel == LB_ERR) return 0;
+                    const int len = (int)SendMessageW(hwnd_ai_chat_list_, LB_GETTEXTLEN, (WPARAM)sel, 0);
+                    if (len <= 0) return 0;
+                    std::vector<wchar_t> buf((size_t)len + 1u, 0);
+                    SendMessageW(hwnd_ai_chat_list_, LB_GETTEXT, (WPARAM)sel, (LPARAM)buf.data());
+                    const std::wstring url_w = ew_extract_first_url_w(std::wstring(buf.data()));
+                    if (url_w.empty()) return 0;
+                    (void)ShellExecuteW(hwnd_ai_panel_ ? hwnd_ai_panel_ : hwnd_main_, L"open", url_w.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                    if (hwnd_ai_panel_tool_status_) SetWindowTextW(hwnd_ai_panel_tool_status_, L"Chat: opened source link from Assistant reply.");
                     return 0;
                 } else if (id == 4065) {
                     const uint32_t chat_idx = ai_tab_index_u32_;
@@ -12517,6 +14100,9 @@ Reason: " + utf8_to_wide(stage_err) + L"
                     ai_chat_last_detected_patch_valid_[new_idx] = false;
                     ai_chat_patch_previewed_[new_idx] = false;
                     ai_chat_mode_u32_[new_idx] = SubstrateManager::EW_CHAT_MEMORY_MODE_TALK;
+                    ai_chat_provider_u32_[new_idx] = AI_CHAT_PROVIDER_HYBRID;
+                    ai_chat_api_model_w_[new_idx] = utf8_to_wide(ew_openai_default_model_utf8());
+                    ai_chat_native_model_w_[new_idx] = L"native:auto";
                     ai_chat_cortex_summary_w_[new_idx].clear();
                     ai_chat_project_summary_w_[new_idx].clear();
                     ai_chat_project_root_w_[new_idx].clear();
@@ -12526,7 +14112,7 @@ Reason: " + utf8_to_wide(stage_err) + L"
                     ai_chat_last_workflow_event_w_[new_idx].clear();
                     ai_chat_folder_of_u32_[new_idx] = ai_chat_folder_id_u32_;
                     wchar_t label[32];
-                    _snwprintf(label, 32, L"Chat %u", (unsigned)(new_idx + 1u));
+                    swprintf_s(label, _countof(label), L"Chat %u", (unsigned)(new_idx + 1u));
                     ai_chat_title_w_[new_idx] = label;
                     TCITEMW ti{};
                     ti.mask = TCIF_TEXT;
@@ -12616,37 +14202,13 @@ Reason: " + utf8_to_wide(stage_err) + L"
 
             // AI panel bell: jump to Experiments + clear badge.
             if (id == 4050 && code == BN_CLICKED) {
-                if (hwnd_ai_panel_ && IsWindowVisible(hwnd_ai_panel_)) {
-                    TabCtrl_SetCurSel(hwnd_ai_tab_, 1);
-                    ai_tab_index_u32_ = 1u;
-                    if (hwnd_ai_progress_overall_) ShowWindow(hwnd_ai_progress_overall_, SW_HIDE);
-                    if (hwnd_ai_domain_list_) ShowWindow(hwnd_ai_domain_list_, SW_HIDE);
-                    if (hwnd_ai_experiment_list_) ShowWindow(hwnd_ai_experiment_list_, SW_SHOW);
-                    MarkAiExperimentsSeen();
-                }
-            }
-
-            if (id == 4054 && code == LBN_DBLCLK) {
-                // Open selected experiment file and mark as seen.
-                int sel = (int)SendMessageW(hwnd_ai_experiment_list_, LB_GETCURSEL, 0, 0);
-                if (sel != LB_ERR) {
-                    wchar_t item[512]; item[0] = 0;
-                    SendMessageW(hwnd_ai_experiment_list_, LB_GETTEXT, (WPARAM)sel, (LPARAM)item);
-                    std::wstring fname(item);
-                    std::string asset_root_utf8 = scene_ ? scene_->runtime().project_settings.assets.project_asset_substrate_root_utf8 : std::string("AssetSubstrate");
-                    if (asset_root_utf8.empty()) asset_root_utf8 = "AssetSubstrate";
-                    std::wstring asset_root = utf8_to_wide(asset_root_utf8);
-                    std::wstring full;
-                    if (fname.rfind(L"(fail) ", 0) == 0) {
-                        fname = fname.substr(7);
-                        full = asset_root + L"\\AI\\experiments\\metrics_failures\\" + fname;
-                    } else {
-                        full = asset_root + L"\\AI\\experiments\\metrics\\" + fname;
-                    }
-                    // Let Windows pick the default handler (usually opens in the editor).
-                    ShellExecuteW(hwnd, L"open", full.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-                }
+                if (hwnd_ai_panel_ && !IsWindowVisible(hwnd_ai_panel_)) ShowWindow(hwnd_ai_panel_, SW_SHOW);
+                AiPanelSetView(0u);
                 MarkAiExperimentsSeen();
+                RefreshAiPanelChrome();
+                if (hwnd_ai_panel_tool_status_) SetWindowTextW(hwnd_ai_panel_tool_status_, L"Chat: experiment notifications cleared.");
+                if (hwnd_ai_panel_) SetForegroundWindow(hwnd_ai_panel_);
+                return 0;
             }
 
             // Property grid in-place editor commit.
@@ -12673,7 +14235,7 @@ Reason: " + utf8_to_wide(stage_err) + L"
             }
             if (id == 2066 && code == CBN_SELCHANGE) {
                 RefreshAssetDesignerPanel();
-                LayoutMain();
+                LayoutChildren(client_w_, client_h_);
                 return 0;
             }
             if ((id == 2073 && code == CBN_SELCHANGE)) {
@@ -12827,7 +14389,7 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
 
             }
             if (id == 2023 && code == BN_CLICKED) {
-                // Snap toggle may be driven by either the legacy checkbox (if present) or the property grid.
+                // Snap requests are accepted from the property grid and normalized into the editor control path.
                 if (hwnd_snap_enable_) {
                     const LRESULT v = SendMessageW(hwnd_snap_enable_, BM_GETCHECK, 0, 0);
                     editor_snap_enabled_u8_ = (v == BST_CHECKED) ? 1 : 0;
@@ -12915,9 +14477,8 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
                                 // Match against derived-only highlight set (paths).
                                 const std::wstring w = utf8_to_wide(content_items_[src].rel_utf8);
                                 if (coh_highlight_set_w_.find(w) != coh_highlight_set_w_.end()) {
-                                    // Dark-gold tint under white text.
-                                    ((NMLVCUSTOMDRAW*)cd)->clrTextBk = RGB(25, 20, 0);
-                                    ((NMLVCUSTOMDRAW*)cd)->clrText   = RGB(255, 255, 255);
+                                    ((NMLVCUSTOMDRAW*)cd)->clrTextBk = g_theme.highlight_bg;
+                                    ((NMLVCUSTOMDRAW*)cd)->clrText   = g_theme.text;
                                 }
                             }
                             return CDRF_DODEFAULT;
@@ -12925,7 +14486,7 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
                         default: break;
                     }
                 }
-                if (nh->hwndFrom == hwnd_content_thumb_) {
+                if (nh->hwndFrom == hwnd_content_thumb_ || nh->hwndFrom == hwnd_asset_thumb_) {
                     const NMLVCUSTOMDRAW* cd = (const NMLVCUSTOMDRAW*)lparam;
                     switch (cd->nmcd.dwDrawStage) {
                         case CDDS_PREPAINT: return CDRF_NOTIFYITEMDRAW;
@@ -12936,8 +14497,8 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
                                 if (src >= content_items_.size()) return CDRF_DODEFAULT;
                                 const std::wstring w = utf8_to_wide(content_items_[src].rel_utf8);
                                 if (coh_highlight_set_w_.find(w) != coh_highlight_set_w_.end()) {
-                                    ((NMLVCUSTOMDRAW*)cd)->clrTextBk = RGB(25, 20, 0);
-                                    ((NMLVCUSTOMDRAW*)cd)->clrText   = RGB(255, 255, 255);
+                                    ((NMLVCUSTOMDRAW*)cd)->clrTextBk = g_theme.highlight_bg;
+                                    ((NMLVCUSTOMDRAW*)cd)->clrText   = g_theme.text;
                                 }
                             }
                             return CDRF_DODEFAULT;
@@ -13113,7 +14674,7 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
                     std::wstring initial = ai_chat_title_w_[chat_idx];
                     if (initial.empty()) {
                         wchar_t label[32];
-                        _snwprintf(label, 32, L"Chat %u", (unsigned)(chat_idx + 1u));
+                        swprintf_s(label, _countof(label), L"Chat %u", (unsigned)(chat_idx + 1u));
                         initial = label;
                     }
                     EwAiRenameChatDialog dlg = EwAiRenameChatDialog::RunModal(hwnd_ai_panel_ ? hwnd_ai_panel_ : hwnd_main_, initial);
@@ -13147,14 +14708,14 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
                     const NMLISTVIEW* lv = (const NMLISTVIEW*)lparam;
                     if (lv && (lv->uChanged & LVIF_STATE)) {
                         wchar_t name[128]; name[0]=0;
-                        ListView_GetItemText(hwnd_propgrid_, lv->iItem, 0, name, 128);
+                        ew_listview_get_item_text_w(hwnd_propgrid_, lv->iItem, 0, name, 128);
                         if (wcscmp(name, L"Snap Enabled") == 0) {
                             const BOOL checked = ListView_GetCheckState(hwnd_propgrid_, lv->iItem);
                             editor_snap_enabled_u8_ = checked ? 1 : 0;
                             EmitEditorSnap();
                             AppendOutputUtf8(checked ? "EDITOR: snap=On" : "EDITOR: snap=Off");
                             // Also refresh the value cell for consistency.
-                            ListView_SetItemText(hwnd_propgrid_, lv->iItem, 1, (LPWSTR)(checked ? L"On" : L"Off"));
+                            ew_listview_set_item_text_w(hwnd_propgrid_, lv->iItem, 1, checked ? L"On" : L"Off");
                         }
                     }
                     return 0;
@@ -13162,7 +14723,7 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
             }
 
             // Content browser selection sync between List and Thumb surfaces.
-            if (nh && (nh->hwndFrom == hwnd_content_list_ || nh->hwndFrom == hwnd_content_thumb_)) {
+            if (nh && (nh->hwndFrom == hwnd_content_list_ || nh->hwndFrom == hwnd_content_thumb_ || nh->hwndFrom == hwnd_asset_thumb_)) {
                 if (nh->code == LVN_ITEMCHANGED) {
                     const NMLISTVIEW* lv = (const NMLISTVIEW*)lparam;
                     if (!lv) return 0;
@@ -13174,7 +14735,7 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
                     if (!now_sel) return 0; // we sync only on selection, not deselection.
 
                     wchar_t wbuf[512]; wbuf[0] = 0;
-                    ListView_GetItemText(nh->hwndFrom, lv->iItem, 0, wbuf, 512);
+                    ew_listview_get_item_text_w(nh->hwndFrom, lv->iItem, 0, wbuf, 512);
                     std::string rel = wide_to_utf8(std::wstring(wbuf));
                     if (rel.empty()) return 0;
                     content_selected_rel_utf8_ = rel;
@@ -13206,7 +14767,7 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
                     if (sel < 0) return 0;
 
                     wchar_t wrel[512]; wrel[0] = 0;
-                    ListView_GetItemText(nh->hwndFrom, sel, 0, wrel, 512);
+                    ew_listview_get_item_text_w(nh->hwndFrom, sel, 0, wrel, 512);
                     std::string rel_utf8 = wide_to_utf8(std::wstring(wrel));
                     if (rel_utf8.empty()) return 0;
 
@@ -13278,14 +14839,23 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
             const DRAWITEMSTRUCT* dis = (const DRAWITEMSTRUCT*)lparam;
             if (!dis) break;
             const int id = (int)dis->CtlID;
-            if (id == 2040) { ew_draw_toggle_switch(dis, sim_play_enabled_); return TRUE; }
-            if (id == 2041) { ew_draw_toggle_switch(dis, ai_enabled_); return TRUE; }
-            if (id == 2042) { ew_draw_toggle_switch(dis, ai_learning_enabled_); return TRUE; }
-            if (id == 2043) { ew_draw_toggle_switch(dis, ai_crawling_enabled_); return TRUE; }
+            if (id == 1607) { ew_draw_action_text_button(dis); return TRUE; }
+            if (id == 1608) { ew_draw_project_badge(dis); return TRUE; }
+            if (id == 1601) { ew_draw_ai_mode_button(dis, L"Sim", IsSimPlayEnabledCanonical()); return TRUE; }
+            if (id == 1602) { ew_draw_ai_mode_button(dis, L"AI", IsAiEnabledCanonical()); return TRUE; }
+            if (id == 1603) { ew_draw_ai_mode_button(dis, L"Live", live_mode_enabled_); return TRUE; }
+            if (id == 1604) { ew_draw_ai_mode_button(dis, L"Photon", confinement_particles_enabled_); return TRUE; }
+            if (id == 1605) { ew_draw_ai_mode_button(dis, L"Content", content_visible_); return TRUE; }
+            if (id == 1606) { ew_draw_ai_mode_button(dis, L"Assistant", hwnd_ai_panel_ && IsWindowVisible(hwnd_ai_panel_)); return TRUE; }
+            if (id == 1609) { ew_draw_window_chrome_button(dis, false); return TRUE; }
+            if (id == 1610) { ew_draw_window_chrome_button(dis, false); return TRUE; }
+            if (id == 1611) { ew_draw_window_chrome_button(dis, true); return TRUE; }
+            if (id == 2040) { ew_draw_toggle_switch(dis, IsSimPlayEnabledCanonical()); return TRUE; }
+            if (id == 2041) { ew_draw_toggle_switch(dis, IsAiEnabledCanonical()); return TRUE; }
+            if (id == 2042) { ew_draw_toggle_switch(dis, IsAiLearningEnabledCanonical()); return TRUE; }
+            if (id == 2043) { ew_draw_toggle_switch(dis, IsAiCrawlingEnabledCanonical()); return TRUE; }
             if (id == 4050) { ew_draw_bell_badge(dis, ai_unseen_experiments_u32_); return TRUE; }
             if (id == 4054) { ew_draw_menu_ellipsis_button(dis); return TRUE; }
-            if (id == 4055) { ew_draw_toggle_switch(dis, ai_learning_enabled_); return TRUE; }
-            if (id == 4056) { ew_draw_toggle_switch(dis, ai_crawling_enabled_); return TRUE; }
             if (id == 4861) { ew_draw_ai_mode_button(dis, L"Chat", ai_panel_view_u32_ == 0u); return TRUE; }
             if (id == 4862) { ew_draw_ai_mode_button(dis, L"Repository", ai_panel_view_u32_ == 1u); return TRUE; }
             if (id == 4863) { ew_draw_ai_mode_button(dis, L"Coherence", ai_panel_view_u32_ == 2u); return TRUE; }
@@ -13297,13 +14867,16 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
                 HDC hdc = dis->hDC;
                 RECT rc = dis->rcItem;
                 const bool sel = (dis->itemState & ODS_SELECTED) != 0;
-                COLORREF bg = sel ? RGB(78, 60, 12) : RGB(10, 10, 10);
-                COLORREF border = RGB(160, 120, 0);
-                COLORREF fg = RGB(245, 245, 245);
+                COLORREF bg = sel ? g_theme.gold_fill : g_theme.bg_elevated;
+                COLORREF border = sel ? g_theme.gold : g_theme.border;
+                COLORREF fg = g_theme.text;
                 std::wstring path;
                 const LRESULT data = SendMessageW(hwnd_content_3d_, LB_GETITEMDATA, dis->itemID, 0);
                 if (data >= 0 && (size_t)data < content_items_.size()) path = utf8_to_wide(content_items_[(size_t)data].rel_utf8);
-                if (!path.empty() && scene_ && ew_content_is_highlighted(path, &scene_->runtime().substrate_manager)) bg = sel ? RGB(110, 86, 20) : RGB(44, 34, 8);
+                if (!path.empty() && scene_ && ew_content_is_highlighted(path, &scene_->sm)) {
+                    bg = ew_theme_list_highlight_fill(sel);
+                    border = sel ? g_theme.gold_hot : g_theme.steel;
+                }
                 HBRUSH br = CreateSolidBrush(bg);
                 FillRect(hdc, &rc, br);
                 DeleteObject(br);
@@ -13342,7 +14915,10 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
                 const int edge_out_i32 = (idx < node_graph_edge_out_i32_.size()) ? node_graph_edge_out_i32_[(size_t)idx] : 0;
                 const std::wstring edge_label = (idx < node_graph_edge_label_w_.size()) ? node_graph_edge_label_w_[(size_t)idx] : L"";
                 const int depth_fade = std::max(0, 24 - seq_i32 * 2);
-                HBRUSH br = CreateSolidBrush(sel ? RGB(32, 26, 10) : RGB(10 + depth_fade / 3, 10 + depth_fade / 4, 10));
+                COLORREF row_fill = sel ? g_theme.gold_fill : RGB(GetRValue(g_theme.bg_elevated) + depth_fade / 5,
+                                                                  GetGValue(g_theme.bg_elevated) + depth_fade / 6,
+                                                                  GetBValue(g_theme.bg_elevated) + depth_fade / 4);
+                HBRUSH br = CreateSolidBrush(row_fill);
                 FillRect(hdc, &rc, br);
                 DeleteObject(br);
                 const int cy = (rc.top + rc.bottom) / 2;
@@ -13350,15 +14926,12 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
                 const int radius = (level == 0) ? 8 : (5 + strength / 28);
                 const uint64_t tick = scene_ ? scene_->sm.canonical_tick : 0ull;
                 const bool pulse_on = node_play_excitation_ && ((((tick / 6ull) + (uint64_t)dis->itemID) & 1ull) == 0ull);
-                const int bright = std::min(255, 92 + strength * 3 / 2 + depth_fade + (pulse_on ? 22 : 0));
+                const int bright = std::min(255, 88 + strength + depth_fade + (pulse_on ? 20 : 0));
                 const int div_mod = ((div_i32 % 6) + 6) % 6;
-                COLORREF wire = RGB(bright, std::min(220, bright * 3 / 4), std::min(140, 28 + div_mod * 18));
-                if (div_mod == 1) wire = RGB(std::min(255, bright), 180, 72);
-                else if (div_mod == 2) wire = RGB(120, std::min(255, bright), 112);
-                else if (div_mod == 3) wire = RGB(96, 156, std::min(255, bright));
-                else if (div_mod == 4) wire = RGB(164, 116, std::min(255, bright));
-                else if (div_mod == 5) wire = RGB(std::min(255, bright), 140, 140);
-                if (sel) wire = RGB(255, 220, 96);
+                COLORREF wire = (div_mod % 2 == 0)
+                    ? RGB(std::min(255, GetRValue(g_theme.gold) + bright / 3), std::min(255, GetGValue(g_theme.gold) + bright / 5), std::min(255, GetBValue(g_theme.gold) + bright / 12))
+                    : RGB(std::min(255, GetRValue(g_theme.steel) + bright / 5), std::min(255, GetGValue(g_theme.steel) + bright / 4), std::min(255, GetBValue(g_theme.steel) + bright / 3));
+                if (sel) wire = g_theme.gold_hot;
                 const int pen_w = std::max(1, (strength + 24) / 32 + (pulse_on ? 1 : 0));
                 HPEN pen = CreatePen(PS_SOLID, pen_w, wire);
                 HGDIOBJ old_pen = SelectObject(hdc, pen);
@@ -13389,7 +14962,8 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
                         LineTo(hdc, right_stub_x1 - 2, cy + 3);
                     }
                 }
-                HBRUSH node_br = CreateSolidBrush(sel ? RGB(120, 88, 18) : RGB(std::min(180, 36 + strength + div_mod * 6), std::min(150, 22 + strength / 2 + div_mod * 4), ancilla ? 18 : 8));
+                HBRUSH node_br = CreateSolidBrush(sel ? g_theme.gold_fill_hot :
+                    (ancilla ? g_theme.steel_fill : ew_theme_list_highlight_fill(false)));
                 HGDIOBJ old_br = SelectObject(hdc, node_br);
                 Ellipse(hdc, indent - radius, cy - radius, indent + radius, cy + radius);
                 SelectObject(hdc, old_br);
@@ -13397,22 +14971,22 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
                 SelectObject(hdc, old_pen);
                 DeleteObject(pen);
                 SetBkMode(hdc, TRANSPARENT);
-                SetTextColor(hdc, RGB(245,245,245));
+                SetTextColor(hdc, g_theme.text);
                 RECT seq_rc = rc; seq_rc.left = 4; seq_rc.right = 24;
-                SetTextColor(hdc, RGB(176, 176, 176));
+                SetTextColor(hdc, g_theme.dim);
                 wchar_t seq_txt[32]{};
                 swprintf(seq_txt, 32, L"%d", seq_i32);
                 DrawTextW(hdc, seq_txt, -1, &seq_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
                 RECT txt = rc; txt.left = indent + radius + 8; txt.right -= 172;
-                SetTextColor(hdc, RGB(245,245,245));
+                SetTextColor(hdc, g_theme.text);
                 DrawTextW(hdc, label.c_str(), -1, &txt, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
-                SetTextColor(hdc, RGB(196, 176, 96));
+                SetTextColor(hdc, sel ? g_theme.gold_hot : g_theme.gold);
                 RECT badge = rc; badge.left = rc.right - 168; badge.right = rc.right - 8;
                 wchar_t badge_txt[160]{};
                 swprintf(badge_txt, 160, L"A%u S%d D%d  %d>%d", anchor_id, seq_i32, div_i32, edge_in_i32, edge_out_i32);
                 DrawTextW(hdc, badge_txt, -1, &badge, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
                 if (sel) {
-                    SetTextColor(hdc, RGB(176, 156, 84));
+                    SetTextColor(hdc, g_theme.muted);
                     RECT sub = rc; sub.left = indent + radius + 8; sub.top += 15; sub.right -= 8;
                     std::wstring subline = op_path;
                     if (!edge_label.empty()) subline += L"  |  edge: " + edge_label;
@@ -13478,7 +15052,7 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
                 }
             }
             if (input_.alt && (wparam == VK_OEM_4 || wparam == VK_OEM_6) && !was_down) {
-                const auto src_pins = ew_split_trim_pin_list((node_graph_selected_i32_ >= 0 && (size_t)node_graph_selected_i32_ < node_graph_output_pins_w_.size()) ? node_graph_output_pins_w_[(size_t)node_graph_selected_i32_] : L"");
+                const auto src_pins = ew_split_trim_pin_list_local((node_graph_selected_i32_ >= 0 && (size_t)node_graph_selected_i32_ < node_graph_output_pins_w_.size()) ? node_graph_output_pins_w_[(size_t)node_graph_selected_i32_] : L"");
                 if (!src_pins.empty()) {
                     const int delta = (wparam == VK_OEM_4) ? -1 : 1;
                     node_source_pin_selected_i32_ = (node_source_pin_selected_i32_ + delta + (int)src_pins.size()) % (int)src_pins.size();
@@ -13488,7 +15062,7 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
             }
             if (input_.ctrl && (wparam == VK_OEM_4 || wparam == VK_OEM_6) && !was_down) {
                 const int result_sel = hwnd_node_results_ ? (int)SendMessageW(hwnd_node_results_, LB_GETCURSEL, 0, 0) : -1;
-                const auto dst_pins = (result_sel >= 0 && (size_t)result_sel < node_palette_entries_.size()) ? ew_split_trim_pin_list(node_palette_entries_[(size_t)result_sel].input_pins_w) : std::vector<std::wstring>{};
+                const auto dst_pins = (result_sel >= 0 && (size_t)result_sel < node_palette_entries_.size()) ? ew_split_trim_pin_list_local(node_palette_entries_[(size_t)result_sel].input_pins_w) : std::vector<std::wstring>{};
                 if (!dst_pins.empty()) {
                     const int delta = (wparam == VK_OEM_4) ? -1 : 1;
                     node_target_pin_selected_i32_ = (node_target_pin_selected_i32_ + delta + (int)dst_pins.size()) % (int)dst_pins.size();
@@ -13499,6 +15073,18 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
 
             // Toggle immersion mode (Standard <-> Immersion)
             if (wparam == VK_F10) immersion_mode_ = !immersion_mode_;
+            if (wparam == VK_F8 && !was_down) {
+                confinement_particles_enabled_ = !confinement_particles_enabled_;
+                AppendOutputUtf8(BuildPhotonConfinementStatusUtf8());
+                if (hwnd_ai_status_) {
+                    SetWindowTextW(hwnd_ai_status_, confinement_particles_enabled_
+                        ? L"Photon confinement particles enabled."
+                        : L"Photon confinement particles hidden (field simulation still running).");
+                }
+                if (hwnd_viewport_) InvalidateRect(hwnd_viewport_, nullptr, FALSE);
+                RefreshViewportResonanceOverlay();
+                RefreshTopBarChrome();
+            }
             // Toggle resonance viewport mode
             if (wparam == VK_OEM_3 && !was_down) { resonance_view_ = !resonance_view_; RefreshViewportResonanceOverlay(); }
 
@@ -13516,8 +15102,48 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
             input_.shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
             input_.ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
         } break;
-        case WM_LBUTTONDOWN: input_.lmb = true; SetCapture(hwnd); break;
-        case WM_LBUTTONUP: input_.lmb = false; ReleaseCapture(); break;
+        case WM_SETCURSOR: {
+            if (hwnd == hwnd_main_ && ew_editor_build_enabled) {
+                POINT pt{};
+                GetCursorPos(&pt);
+                ScreenToClient(hwnd_main_, &pt);
+                const int panel_w = ew_ui_clamp_right_dock_width_px(right_dock_width_px_, client_w_);
+                if (right_dock_splitter_dragging_ ||
+                    ew_ui_hit_test_right_dock_splitter_px(pt.x, pt.y, client_w_, client_h_, panel_w, content_visible_)) {
+                    SetCursor(LoadCursor(nullptr, IDC_SIZEWE));
+                    return TRUE;
+                }
+            }
+        } break;
+        case WM_CAPTURECHANGED: {
+            right_dock_splitter_dragging_ = false;
+        } break;
+        case WM_LBUTTONDOWN: {
+            const int x = GET_X_LPARAM(lparam);
+            const int y = GET_Y_LPARAM(lparam);
+            if (hwnd == hwnd_main_ && ew_editor_build_enabled) {
+                const int panel_w = ew_ui_clamp_right_dock_width_px(right_dock_width_px_, client_w_);
+                if (ew_ui_hit_test_right_dock_splitter_px(x, y, client_w_, client_h_, panel_w, content_visible_)) {
+                    const int split_x = client_w_ - panel_w;
+                    right_dock_splitter_dragging_ = true;
+                    right_dock_splitter_grab_dx_px_ = x - split_x;
+                    right_dock_width_previous_px_ = right_dock_width_px_;
+                    SetCapture(hwnd);
+                    return 0;
+                }
+            }
+            input_.lmb = true;
+            SetCapture(hwnd);
+        } break;
+        case WM_LBUTTONUP: {
+            if (right_dock_splitter_dragging_) {
+                right_dock_splitter_dragging_ = false;
+                ReleaseCapture();
+                return 0;
+            }
+            input_.lmb = false;
+            ReleaseCapture();
+        } break;
         case WM_RBUTTONDOWN: input_.rmb = true; SetCapture(hwnd); break;
         case WM_RBUTTONUP: input_.rmb = false; ReleaseCapture(); break;
         case WM_MBUTTONDOWN: input_.mmb = true; SetCapture(hwnd); break;
@@ -13544,10 +15170,21 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
             input_.mouse_dy += (y - input_.mouse_y);
             input_.mouse_x = x;
             input_.mouse_y = y;
+            if (right_dock_splitter_dragging_) {
+                const int split_x = x - right_dock_splitter_grab_dx_px_;
+                const int desired_w = client_w_ - split_x;
+                const int clamped_w = ew_ui_clamp_right_dock_width_px(desired_w, client_w_);
+                if (clamped_w != right_dock_width_px_) {
+                    right_dock_width_px_ = clamped_w;
+                    LayoutChildren(client_w_, client_h_);
+                    resized_ = true;
+                }
+                return 0;
+            }
             if (hwnd_node_graph_ && GetFocus() == hwnd_node_graph_) {
                 const int row = (int)SendMessageW(hwnd_node_graph_, LB_GETCURSEL, 0, 0);
                 if (row >= 0 && (size_t)row < node_graph_output_pins_w_.size()) {
-                    const auto outs = ew_split_trim_pin_list(node_graph_output_pins_w_[(size_t)row]);
+                    const auto outs = ew_split_trim_pin_list_local(node_graph_output_pins_w_[(size_t)row]);
                     if (!outs.empty()) {
                         const int local_y = std::max(0, y % 32);
                         const int slot_h = std::max(1, 24 / (int)outs.size());
@@ -13558,9 +15195,12 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
             }
         } break;
         case WM_DESTROY: {
-            running_ = false;
-            PostQuitMessage(0);
-        } break;
+            if (hwnd == hwnd_main_) {
+                running_ = false;
+                PostQuitMessage(0);
+            }
+            return 0;
+        }
         default: break;
     }
     return DefWindowProcW(hwnd, msg, wparam, lparam);

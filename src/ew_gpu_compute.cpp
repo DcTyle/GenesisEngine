@@ -331,7 +331,7 @@ bool EwVkContext::ensure_initialized() {
     init_attempted_ = true;
 
     VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
-    app.pApplicationName = "GenesisEngineVulkanCompute";
+    app.pApplicationName = "GenesisEngineCompute";
     app.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
     app.pEngineName = "GenesisEngine";
     app.engineVersion = VK_MAKE_VERSION(1, 0, 0);

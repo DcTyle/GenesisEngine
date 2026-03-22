@@ -1,0 +1,63 @@
+Start testing: Mar 21 15:52 Alaskan Daylight Time
+----------------------------------------------------------
+1/4 Testing: deterministic
+1/4 Test: deterministic
+Command: "D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/Release/test_determinism.exe"
+Directory: D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan
+"deterministic" start time: Mar 21 15:52 Alaskan Daylight Time
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   1.05 sec
+----------------------------------------------------------
+Test Failed.
+"deterministic" end time: Mar 21 15:52 Alaskan Daylight Time
+"deterministic" time elapsed: 00:00:01
+----------------------------------------------------------
+
+2/4 Testing: ai_golden
+2/4 Test: ai_golden
+Command: "D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/Release/test_ai_golden.exe"
+Directory: D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan
+"ai_golden" start time: Mar 21 15:52 Alaskan Daylight Time
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   1.05 sec
+----------------------------------------------------------
+Test Failed.
+"ai_golden" end time: Mar 21 15:52 Alaskan Daylight Time
+"ai_golden" time elapsed: 00:00:01
+----------------------------------------------------------
+
+3/4 Testing: microprocessor
+3/4 Test: microprocessor
+Command: "D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/Release/test_microprocessor.exe"
+Directory: D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan
+"microprocessor" start time: Mar 21 15:52 Alaskan Daylight Time
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   1.09 sec
+----------------------------------------------------------
+Test Failed.
+"microprocessor" end time: Mar 21 15:52 Alaskan Daylight Time
+"microprocessor" time elapsed: 00:00:01
+----------------------------------------------------------
+
+4/4 Testing: contact_constraint
+4/4 Test: contact_constraint
+Command: "D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/Release/test_contact_constraint.exe"
+Directory: D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan
+"contact_constraint" start time: Mar 21 15:52 Alaskan Daylight Time
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.03 sec
+----------------------------------------------------------
+Test Passed.
+"contact_constraint" end time: Mar 21 15:52 Alaskan Daylight Time
+"contact_constraint" time elapsed: 00:00:00
+----------------------------------------------------------
+
+End testing: Mar 21 15:52 Alaskan Daylight Time

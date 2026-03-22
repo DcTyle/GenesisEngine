@@ -1,0 +1,3 @@
+D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/packages/_CPack_Packages/win64/NSIS/GenesisEngine-0.1.0-Windows-AMD64/EditorApp/GenesisEngineState/Binaries/Win64/Editor/GenesisEngine.exe
+D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/packages/_CPack_Packages/win64/NSIS/GenesisEngine-0.1.0-Windows-AMD64/EditorApp/GenesisEngineState/Binaries/Win64/Editor/shaders/instanced.vert.spv
+D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/packages/_CPack_Packages/win64/NSIS/GenesisEngine-0.1.0-Windows-AMD64/EditorApp/GenesisEngineState/Binaries/Win64/Editor/shaders/instanced.frag.spv

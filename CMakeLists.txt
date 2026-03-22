@@ -56,6 +56,9 @@ if (WIN32)
             "Re-configure with the ClangCL toolset, e.g.:\n"
             "  cmake -S . -B build_core -G \"Visual Studio 17 2022\" -A x64 -T ClangCL\n")
     endif()
+    string(REGEX MATCH "^[0-9]+" EW_CLANG_VERSION_MAJOR "${CMAKE_CXX_COMPILER_VERSION}")
+    get_filename_component(EW_CLANG_BIN_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    set(EW_CLANG_BUILTINS_LIB "${EW_CLANG_BIN_DIR}/../lib/clang/${EW_CLANG_VERSION_MAJOR}/lib/windows/clang_rt.builtins-x86_64.lib")
 endif()
 
 add_library(EigenWareCore
@@ -161,6 +164,14 @@ add_library(EigenWareCore
 )
 target_include_directories(EigenWareCore PUBLIC include)
 
+if (WIN32 AND EXISTS "${EW_CLANG_BUILTINS_LIB}")
+    target_link_libraries(EigenWareCore PUBLIC "${EW_CLANG_BUILTINS_LIB}")
+endif()
+
+if (WIN32)
+    target_compile_definitions(EigenWareCore PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+
 # -----------------------------------------------------------------------------
 # AnchorPack: embed selected repo process artifacts as carrier-encoded anchors
 # -----------------------------------------------------------------------------
@@ -227,6 +238,8 @@ target_compile_definitions(EigenWareCore PRIVATE EW_VK_SHADER_OUT_DIR="${EW_VK_C
 if (EW_BUILD_ASSIMP_TOOLS)
     target_sources(EigenWareCore PRIVATE src/assimp_fbx_io.cpp)
     target_link_libraries(EigenWareCore PUBLIC assimp::assimp)
+else()
+    target_sources(EigenWareCore PRIVATE src/assimp_fbx_io_stub.cpp)
 endif()
 
 # Main executables are provided by vulkan_app as genesis_runtime and genesis_app.
@@ -260,6 +273,10 @@ if (EW_ENABLE_CUDA)
     target_link_libraries(EigenWareCore PRIVATE eigen_cuda)
 else()
     target_compile_definitions(EigenWareCore PRIVATE EW_ENABLE_CUDA=0)
+    target_sources(EigenWareCore PRIVATE
+        src/field_lattice_gpu_stub.cpp
+        src/learning_gate_cuda_stub.cpp
+    )
 endif()
 
 # Canonical GPU orchestration for the Vulkan compute path.
@@ -418,9 +435,9 @@ target_link_libraries(ge_force_align PRIVATE EigenWareCore)
 option(EW_ENFORCE_COHERENCE_GATE "Fail builds unless integration proofs pass" ON)
 if (EW_ENFORCE_COHERENCE_GATE)
     add_custom_target(coherence_gate ALL
-        COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
-        COMMAND ew_contract_harness
-        COMMAND ew_verify_proofs
+        COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -C $<CONFIG>
+        COMMAND $<TARGET_FILE:ew_contract_harness>
+        COMMAND $<TARGET_FILE:ew_verify_proofs>
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         COMMENT "Coherence gate: running integration proofs"
         VERBATIM
@@ -435,6 +452,9 @@ if (EW_ENFORCE_COHERENCE_GATE)
     endif()
     if (TARGET test_microprocessor)
         add_dependencies(coherence_gate test_microprocessor)
+    endif()
+    if (TARGET test_contact_constraint)
+        add_dependencies(coherence_gate test_contact_constraint)
     endif()
     if (TARGET ew_contract_harness)
         add_dependencies(coherence_gate ew_contract_harness)
@@ -483,12 +503,13 @@ add_executable(genesis_remote
 )
 target_include_directories(genesis_remote PRIVATE include)
 target_link_libraries(genesis_remote PRIVATE user32 shell32)
+set_target_properties(genesis_remote PROPERTIES OUTPUT_NAME "GenesisRemote")
 install(TARGETS genesis_remote RUNTIME DESTINATION GenesisEngineState/Binaries/Win64/Runtime COMPONENT RuntimeApp)
 endif()
 
 set(CPACK_PACKAGE_NAME "GenesisEngine")
 set(CPACK_PACKAGE_VENDOR "GenesisEngine")
-set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Genesis Engine native runtime and editor viewport")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Genesis Engine Win64 Vulkan editor, runtime, and remote control")
 set(CPACK_PACKAGE_VERSION_MAJOR 0)
 set(CPACK_PACKAGE_VERSION_MINOR 1)
 set(CPACK_PACKAGE_VERSION_PATCH 0)
@@ -504,8 +525,12 @@ if (GENESIS_INSTALL_EDITOR_APP)
 endif()
 set(CPACK_COMPONENT_RUNTIMEAPP_DISPLAY_NAME "Genesis Runtime")
 set(CPACK_COMPONENT_RUNTIMEAPP_DESCRIPTION "Shipping runtime binaries, shaders, manifest, and remote control helper.")
-set(CPACK_COMPONENT_EDITORAPP_DISPLAY_NAME "Genesis Editor")
-set(CPACK_COMPONENT_EDITORAPP_DESCRIPTION "Native editor viewport binaries and shaders.")
+set(CPACK_COMPONENT_EDITORAPP_DISPLAY_NAME "Genesis Engine")
+set(CPACK_COMPONENT_EDITORAPP_DESCRIPTION "Standalone Genesis Engine Vulkan editor binaries, shaders, and branding assets.")
+set(CPACK_PACKAGE_EXECUTABLES
+    "GenesisEngineState/Binaries/Win64/Editor/GenesisEngine.exe" "Genesis Engine"
+    "GenesisEngineState/Binaries/Win64/Runtime/GenesisRuntime.exe" "Genesis Runtime")
+set(CPACK_CREATE_DESKTOP_LINKS "GenesisEngineState/Binaries/Win64/Editor/GenesisEngine.exe")
 
 if (WIN32)
     set(CPACK_GENERATOR "ZIP")
@@ -517,6 +542,14 @@ if (WIN32)
         set(CPACK_NSIS_MUI_ICON "${CMAKE_CURRENT_SOURCE_DIR}/vulkan_app/resources/genesis.ico")
         set(CPACK_NSIS_MUI_UNIICON "${CMAKE_CURRENT_SOURCE_DIR}/vulkan_app/resources/genesis.ico")
         set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
+        set(CPACK_NSIS_INSTALLED_ICON_NAME "GenesisEngineState\\Binaries\\Win64\\Editor\\GenesisEngine.exe")
+        set(CPACK_NSIS_MODIFY_PATH OFF)
+        set(CPACK_NSIS_URL_INFO_ABOUT "https://github.com")
+        set(CPACK_NSIS_CONTACT "Genesis Engine")
+        set(CPACK_NSIS_MENU_LINKS
+            "GenesisEngineState\\Binaries\\Win64\\Editor\\GenesisEngine.exe" "Genesis Engine"
+            "GenesisEngineState\\Binaries\\Win64\\Runtime\\GenesisRuntime.exe" "Genesis Runtime"
+            "GenesisEngineState\\Binaries\\Win64\\Runtime\\GenesisRemote.exe" "Genesis Remote Control")
     endif()
 else()
     set(CPACK_GENERATOR "TGZ")

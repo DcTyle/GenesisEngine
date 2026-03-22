@@ -99,12 +99,12 @@
       <SupportJustMyCode></SupportJustMyCode>
       <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
       <UseFullPaths>false</UseFullPaths>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;EW_ENABLE_GPU_COMPUTE=1;EW_VK_SHADER_OUT_DIR="D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vkcompute_shaders";EW_ENABLE_CUDA=0;EW_ALU_TRACE_ENABLE=0;CMAKE_INTDIR="Debug"</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;_CRT_SECURE_NO_WARNINGS;EW_ENABLE_GPU_COMPUTE=1;EW_VK_SHADER_OUT_DIR="D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vkcompute_shaders";EW_ENABLE_CUDA=0;EW_ALU_TRACE_ENABLE=0;CMAKE_INTDIR="Debug"</PreprocessorDefinitions>
       <ObjectFileName>$(IntDir)</ObjectFileName>
       <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
     </ClCompile>
     <ResourceCompile>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_DEBUG;_WINDOWS;EW_ENABLE_GPU_COMPUTE=1;EW_VK_SHADER_OUT_DIR=\"D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vkcompute_shaders\";EW_ENABLE_CUDA=0;EW_ALU_TRACE_ENABLE=0;CMAKE_INTDIR=\"Debug\"</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_DEBUG;_WINDOWS;_CRT_SECURE_NO_WARNINGS;EW_ENABLE_GPU_COMPUTE=1;EW_VK_SHADER_OUT_DIR=\"D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vkcompute_shaders\";EW_ENABLE_CUDA=0;EW_ALU_TRACE_ENABLE=0;CMAKE_INTDIR=\"Debug\"</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>D:\GameCreation\GenesisEngine\include;\generated;C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
@@ -141,14 +141,14 @@
       <SupportJustMyCode></SupportJustMyCode>
       <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
       <UseFullPaths>false</UseFullPaths>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;EW_ENABLE_GPU_COMPUTE=1;EW_VK_SHADER_OUT_DIR="D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vkcompute_shaders";EW_ENABLE_CUDA=0;EW_ALU_TRACE_ENABLE=0;CMAKE_INTDIR="Release"</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;_CRT_SECURE_NO_WARNINGS;EW_ENABLE_GPU_COMPUTE=1;EW_VK_SHADER_OUT_DIR="D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vkcompute_shaders";EW_ENABLE_CUDA=0;EW_ALU_TRACE_ENABLE=0;CMAKE_INTDIR="Release"</PreprocessorDefinitions>
       <ObjectFileName>$(IntDir)</ObjectFileName>
       <DebugInformationFormat>
       </DebugInformationFormat>
       <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
     </ClCompile>
     <ResourceCompile>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;EW_ENABLE_GPU_COMPUTE=1;EW_VK_SHADER_OUT_DIR=\"D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vkcompute_shaders\";EW_ENABLE_CUDA=0;EW_ALU_TRACE_ENABLE=0;CMAKE_INTDIR=\"Release\"</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;_CRT_SECURE_NO_WARNINGS;EW_ENABLE_GPU_COMPUTE=1;EW_VK_SHADER_OUT_DIR=\"D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vkcompute_shaders\";EW_ENABLE_CUDA=0;EW_ALU_TRACE_ENABLE=0;CMAKE_INTDIR=\"Release\"</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>D:\GameCreation\GenesisEngine\include;\generated;C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
@@ -185,14 +185,14 @@
       <SupportJustMyCode></SupportJustMyCode>
       <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
       <UseFullPaths>false</UseFullPaths>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;EW_ENABLE_GPU_COMPUTE=1;EW_VK_SHADER_OUT_DIR="D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vkcompute_shaders";EW_ENABLE_CUDA=0;EW_ALU_TRACE_ENABLE=0;CMAKE_INTDIR="MinSizeRel"</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;_CRT_SECURE_NO_WARNINGS;EW_ENABLE_GPU_COMPUTE=1;EW_VK_SHADER_OUT_DIR="D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vkcompute_shaders";EW_ENABLE_CUDA=0;EW_ALU_TRACE_ENABLE=0;CMAKE_INTDIR="MinSizeRel"</PreprocessorDefinitions>
       <ObjectFileName>$(IntDir)</ObjectFileName>
       <DebugInformationFormat>
       </DebugInformationFormat>
       <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
     </ClCompile>
     <ResourceCompile>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;EW_ENABLE_GPU_COMPUTE=1;EW_VK_SHADER_OUT_DIR=\"D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vkcompute_shaders\";EW_ENABLE_CUDA=0;EW_ALU_TRACE_ENABLE=0;CMAKE_INTDIR=\"MinSizeRel\"</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;_CRT_SECURE_NO_WARNINGS;EW_ENABLE_GPU_COMPUTE=1;EW_VK_SHADER_OUT_DIR=\"D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vkcompute_shaders\";EW_ENABLE_CUDA=0;EW_ALU_TRACE_ENABLE=0;CMAKE_INTDIR=\"MinSizeRel\"</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>D:\GameCreation\GenesisEngine\include;\generated;C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
@@ -230,12 +230,12 @@
       <SupportJustMyCode></SupportJustMyCode>
       <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
       <UseFullPaths>false</UseFullPaths>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;EW_ENABLE_GPU_COMPUTE=1;EW_VK_SHADER_OUT_DIR="D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vkcompute_shaders";EW_ENABLE_CUDA=0;EW_ALU_TRACE_ENABLE=0;CMAKE_INTDIR="RelWithDebInfo"</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;_CRT_SECURE_NO_WARNINGS;EW_ENABLE_GPU_COMPUTE=1;EW_VK_SHADER_OUT_DIR="D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vkcompute_shaders";EW_ENABLE_CUDA=0;EW_ALU_TRACE_ENABLE=0;CMAKE_INTDIR="RelWithDebInfo"</PreprocessorDefinitions>
       <ObjectFileName>$(IntDir)</ObjectFileName>
       <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
     </ClCompile>
     <ResourceCompile>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;EW_ENABLE_GPU_COMPUTE=1;EW_VK_SHADER_OUT_DIR=\"D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vkcompute_shaders\";EW_ENABLE_CUDA=0;EW_ALU_TRACE_ENABLE=0;CMAKE_INTDIR=\"RelWithDebInfo\"</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;_CRT_SECURE_NO_WARNINGS;EW_ENABLE_GPU_COMPUTE=1;EW_VK_SHADER_OUT_DIR=\"D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vkcompute_shaders\";EW_ENABLE_CUDA=0;EW_ALU_TRACE_ENABLE=0;CMAKE_INTDIR=\"RelWithDebInfo\"</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>D:\GameCreation\GenesisEngine\include;\generated;C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
@@ -458,6 +458,9 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ClCompile Include="D:\GameCreation\GenesisEngine\src\crawler_encode_cuda.cpp" />
     <ClCompile Include="D:\GameCreation\GenesisEngine\src\ew_txn_file.cpp" />
     <ClCompile Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\generated\anchor_pack_blobs.cpp" />
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\assimp_fbx_io_stub.cpp" />
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\field_lattice_gpu_stub.cpp" />
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\learning_gate_cuda_stub.cpp" />
     <ClCompile Include="D:\GameCreation\GenesisEngine\src\carrier_bundle_gpu.cpp" />
     <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_overlap_gpu.cpp" />
     <ClCompile Include="D:\GameCreation\GenesisEngine\src\ew_gpu_compute.cpp" />

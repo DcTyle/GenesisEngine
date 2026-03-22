@@ -24,6 +24,7 @@ add_executable(genesis_app ${GENESIS_APP_SOURCES})
 target_include_directories(genesis_app PRIVATE include)
 target_link_libraries(genesis_app PRIVATE EigenWareCore)
 target_compile_definitions(genesis_app PRIVATE GENESIS_EDITOR_BUILD=1)
+set_target_properties(genesis_app PROPERTIES OUTPUT_NAME "GenesisEngine")
 
 option(GENESIS_BUILD_RUNTIME_APP "Build shipping runtime app without editor tools" ON)
 if (GENESIS_BUILD_RUNTIME_APP)
@@ -31,13 +32,14 @@ if (GENESIS_BUILD_RUNTIME_APP)
     target_include_directories(genesis_runtime PRIVATE include)
     target_link_libraries(genesis_runtime PRIVATE EigenWareCore)
     target_compile_definitions(genesis_runtime PRIVATE GENESIS_EDITOR_BUILD=0 GENESIS_RUNTIME_BUILD=1)
+    set_target_properties(genesis_runtime PROPERTIES OUTPUT_NAME "GenesisRuntime")
 endif()
 
 if (WIN32)
     # Launch as a normal Windows application when started from Explorer or an installer.
-    target_link_options(genesis_app PRIVATE /SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup)
+    target_link_options(genesis_app PRIVATE /SUBSYSTEM:WINDOWS)
     if (TARGET genesis_runtime)
-        target_link_options(genesis_runtime PRIVATE /SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup)
+        target_link_options(genesis_runtime PRIVATE /SUBSYSTEM:WINDOWS)
     endif()
 endif()
 
@@ -108,30 +110,30 @@ if (WIN32)
     ew_find_spirv_compiler(EW_SHADER_COMPILER EW_COMP_MODE)
 endif()
 
-set(EW_SHADERS
+set(EW_SHADER_SOURCES
     "${EW_SHADER_DIR}/instanced.vert"
     "${EW_SHADER_DIR}/instanced.frag"
+    "${EW_SHADER_DIR}/cam_hist.comp"
+    "${EW_SHADER_DIR}/cam_median.comp"
 )
 
-set(EW_SPV
-    "${EW_SHADER_OUT}/instanced.vert.spv"
-    "${EW_SHADER_OUT}/instanced.frag.spv"
-)
+set(EW_SHADER_SPIRV_OUTPUTS)
+foreach(EW_SHADER_SOURCE IN LISTS EW_SHADER_SOURCES)
+    get_filename_component(EW_SHADER_NAME "${EW_SHADER_SOURCE}" NAME)
+    list(APPEND EW_SHADER_SPIRV_OUTPUTS "${EW_SHADER_OUT}/${EW_SHADER_NAME}.spv")
+endforeach()
 
 if (WIN32)
-    ew_add_spirv_shader_command(
-        "${EW_SHADER_COMPILER}"
-        "${EW_COMP_MODE}"
-        "${EW_SHADER_DIR}/instanced.vert"
-        "${EW_SHADER_OUT}/instanced.vert.spv")
+    foreach(EW_SHADER_SOURCE IN LISTS EW_SHADER_SOURCES)
+        get_filename_component(EW_SHADER_NAME "${EW_SHADER_SOURCE}" NAME)
+        ew_add_spirv_shader_command(
+            "${EW_SHADER_COMPILER}"
+            "${EW_COMP_MODE}"
+            "${EW_SHADER_SOURCE}"
+            "${EW_SHADER_OUT}/${EW_SHADER_NAME}.spv")
+    endforeach()
 
-    ew_add_spirv_shader_command(
-        "${EW_SHADER_COMPILER}"
-        "${EW_COMP_MODE}"
-        "${EW_SHADER_DIR}/instanced.frag"
-        "${EW_SHADER_OUT}/instanced.frag.spv")
-
-    add_custom_target(EWShaders ALL DEPENDS ${EW_SPV})
+    add_custom_target(EWShaders ALL DEPENDS ${EW_SHADER_SPIRV_OUTPUTS})
     add_dependencies(genesis_app EWShaders)
     if (TARGET genesis_runtime)
         add_dependencies(genesis_runtime EWShaders)
@@ -156,21 +158,24 @@ file(GENERATE OUTPUT "${GENESIS_RUNTIME_EDITOR_SPLIT_MANIFEST}" CONTENT
 "Genesis Engine Runtime/Editor Split\n\nRuntime target: genesis_runtime\nRuntime output: ${CMAKE_BINARY_DIR}/GenesisEngineState/Binaries/Win64/Runtime\nEditor target: genesis_app\nEditor output: ${CMAKE_BINARY_DIR}/GenesisEngineState/Binaries/Win64/Editor\nDefault install: runtime only\nOptional editor install: GENESIS_INSTALL_EDITOR_APP=ON\nEditor-only UI/tools remain excluded from runtime packaging by target split and compile definitions.\n")
 
 option(GENESIS_INSTALL_EDITOR_APP "Install the editor target alongside shipping runtime artifacts" OFF)
+set(GENESIS_BRANDING_FILES "${CMAKE_CURRENT_SOURCE_DIR}/resources/genesis.ico")
+if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/resources/genesis_splash.bmp")
+    list(APPEND GENESIS_BRANDING_FILES "${CMAKE_CURRENT_SOURCE_DIR}/resources/genesis_splash.bmp")
+endif()
 if (TARGET genesis_runtime)
     install(TARGETS genesis_runtime RUNTIME DESTINATION GenesisEngineState/Binaries/Win64/Runtime COMPONENT RuntimeApp)
     if (WIN32)
-        install(FILES ${EW_SPV} DESTINATION GenesisEngineState/Binaries/Win64/Runtime/shaders COMPONENT RuntimeApp)
+        install(FILES ${EW_SHADER_SPIRV_OUTPUTS} DESTINATION GenesisEngineState/Binaries/Win64/Runtime/shaders COMPONENT RuntimeApp)
     endif()
 endif()
 if (WIN32)
-    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/resources/genesis.ico" DESTINATION GenesisEngineState/Binaries/Win64 COMPONENT RuntimeApp)
+    install(FILES ${GENESIS_BRANDING_FILES} DESTINATION GenesisEngineState/Branding COMPONENT RuntimeApp)
 endif()
 install(FILES "${GENESIS_RUNTIME_EDITOR_SPLIT_MANIFEST}" DESTINATION GenesisEngineState/Binaries/Win64 COMPONENT RuntimeApp)
 if (GENESIS_INSTALL_EDITOR_APP)
     install(TARGETS genesis_app RUNTIME DESTINATION GenesisEngineState/Binaries/Win64/Editor COMPONENT EditorApp)
     if (WIN32)
-        install(FILES ${EW_SPV} DESTINATION GenesisEngineState/Binaries/Win64/Editor/shaders COMPONENT EditorApp)
-        install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/resources/genesis.ico" DESTINATION GenesisEngineState/Binaries/Win64 COMPONENT EditorApp)
+        install(FILES ${EW_SHADER_SPIRV_OUTPUTS} DESTINATION GenesisEngineState/Binaries/Win64/Editor/shaders COMPONENT EditorApp)
     endif()
 endif()
 
