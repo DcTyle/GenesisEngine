@@ -9379,20 +9379,23 @@ void App::RefreshTopBarChrome() {
     if (hwnd_topbar_status_) {
         std::wstring status;
         if (!visualization_fault_utf8_.empty()) {
-            status = std::wstring(L"Renderer offline: ") + utf8_to_wide(visualization_fault_utf8_);
+            status = std::wstring(L"Renderer offline") + L" | " + utf8_to_wide(visualization_fault_utf8_);
         } else {
             status = live_mode_enabled_
-                ? L"Viewport: live substrate"
-                : L"Viewport: sandbox projection";
+                ? L"Viewport: Live substrate"
+                : L"Viewport: Sandbox projection";
+            status += IsSimPlayEnabledCanonical()
+                ? L" | Sim: Running"
+                : L" | Sim: Paused";
             status += confinement_particles_enabled_
-                ? L"  |  photon confinement: on"
-                : L"  |  photon confinement: off";
+                ? L" | Photons: Confinement on"
+                : L" | Photons: Confinement off";
         }
-        status += L"  |  workspace: ";
+        status += L" | Workspace: ";
         status += ew_workspace_name(primary_workspace_tab_index_u32_);
         status += (hwnd_ai_panel_ && IsWindowVisible(hwnd_ai_panel_))
-            ? L"  |  assistant: visible"
-            : L"  |  assistant: hidden";
+            ? L" | Assistant: Open"
+            : L" | Assistant: Hidden";
         SetWindowTextW(hwnd_topbar_status_, status.c_str());
     }
 }
@@ -10155,56 +10158,57 @@ void App::RefreshViewportResonanceOverlay() {
     ShowWindow(hwnd_viewport_resonance_overlay_, resonance_view_ ? SW_SHOW : SW_HIDE);
     if (!resonance_view_) return;
     std::wstring out;
-    out += L"Viewport Resonance Overlay [derived-only]\r\n";
-    out += L"Nodes represent Fourier carrier anchors that group AI-write anchor sets by operator path.\r\n\r\n";
+    out += L"Resonance View\r\n";
+    out += L"Derived carrier projection for the active viewport lane.\r\n\r\n";
     wchar_t line[256]{};
-    swprintf(line, 256, L"Band=%d  Phase=%.2f\r\n", spectrum_band_i32_, (double)spectrum_phase_f32_);
+    swprintf(line, 256, L"Band %d | Phase %.2f\r\n", spectrum_band_i32_, (double)spectrum_phase_f32_);
     out += line;
     const int sel = node_graph_selected_i32_;
     if (sel >= 0 && sel < (int)node_graph_items_w_.size()) {
         const uint32_t anchor_id = (sel < (int)node_graph_anchor_id_u32_.size()) ? node_graph_anchor_id_u32_[(size_t)sel] : 0u;
         const int strength = (sel < (int)node_graph_strength_pct_i32_.size()) ? node_graph_strength_pct_i32_[(size_t)sel] : 0;
-        out += L"Selected carrier: " + node_graph_items_w_[(size_t)sel] + L"\r\n";
-        if (sel < (int)node_graph_operator_path_w_.size()) out += L"Operator path: " + node_graph_operator_path_w_[(size_t)sel] + L"\r\n";
-        swprintf(line, 256, L"Carrier anchor id=%u  coupling=%d%%\r\n", anchor_id, strength);
+        out += L"Carrier: " + node_graph_items_w_[(size_t)sel] + L"\r\n";
+        if (sel < (int)node_graph_operator_path_w_.size()) out += L"Operator: " + node_graph_operator_path_w_[(size_t)sel] + L"\r\n";
+        swprintf(line, 256, L"Anchor %u | Coupling %d%%\r\n", anchor_id, strength);
         out += line;
         const auto src_pins = ew_split_trim_pin_list_local((sel < (int)node_graph_output_pins_w_.size()) ? node_graph_output_pins_w_[(size_t)sel] : L"");
         if (!src_pins.empty()) {
-            out += L"Viewport-selected output pin: ";
+            out += L"Pin: ";
             out += src_pins[(size_t)std::max(0, std::min((int)src_pins.size() - 1, node_source_pin_selected_i32_))] + L"\r\n";
         }
-        if (sel < (int)node_graph_edge_label_w_.size() && !node_graph_edge_label_w_[(size_t)sel].empty()) out += L"Resonance link focus: " + node_graph_edge_label_w_[(size_t)sel] + L"\r\n";
+        if (sel < (int)node_graph_edge_label_w_.size() && !node_graph_edge_label_w_[(size_t)sel].empty()) out += L"Link focus: " + node_graph_edge_label_w_[(size_t)sel] + L"\r\n";
     }
     if (scene_ && scene_->selected >= 0 && scene_->selected < (int)scene_->objects.size()) {
         const auto& o = scene_->objects[(size_t)scene_->selected];
         const EwObjectDnaDerived dna = ew_object_dna_derive(o.object_dna);
-        out += L"Selected object: " + utf8_to_wide(o.name_utf8) + L"\r\n";
-        swprintf(line, 256, L"Object anchor=%u  radius=%.2fm  emissive=%.2f\r\n", o.anchor_id_u32, (double)o.radius_m_f32, (double)o.emissive_f32);
+        out += L"\r\nObject: " + utf8_to_wide(o.name_utf8) + L"\r\n";
+        swprintf(line, 256, L"Anchor %u | Radius %.2fm | Emissive %.2f\r\n", o.anchor_id_u32, (double)o.radius_m_f32, (double)o.emissive_f32);
         out += line;
-        swprintf(line, 256, L"DNA confinement=%.2fHz  existence=%.2fHz  6DoF L1=%.3fHz\r\n",
+        swprintf(line, 256, L"DNA %.2fHz confinement | %.2fHz existence | %.3fHz 6DoF L1\r\n",
                  (double)dna.confinement_effective_hz_f32,
                  (double)dna.existence_resonance_hz_f32,
                  (double)dna.manifold_6dof_l1_hz_f32);
         out += line;
         const int couplings = 3 + (int)(coh_highlight_set_w_.size() > 0 ? std::min<size_t>(4u, coh_highlight_set_w_.size()) : 0u);
-        swprintf(line, 256, L"Viewport spheres=%d  resonance links=%d\r\n", 1 + couplings, couplings);
+        swprintf(line, 256, L"Viewport spheres %d | Resonance links %d\r\n", 1 + couplings, couplings);
         out += line;
     } else {
-        out += L"Selected object: none\r\nViewport spheres=0  resonance links=0\r\n";
+        out += L"\r\nObject: none\r\nViewport spheres 0 | Resonance links 0\r\n";
     }
-    out += node_play_excitation_ ? L"Carrier pulse overlay: active\r\n" : L"Carrier pulse overlay: idle\r\n";
-    out += confinement_particles_enabled_ ? L"Photon confinement particles: ON\r\n" : L"Photon confinement particles: OFF\r\n";
-    out += live_mode_enabled_ ? L"Live substrate lattice: active\r\n" : L"Live substrate lattice: standby\r\n";
+    out += L"\r\nState\r\n";
+    out += node_play_excitation_ ? L"Pulse: Active\r\n" : L"Pulse: Idle\r\n";
+    out += confinement_particles_enabled_ ? L"Photons: Confinement ON\r\n" : L"Photons: Confinement OFF\r\n";
+    out += live_mode_enabled_ ? L"Lattice: Live\r\n" : L"Lattice: Standby\r\n";
     if (seq_stress_overlay_enabled_) {
         const bool sim_play_enabled = IsSimPlayEnabledCanonical();
         const int stress_pct = std::max(0, std::min(100, (int)std::lround(std::fabs((double)spectrum_phase_f32_) * 18.0) + (sim_play_enabled ? 24 : 9)));
         const int pain_pct = std::max(0, std::min(100, stress_pct / 2 + (node_play_excitation_ ? 12 : 0)));
-        swprintf(line, 256, L"Stress advisory=%d%%  pain advisory=%d%%\r\n", stress_pct, pain_pct);
+        swprintf(line, 256, L"Stress %d%% | Pain %d%%\r\n", stress_pct, pain_pct);
         out += line;
     } else {
-        out += L"Stress advisory overlay: OFF\r\n";
+        out += L"Stress overlay: Off\r\n";
     }
-    out += L"Gold/orange links brighten and thicken with coupling strength. Selected graph lanes now project their chosen pin pair and first derived resonance link into this overlay.\r\n";
+    out += L"\r\nLegend: Gold links indicate stronger coupling. Active pulse lanes brighten first.\r\n";
     SetWindowTextW(hwnd_viewport_resonance_overlay_, out.c_str());
 }
 
@@ -12157,13 +12161,14 @@ void App::RefreshContentBrowserChrome() {
         std::wstring mode = L"Grid";
         if (content_view_mode_u32_ == 1u) mode = L"List";
         else if (content_view_mode_u32_ == 2u) mode = L"Columns";
-        std::wstring status = mode + L" view | Visible items: " + std::to_wstring((unsigned long long)content_visible_indices_.size());
-        status += L" | Source: ";
-        status += content_source_prefix_utf8_.empty() ? L"All" : utf8_to_wide(content_source_prefix_utf8_);
+        std::wstring status = mode + L" view";
+        status += L" | " + std::to_wstring((unsigned long long)content_visible_indices_.size()) + L" visible";
+        status += L" | Scope: ";
+        status += content_source_prefix_utf8_.empty() ? L"All Content" : utf8_to_wide(content_source_prefix_utf8_);
         if (content_locked_) status += L" | Locked";
-        if (!coh_highlight_set_w_.empty()) status += L" | Coherence highlights active";
+        if (!coh_highlight_set_w_.empty()) status += L" | Coherence focus active";
         if (!content_selected_rel_utf8_.empty() && canonical_reference_summary_.subject_rel_utf8 == content_selected_rel_utf8_) {
-            status += L" | Canonical refs=" + std::to_wstring((unsigned long long)canonical_reference_summary_.hit_count_u32);
+            status += L" | Refs: " + std::to_wstring((unsigned long long)canonical_reference_summary_.hit_count_u32);
         }
         SetWindowTextW(hwnd_content_status_, status.c_str());
     }
@@ -12177,7 +12182,7 @@ void App::RefreshContentBrowserChrome() {
     if (hwnd_content_selected_) {
         std::wstring sel = L"Selected: none";
         if (!content_selected_rel_utf8_.empty()) {
-            sel = L"Selected: " + utf8_to_wide(content_selected_rel_utf8_);
+            sel = L"Selection: " + utf8_to_wide(content_selected_rel_utf8_);
         }
         SetWindowTextW(hwnd_content_selected_, sel.c_str());
     }
@@ -12188,12 +12193,10 @@ void App::RefreshContentBrowserChrome() {
     if (hwnd_content_tab_primary_) SetWindowTextW(hwnd_content_tab_primary_, content_secondary_tab_active_ ? L"Content Browser 1" : L"[Content Browser 1]");
     if (hwnd_content_tab_secondary_) SetWindowTextW(hwnd_content_tab_secondary_, content_secondary_tab_active_ ? L"[Content Browser 2]" : L"Content Browser 2");
     if (hwnd_content_breadcrumb_) {
-        std::wstring crumb = L"All";
+        std::wstring crumb = L"All Content";
         if (!content_source_prefix_utf8_.empty()) {
             crumb += L" > ";
             crumb += utf8_to_wide(content_source_prefix_utf8_);
-        } else {
-            crumb += L" > Content";
         }
         SetWindowTextW(hwnd_content_breadcrumb_, crumb.c_str());
     }
@@ -12203,9 +12206,9 @@ void App::RefreshContentBrowserChrome() {
     if (hwnd_content_back_) EnableWindow(hwnd_content_back_, can_back ? TRUE : FALSE);
     if (hwnd_content_forward_) EnableWindow(hwnd_content_forward_, can_forward ? TRUE : FALSE);
     if (hwnd_content_save_all_) SetWindowTextW(hwnd_content_save_all_, L"Save All");
-    if (hwnd_content_add_) SetWindowTextW(hwnd_content_add_, L"Add");
+    if (hwnd_content_add_) SetWindowTextW(hwnd_content_add_, L"Create");
     if (hwnd_content_import_toolbar_) SetWindowTextW(hwnd_content_import_toolbar_, L"Import");
-    if (hwnd_content_fab_) SetWindowTextW(hwnd_content_fab_, L"Fab/Vault");
+    if (hwnd_content_fab_) SetWindowTextW(hwnd_content_fab_, L"Vault");
 
     const int spacing_px = ew_content_thumbnail_spacing_px(content_thumbnail_size_u32_);
     if (hwnd_content_thumb_) ListView_SetIconSpacing(hwnd_content_thumb_, spacing_px, spacing_px);
