@@ -106,6 +106,8 @@ raw_run_archives_v4/run_031_interpolated_temporal_alignment_collapse.zip
 docs_v4/CONTINUATION_PROMPT_V4.txt
 docs_v4/EXPERIMENT_ARCHIVE_V4.md
 docs_v4/FILE_MANIFEST_V4.txt
+docs_v4/ENGINE_BUILD_RUNTIME_LAB_NOTEBOOK.md
+docs_v4/LAB_NOTEBOOK_AND_LOG_SEQUENCE_V4.md
 docs_v4/MATH_STACK_AND_RESULTS_V4.md
 docs_v4/README_CONTINUATION_V4.md
 docs_v4/RUN_LEDGER_V4.csv

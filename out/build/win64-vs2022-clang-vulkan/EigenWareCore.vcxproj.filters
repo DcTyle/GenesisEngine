@@ -13,6 +13,9 @@
     <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_project_settings.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_research_confinement.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="D:\GameCreation\GenesisEngine\src\GE_g2p_english.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -280,6 +283,12 @@
     <ClCompile Include="D:\GameCreation\GenesisEngine\src\ew_txn_file.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\photon_confinement.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\src\vulkan_photon_confinement.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\generated\anchor_pack_blobs.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -307,6 +316,11 @@
       <Filter>CMake Rules</Filter>
     </CustomBuild>
     <CustomBuild Include="D:\GameCreation\GenesisEngine\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="D:\GameCreation\GenesisEngine\cuda\photon_confinement_kernels.cu">
+      <Filter>Source Files</Filter>
+    </None>
   </ItemGroup>
   <ItemGroup>
     <Filter Include="CMake Rules">

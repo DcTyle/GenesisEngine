@@ -12,7 +12,16 @@
       ],
       "defines": [
         "VK_USE_PLATFORM_WIN32_KHR=1"
-      ]
+      ],
+      "browse": {
+        "path": [
+          "${workspaceFolder}/include",
+          "${workspaceFolder}/src",
+          "C:/Users/Myke/AppData/Local/Programs/VulkanSDK/1.4.341.1/Include"
+        ],
+        "limitSymbolsToIncludedHeaders": true,
+        "databaseFilename": ""
+      }
     }
   ]
 }

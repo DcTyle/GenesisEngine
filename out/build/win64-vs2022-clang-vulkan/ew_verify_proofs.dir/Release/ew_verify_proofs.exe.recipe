@@ -8,6 +8,9 @@
       <FullPath>D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\x64\Release\EWVulkanComputeShaders</FullPath>
     </ProjectOutput>
     <ProjectOutput>
+      <FullPath>D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\Release\anchorize_files.exe</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
       <FullPath>D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\Release\ew_verify_proofs.exe</FullPath>
     </ProjectOutput>
   </ProjectOutputs>

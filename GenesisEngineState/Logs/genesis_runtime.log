@@ -1,5 +1,101 @@
 GENESIS_ENGINE_LOG v1
 APP_LOG path=D:\GameCreation\GenesisEngine\GenesisEngineState\Logs\genesis_runtime.log
-REMOTE_VIEWPORT_PHOTON confinement=1 projected_points=0 anchor_visible=0 anchor_hidden=0 resonance=0
+RUN step=log.ready
+RUN step=main_window.begin
+RUN step=main_window.done
+RUN step=child_windows.begin
+RUN step=child_windows.done
+RUN step=scene.begin
+RUN step=scene.done
+REMOTE_VIEWPORT_PHOTON confinement=1 projected_points=0 anchor_visible=0 anchor_hidden=0 resonance=0 lattice_mode=volume lattice_slice=0 lattice_stride=2 lattice_max_points=32768 lattice_intensity=20
 PHOTON_CONTROLS key=F8 cmds="viewport photon on|off|toggle|status"
 CHATGPT_CONFIGURED model=gpt-5-mini auth=unverified
+RENDER_INIT step=ctx.create.begin
+RENDER_INIT step=ctx.create.done validation=0
+RENDER_INIT step=instance.begin
+RENDER_INIT step=instance.done
+RENDER_INIT step=surface.begin
+RENDER_INIT step=surface.done
+RENDER_INIT step=phys.begin
+RENDER_INIT step=phys.selected name=NVIDIA GeForce RTX 2060 api=1.3.242
+RENDER_INIT step=phys.done
+RENDER_INIT step=queue.begin
+RENDER_INIT step=queue.done
+RENDER_INIT step=device.begin
+RENDER_INIT step=device.done
+RENDER_INIT step=cmdpool.begin
+RENDER_INIT step=cmdpool.done
+RENDER_INIT step=sync.begin
+RENDER_INIT step=sync.done
+RENDER_INIT step=swap.begin
+RENDER_INIT step=swap.done
+RENDER_INIT step=pipeline.begin
+RENDER_INIT step=pipeline.entry ptr=0x00000291F4BFBF80
+RENDER_INIT step=pipeline.destroy.begin
+RENDER_INIT step=pipeline.destroy.done
+RENDER_INIT step=pipeline.ds_layout.done
+RENDER_INIT step=pipeline.layout.done
+RENDER_INIT step=pipeline.ds_pool.done
+RENDER_INIT step=pipeline.ds_alloc.done
+RENDER_INIT step=pipeline.vt_init.begin
+RENDER_INIT step=vt.init.begin
+RENDER_INIT step=vt.atlas_image.done
+RENDER_INIT step=vt.atlas_view.done
+RENDER_INIT step=vt.atlas_sampler.done
+RENDER_INIT step=vt.pagetable_buffer.done
+RENDER_INIT step=vt.pagetable_requirements.begin
+RENDER_INIT step=vt.pagetable_requirements.done size=349680 type_bits=0x0000001F
+RENDER_INIT step=vt.pagetable_memory_type index=1
+RENDER_INIT step=vt.pagetable_memory.done
+RENDER_INIT step=vt.pagetable_bind.done
+RENDER_INIT step=vt.cmd_alloc.done
+RENDER_INIT step=vt.cmd_begin.done
+RENDER_INIT step=vt.transition.done
+RENDER_INIT step=vt.cmd_end.done
+RENDER_INIT step=vt.submit.done
+RENDER_INIT step=vt.wait_idle.done
+RENDER_INIT step=vt.cmd_free.done
+RENDER_INIT step=vt.pagetable_upload.begin
+RENDER_INIT step=vt.pagetable_upload.done
+RENDER_INIT step=vt.init.done
+RENDER_INIT step=pipeline.vt_init.done
+RENDER_INIT step=pipeline.descriptors.done
+RENDER_INIT step=pipeline.spv.done
+RENDER_INIT step=pipeline.shader_modules.done
+RENDER_INIT step=pipeline.graphics.done
+RENDER_INIT step=pipeline.cleanup.done
+RENDER_INIT step=pipeline.done
+PROJECT_SETTINGS_LOADED ProjectSettings/project_settings.ewcfg
+INPUT_BINDINGS_LOADED ProjectSettings/input_bindings.ewcfg
+ASSET_SUBSTRATE_INIT_OK AssetSubstrate
+ANCHOR_PACK_INSTALLED count=72
+OK: operator name surface coherent (count=11)
+RENDER_INIT step=pipeline.entry ptr=0x00000291F4BFBF80
+RENDER_INIT step=pipeline.destroy.begin
+RENDER_INIT step=pipeline.destroy.done
+RENDER_INIT step=pipeline.ds_layout.done
+RENDER_INIT step=pipeline.layout.done
+RENDER_INIT step=pipeline.ds_pool.done
+RENDER_INIT step=pipeline.ds_alloc.done
+RENDER_INIT step=pipeline.descriptors.done
+RENDER_INIT step=pipeline.spv.done
+RENDER_INIT step=pipeline.shader_modules.done
+RENDER_INIT step=pipeline.graphics.done
+RENDER_INIT step=pipeline.cleanup.done
+RENDER_INIT step=vt.pagetable_upload.begin
+RENDER_INIT step=vt.pagetable_upload.done
+AI_LEARNING:OFF
+AI_CRAWLING:OFF
+SPECTRAL_STATUS Emean_q15=0 Epeak_q15=0 LeakAbs_q15=0 Band=0 BusPhys_q15=0
+RENDER_INIT step=pipeline.entry ptr=0x00000291F4BFBF80
+RENDER_INIT step=pipeline.destroy.begin
+RENDER_INIT step=pipeline.destroy.done
+RENDER_INIT step=pipeline.ds_layout.done
+RENDER_INIT step=pipeline.layout.done
+RENDER_INIT step=pipeline.ds_pool.done
+RENDER_INIT step=pipeline.ds_alloc.done
+RENDER_INIT step=pipeline.descriptors.done
+RENDER_INIT step=pipeline.spv.done
+RENDER_INIT step=pipeline.shader_modules.done
+RENDER_INIT step=pipeline.graphics.done
+RENDER_INIT step=pipeline.cleanup.done

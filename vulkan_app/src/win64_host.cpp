@@ -19,7 +19,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpara
         PostQuitMessage(0);
         return 0;
     case WM_SIZE:
-        ew_win32_layout(*g_host);
+        ew_win64_layout(*g_host);
         // Track viewport size for renderer swapchain recreation.
         if (g_host->hwnd_view) {
             RECT vr{};
@@ -78,7 +78,7 @@ static HWND make_child(HWND parent, const wchar_t* cls, const wchar_t* text, DWO
     return CreateWindowExW(0, cls, text, style, 0,0,10,10, parent, (HMENU)(intptr_t)id, GetModuleHandleW(nullptr), nullptr);
 }
 
-bool ew_win32_create(EwWin64Host& host, const wchar_t* title) {
+bool ew_win64_create(EwWin64Host& host, const wchar_t* title) {
     host.hinst = GetModuleHandleW(nullptr);
 
     // Production default: per-monitor DPI awareness (crisp viewport + UI layout).
@@ -132,7 +132,7 @@ bool ew_win32_create(EwWin64Host& host, const wchar_t* title) {
 
     host.hwnd_transform  = make_child(host.hwnd_main, L"STATIC", L"Selected: (none)", WS_CHILD | WS_VISIBLE, 1201);
 
-    ew_win32_layout(host);
+    ew_win64_layout(host);
     ew_ai_ui_init_controls(host);
 
     // Initialize viewport dimensions.
@@ -145,7 +145,7 @@ bool ew_win32_create(EwWin64Host& host, const wchar_t* title) {
     return true;
 }
 
-void ew_win32_layout(EwWin64Host& host) {
+void ew_win64_layout(EwWin64Host& host) {
     if (!host.hwnd_main) return;
 
     RECT r{};
@@ -182,7 +182,7 @@ void ew_win32_layout(EwWin64Host& host) {
     MoveWindow(host.hwnd_ai_send, x0 + pad + (cw - 80), y, 80, 24, TRUE);
 }
 
-void ew_win32_pump(EwWin64Host& host, bool& out_quit) {
+void ew_win64_pump(EwWin64Host& host, bool& out_quit) {
     MSG msg;
     while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
         if (msg.message == WM_QUIT) {

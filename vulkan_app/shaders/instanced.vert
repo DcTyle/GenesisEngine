@@ -1,32 +1,28 @@
 #version 450
-#extension GL_ARB_gpu_shader_int64 : require
 
 layout(push_constant) uniform Push {
     mat4 proj;
     vec3 sunPosCam;
     float pointSize;
     vec4 debug; // x: resonance_only(0/1), y: spectrum_band, z: spectrum_phase, w: reserved
+    vec4 visual; // x: vector_enabled, y: vector_gain_01, z: field_depth_m, w: focal_length_mm
 } pc;
 
 struct Inst {
-    uint64_t object_id_u64;
     uint anchor_id_u32;
     uint kind_u32;
     uint albedo_rgba8;
     uint atmosphere_rgba8;
-    uint _pad_a0_u32;
-    uint _pad_a1_u32;
-    ivec4 rel_pos_q16_16;
     int radius_q16_16;
     int emissive_q16_16;
     int atmosphere_thickness_q16_16;
     int lod_bias_q16_16;
+    ivec4 rel_pos_q16_16;
     int clarity_q16_16;
 
     uint carrier_x_u32;
     uint carrier_y_u32;
     uint carrier_z_u32;
-    uint64_t tick_u64;
 };
 
 layout(set=0, binding=0, std430) readonly buffer Instances {
@@ -36,18 +32,10 @@ layout(set=0, binding=0, std430) readonly buffer Instances {
 layout(location=0) out vec2 vUV;
 layout(location=1) flat out vec3 vCenterCam;
 layout(location=2) flat out uint vKind;
-layout(location=3) out vec4 vAlbedo;
-layout(location=4) out vec4 vAtmColor;
-layout(location=5) out float vRadius;
-layout(location=6) out float vEmissive;
-layout(location=7) out float vAtmThick;
-layout(location=8) out float vLodBias;
-layout(location=9) out float vClarity;
-layout(location=10) out float vDopplerK;
-layout(location=11) out float vLeak;
-layout(location=12) out float vHarmMean;
-layout(location=13) out float vFluxGrad;
-layout(location=14) out float vDensity;
+layout(location=3) flat out vec4 vAlbedo;
+layout(location=4) flat out vec4 vAtmColor;
+layout(location=5) flat out vec4 vParams0;
+layout(location=6) flat out vec4 vParams1;
 
 vec3 q16_16_to_f3(ivec3 v){
     return vec3(v) / 65536.0;
@@ -90,20 +78,19 @@ void main(){
     vKind = I.kind_u32;
     vAlbedo = rgba8_to_f4(I.albedo_rgba8);
     vAtmColor = rgba8_to_f4(I.atmosphere_rgba8);
-    vRadius = radius;
-    vEmissive = float(I.emissive_q16_16) / 65536.0;
-    vAtmThick = float(I.atmosphere_thickness_q16_16) / 65536.0;
-    vLodBias = float(I.lod_bias_q16_16) / 65536.0;
-    vClarity = float(I.clarity_q16_16) / 65536.0;
-
-    // Emergent carrier triple (compact, fixed-point)
-    vLeak = float(int(I.carrier_x_u32)) / 65536.0;
-    vDopplerK = float(int(I.carrier_y_u32)) / 65536.0;
-    vHarmMean = float(I.carrier_z_u32 & 65535u) / 32768.0; // Q0.15 (low16)
-    vFluxGrad = float((I.carrier_z_u32 >> 16) & 65535u) / 32768.0; // Q0.15 (high16)
-
-    // Density dominance: treat leak/density proxy as density for shading control.
-    // This preserves the existing carrier meaning while enabling deterministic
-    // priority of dense objects in energy flux visuals.
-    vDensity = clamp(vLeak, 0.0, 1.0);
+    float phase_density = float(int(I.carrier_x_u32)) / 65536.0;
+    float phase_bias = float(int(I.carrier_y_u32)) / 65536.0;
+    float specularity = float(I.carrier_z_u32 & 65535u) / 32767.0;
+    float roughness = float((I.carrier_z_u32 >> 16) & 65535u) / 32767.0;
+    float clarity = float(I.clarity_q16_16) / 65536.0;
+    vParams0 = vec4(
+        radius,
+        float(I.emissive_q16_16) / 65536.0,
+        float(I.atmosphere_thickness_q16_16) / 65536.0,
+        clamp(phase_density, 0.0, 1.0));
+    vParams1 = vec4(
+        clamp(phase_bias, -1.0, 1.0),
+        clamp(specularity, 0.0, 1.0),
+        clamp(roughness, 0.0, 1.0),
+        clamp(clarity, 0.0, 1.0));
 }

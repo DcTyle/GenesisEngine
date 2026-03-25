@@ -21,7 +21,7 @@ static std::string ew_wide_to_utf8(const std::wstring& ws) {
     return out;
 }
 
-void ew_win32_ai_append_line(EwWin64Host& host, const std::string& line_utf8) {
+void ew_win64_ai_append_line(EwWin64Host& host, const std::string& line_utf8) {
     if (!host.hwnd_ai_output) return;
 
     std::wstring w = ew_utf8_to_wide(line_utf8);
@@ -33,7 +33,7 @@ void ew_win32_ai_append_line(EwWin64Host& host, const std::string& line_utf8) {
     SendMessageW(host.hwnd_ai_output, EM_REPLACESEL, FALSE, (LPARAM)w.c_str());
 }
 
-std::string ew_win32_ai_take_input(EwWin64Host& host) {
+std::string ew_win64_ai_take_input(EwWin64Host& host) {
     if (!host.hwnd_ai_input) return {};
     const int len = GetWindowTextLengthW(host.hwnd_ai_input);
     if (len <= 0) return {};
@@ -43,7 +43,7 @@ std::string ew_win32_ai_take_input(EwWin64Host& host) {
     return ew_wide_to_utf8(ws);
 }
 
-bool ew_win32_open_file_dialog_obj(EwWin64Host& host, std::string& out_path_utf8) {
+bool ew_win64_open_file_dialog_obj(EwWin64Host& host, std::string& out_path_utf8) {
     wchar_t file_buf[MAX_PATH] = {0};
 
     OPENFILENAMEW ofn{};
@@ -109,11 +109,11 @@ void ew_ai_ui_handle_command(EwWin64Host& host, int control_id) {
     }
     if (control_id == 1102) { // import
         std::string path;
-        if (!ew_win32_open_file_dialog_obj(host, path)) return;
+        if (!ew_win64_open_file_dialog_obj(host, path)) return;
 
         EwObjMesh mesh;
         if (!ew_obj_load_utf8(path, mesh)) {
-            ew_win32_ai_append_line(host, "IMPORT_FAILED: could not parse OBJ");
+            ew_win64_ai_append_line(host, "IMPORT_FAILED: could not parse OBJ");
             return;
         }
 
@@ -124,7 +124,7 @@ void ew_ai_ui_handle_command(EwWin64Host& host, int control_id) {
         ew_scene_select(id);
         ew_ui_update_transform_label(host);
 
-        ew_win32_ai_append_line(host, "IMPORTED_OBJ: " + name + "  vtx=" + std::to_string(mesh.vertices.size()) + "  tri=" + std::to_string(mesh.indices.size()/3));
+        ew_win64_ai_append_line(host, "IMPORTED_OBJ: " + name + "  vtx=" + std::to_string(mesh.vertices.size()) + "  tri=" + std::to_string(mesh.indices.size()/3));
     }
     if (control_id == 1101) { // list selection
         const int sel = (int)SendMessageW(host.hwnd_obj_list, LB_GETCURSEL, 0, 0);

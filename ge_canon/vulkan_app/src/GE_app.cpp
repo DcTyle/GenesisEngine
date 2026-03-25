@@ -38,7 +38,7 @@
 namespace ewv {
 
 // -----------------------------------------------------------------------------
-// UI Theme (Win32)
+// UI Theme (Windows desktop / Win64 baseline)
 // - Black + Gold styling for editor panels.
 // - Important: purely presentation. Does not touch simulation truth.
 // -----------------------------------------------------------------------------
@@ -98,14 +98,14 @@ static void ew_apply_editor_fonts(HWND root) {
 
 
 // -----------------------------------------------------------------------------
-// Win32 Input Bindings Editor (minimal)
+// Windows desktop input bindings editor (minimal)
 // - Exposes a UI tool to edit input_bindings.ewcfg
 // - On save, writes the file and emits InputBindingsReload control packet.
 // - No input mapping effects are computed here; substrate remains the only
 //   place where bindings are interpreted.
 // -----------------------------------------------------------------------------
 
-struct EwBindingsEditorWin32 {
+struct EwBindingsEditorWindows {
     HWND hwnd = nullptr;
     HWND edit = nullptr;
     HWND btn_save = nullptr;
@@ -113,7 +113,7 @@ struct EwBindingsEditorWin32 {
     EigenWare::SubstrateManager* sm = nullptr;
 };
 
-static EwBindingsEditorWin32 g_bind_editor;
+static EwBindingsEditorWindows g_bind_editor;
 
 static LRESULT CALLBACK EwBindingsEditorProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
     switch (msg) {
@@ -2193,7 +2193,7 @@ static void ew_draw_bell_badge(const DRAWITEMSTRUCT* dis, uint32_t badge_u32) {
     HFONT old = (HFONT)SelectObject(hdc, hFont);
 
     // Simple bell glyph. We intentionally keep this ASCII-ish so it renders on
-    // default Win32 fonts without requiring a symbol font.
+    // default Windows desktop fonts without requiring a symbol font.
     const wchar_t* bell = L"!";
     RECT tr = rc;
     DrawTextW(hdc, bell, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);

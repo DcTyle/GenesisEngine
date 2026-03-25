@@ -9,6 +9,7 @@ set(GENESIS_APP_SOURCES
     src/GE_app.cpp
     src/camera_controller.cpp
     src/ai_ui.cpp
+    src/vk_ui_layer.cpp
     src/ew_openai_chat.cpp
     src/openxr_runtime.cpp
     src/obj_import.cpp

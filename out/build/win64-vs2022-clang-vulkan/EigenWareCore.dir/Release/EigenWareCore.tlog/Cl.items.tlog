@@ -2,6 +2,7 @@ D:\GameCreation\GenesisEngine\src\GE_runtime.cpp;D:\GameCreation\GenesisEngine\o
 D:\GameCreation\GenesisEngine\src\GE_camera_anchor.cpp;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.dir\Release\GE_camera_anchor.obj
 D:\GameCreation\GenesisEngine\src\GE_pulse_trajectory_bound.cpp;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.dir\Release\GE_pulse_trajectory_bound.obj
 D:\GameCreation\GenesisEngine\src\GE_project_settings.cpp;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.dir\Release\GE_project_settings.obj
+D:\GameCreation\GenesisEngine\src\GE_research_confinement.cpp;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.dir\Release\GE_research_confinement.obj
 D:\GameCreation\GenesisEngine\src\GE_g2p_english.cpp;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.dir\Release\GE_g2p_english.obj
 D:\GameCreation\GenesisEngine\src\GE_asset_substrate.cpp;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.dir\Release\GE_asset_substrate.obj
 D:\GameCreation\GenesisEngine\src\GE_neural_phase_ai.cpp;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.dir\Release\GE_neural_phase_ai.obj
@@ -91,6 +92,8 @@ D:\GameCreation\GenesisEngine\src\field_lattice_cpu.cpp;D:\GameCreation\GenesisE
 D:\GameCreation\GenesisEngine\src\GE_planet_ancilla.cpp;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.dir\Release\GE_planet_ancilla.obj
 D:\GameCreation\GenesisEngine\src\crawler_encode_cuda.cpp;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.dir\Release\crawler_encode_cuda.obj
 D:\GameCreation\GenesisEngine\src\ew_txn_file.cpp;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.dir\Release\ew_txn_file.obj
+D:\GameCreation\GenesisEngine\src\photon_confinement.cpp;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.dir\Release\photon_confinement.obj
+D:\GameCreation\GenesisEngine\src\vulkan_photon_confinement.cpp;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.dir\Release\vulkan_photon_confinement.obj
 D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\generated\anchor_pack_blobs.cpp;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.dir\Release\anchor_pack_blobs.obj
 D:\GameCreation\GenesisEngine\src\assimp_fbx_io_stub.cpp;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.dir\Release\assimp_fbx_io_stub.obj
 D:\GameCreation\GenesisEngine\src\field_lattice_gpu_stub.cpp;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.dir\Release\field_lattice_gpu_stub.obj

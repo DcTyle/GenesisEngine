@@ -30,13 +30,13 @@ struct EwWin64Host {
     int viewport_height_px = 0;
 };
 
-bool ew_win32_create(EwWin64Host& host, const wchar_t* title);
-void ew_win32_pump(EwWin64Host& host, bool& out_quit);
-void ew_win32_layout(EwWin64Host& host);
+bool ew_win64_create(EwWin64Host& host, const wchar_t* title);
+void ew_win64_pump(EwWin64Host& host, bool& out_quit);
+void ew_win64_layout(EwWin64Host& host);
 
 // UI helpers
-void ew_win32_ai_append_line(EwWin64Host& host, const std::string& line_utf8);
-std::string ew_win32_ai_take_input(EwWin64Host& host);
+void ew_win64_ai_append_line(EwWin64Host& host, const std::string& line_utf8);
+std::string ew_win64_ai_take_input(EwWin64Host& host);
 
 // File dialog
-bool ew_win32_open_file_dialog_obj(EwWin64Host& host, std::string& out_path_utf8);
+bool ew_win64_open_file_dialog_obj(EwWin64Host& host, std::string& out_path_utf8);

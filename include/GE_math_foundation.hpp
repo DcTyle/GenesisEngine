@@ -80,7 +80,7 @@ private:
     int64_t graph_b_q32_32_ = 0;
 
     // Throttle state so math experiments do not monopolize ticks.
-    uint32_t rr_u32_ = 0u;
+    [[maybe_unused]] uint32_t rr_u32_ = 0u;
 
     static int64_t q32_32_from_i32(int32_t x) { return ((int64_t)x) << 32; }
 

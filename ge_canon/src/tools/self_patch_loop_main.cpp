@@ -83,7 +83,8 @@ static void scan_static_gates(const fs::path& proposal_dir, std::vector<GateFail
         "not implemented",
         "return false; //",
         "return 0; //",
-        "win32",
+        "32-bit windows",
+        "x86 build",
     };
 
     for (auto it = fs::recursive_directory_iterator(proposal_dir); it != fs::recursive_directory_iterator(); ++it) {

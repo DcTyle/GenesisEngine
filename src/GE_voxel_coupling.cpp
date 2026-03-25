@@ -1,33 +1,34 @@
 #include "GE_voxel_coupling.hpp"
+#include "GE_coherence_bus_anchor.hpp"
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 
-#include "fixed_point.hpp"
-
-static inline uint16_t clamp_q15_u16(uint32_t v) {
-    return (v > 32767u) ? 32767u : (uint16_t)v;
+static inline uint16_t ew_clamp_q15_u16(uint32_t v) {
+    return (uint16_t)((v > 32767u) ? 32767u : v);
 }
 
-static inline uint8_t band_from_q15_u16(uint16_t x_q15) {
-    // Cheap log2-ish banding. 0 -> 0, else based on top bit position.
-    if (x_q15 == 0u) return 0u;
-    uint8_t b = 0u;
-    uint16_t v = x_q15;
-    while (v > 512u && b < 7u) { v >>= 1; ++b; }
-    return b;
+static inline uint8_t ew_band_from_abs_q32_32_local(int64_t v_q32_32) {
+    uint64_t abs_v = (uint64_t)((v_q32_32 < 0) ? -v_q32_32 : v_q32_32);
+    uint8_t band = 0u;
+    abs_v >>= 32;
+    while (abs_v > 0u && band + 1u < (uint8_t)EW_COHERENCE_BANDS) {
+        abs_v >>= 1u;
+        ++band;
+    }
+    return band;
 }
 
-static inline uint8_t band_from_abs_q32_32(int64_t x_q32_32) {
-    uint64_t ax = (x_q32_32 < 0) ? (uint64_t)(-x_q32_32) : (uint64_t)x_q32_32;
-    // Map magnitude to 0..7 using top bits (very cheap log2 proxy).
-    // If ax is 0 -> band 0.
-    if (ax == 0u) return 0u;
-    uint8_t b = 0u;
-    while (ax > (1ull << 33) && b < 7u) { ax >>= 1; ++b; }
-    return b;
+static inline uint8_t ew_band_from_q15_u16_local(uint16_t q15) {
+    uint32_t v = (uint32_t)q15;
+    uint8_t band = 0u;
+    while (v > 1u && band + 1u < (uint8_t)EW_COHERENCE_BANDS) {
+        v >>= 1u;
+        ++band;
+    }
+    return band;
 }
 
 struct VoxelPick {
@@ -417,10 +418,10 @@ void ew_voxel_coupling_step(uint64_t canonical_tick_u64,
             const uint16_t coup = obj.collision_env_restitution_q15; // boundary coupling proxy
 
             const uint32_t rho_acc = (uint32_t)vs.rho_vox_q15[idx] + (uint32_t)rho;
-            vs.rho_vox_q15[idx] = clamp_q15_u16(rho_acc);
+            vs.rho_vox_q15[idx] = ew_clamp_q15_u16(rho_acc);
 
             const uint32_t c_acc = (uint32_t)vs.coupling_vox_q15[idx] + (uint32_t)coup;
-            vs.coupling_vox_q15[idx] = clamp_q15_u16(c_acc);
+            vs.coupling_vox_q15[idx] = ew_clamp_q15_u16(c_acc);
 
             // Collision coefficient accumulators (for boundary condition mapping).
             friction_acc_u32[idx] += (uint32_t)obj.collision_env_friction_q15;
@@ -519,7 +520,7 @@ void ew_voxel_coupling_step(uint64_t canonical_tick_u64,
             // This is the "coupling factor from voxel collision boundaries" contract.
             const uint16_t bs = vs.boundary_strength_vox_q15[idx];
             const uint32_t coup_up = (uint32_t)picks[pi].coupling_q15 + ((uint32_t)bs >> 2); // +0.25*bs
-            p.coupling_q15 = clamp_q15_u16(coup_up);
+            p.coupling_q15 = ew_clamp_q15_u16(coup_up);
 
             // Compton-rate proxy: rho * coupling scaled into Q32.32 turns/tick.
             const uint64_t rc = (uint64_t)p.rho_q15 * (uint64_t)p.coupling_q15; // up to ~1e9
@@ -560,7 +561,7 @@ void ew_voxel_coupling_step(uint64_t canonical_tick_u64,
         int64_t influx_raw = (int64_t)sum_rc - (int64_t)exp_rc;
         // Normalize to Q32.32 by dividing by (32767^2).
         vs.influx_q32_32 = (int64_t)((influx_raw << 32) / (int64_t)(32767ll * 32767ll));
-        vs.influx_band_u8 = band_from_abs_q32_32(vs.influx_q32_32);
+        vs.influx_band_u8 = ew_band_from_abs_q32_32_local(vs.influx_q32_32);
 
         // Publish only if magnitude exceeds a tiny threshold.
         const int64_t abs_influx = (vs.influx_q32_32 < 0) ? -vs.influx_q32_32 : vs.influx_q32_32;
@@ -574,7 +575,7 @@ void ew_voxel_coupling_step(uint64_t canonical_tick_u64,
         // Apply voxel temporal operator gain.
         const uint32_t og = (uint32_t)vs.op_gain_q15;
         const uint32_t lc_scaled = (lc * og) >> 15;
-        vs.learning_coupling_q15 = clamp_q15_u16(lc_scaled);
+        vs.learning_coupling_q15 = ew_clamp_q15_u16(lc_scaled);
 
         // Temporal coupling measurement lanes for voxel coupling.
         // Intent: boundary coupling summaries + spawn count.
@@ -596,7 +597,7 @@ void ew_voxel_coupling_step(uint64_t canonical_tick_u64,
         // Measured: interface strength and influx magnitude as energy/leakage proxies.
         vs.measured_summary.energy_mean_q15 = vs.interface_strength_mean_q15;
         vs.measured_summary.energy_peak_q15 = vs.boundary_strength_mean_q15;
-        const uint16_t influx_abs_q15 = clamp_q15_u16((uint32_t)(abs_u >> 17));
+        const uint16_t influx_abs_q15 = ew_clamp_q15_u16((uint32_t)(abs_u >> 17));
         vs.measured_summary.leakage_abs_q15 = influx_abs_q15;
         const EwId9 intent_id9 = ew_temporal_intent_id9(a.id, vs.intent_summary);
         const EwId9 measured_id9 = ew_temporal_measured_id9(a.id, vs.measured_summary, (uint32_t)vs.influx_band_u8);
@@ -608,7 +609,7 @@ void ew_voxel_coupling_step(uint64_t canonical_tick_u64,
         const uint16_t rabs = (uint16_t)((rq15 < 0) ? -rq15 : rq15);
         vs.temporal_residual.residual_q32_32 = ((int64_t)rq15) << 17;
         vs.temporal_residual.residual_norm_q15 = rabs;
-        vs.temporal_residual.residual_band_u8 = band_from_q15_u16(rabs);
+        vs.temporal_residual.residual_band_u8 = ew_band_from_q15_u16_local(rabs);
         // Gate publish: only when residual is significant.
         vs.temporal_residual.residual_pending_u8 = (rabs > 64u) ? 1u : 0u;
 

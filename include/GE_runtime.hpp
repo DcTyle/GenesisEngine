@@ -58,6 +58,7 @@
 #include "spec_aux_ops.hpp"
 
 #include "field_lattice.hpp"
+#include "photon_confinement.hpp"
 
 
 struct EwVizPoint {
@@ -67,6 +68,15 @@ struct EwVizPoint {
     int32_t z_q16_16;
     uint32_t rgba8;
     uint32_t anchor_id;
+    // Canonical per-point vector/material fields for renderer mapping.
+    int16_t vec_x_q1_15 = 0;
+    int16_t vec_y_q1_15 = 0;
+    int16_t vec_z_q1_15 = 0;
+    uint16_t density_q0_15 = 0;
+    uint16_t specularity_q0_15 = 0;
+    uint16_t roughness_q0_15 = 0;
+    uint16_t occlusion_q0_15 = 0;
+    int16_t phase_bias_q1_15 = 0;
 };
 
 // External API request/response packets emitted and consumed by the simulated
@@ -140,6 +150,66 @@ struct EwTimeDilationParams {
 
     // Normalization denominator for curvature/doppler (TURN_SCALE units).
     int64_t norm_turns_q;
+};
+
+struct EwTemporalDynamicsMacro {
+    uint32_t nist_silicon_enabled_u32 = 1u;
+    uint32_t live_gpu_kernel_enabled_u32 = 1u;
+    uint32_t begin_play_auto_apply_u32 = 1u;
+    uint32_t active_u32 = 0u;
+    uint64_t last_apply_tick_u64 = 0ull;
+
+    double nist_d220_m = 0.0;
+    double nist_lattice_constant_m = 0.0;
+    double nist_density_g_cm3 = 0.0;
+    double nist_z_over_a = 0.0;
+    double nist_atomic_weight_u = 0.0;
+    double nist_mean_excitation_energy_ev = 0.0;
+    double nist_first_ionization_energy_ev = 0.0;
+    double nist_k_edge_energy_ev = 0.0;
+    double nist_mass_attenuation_10kev_cm2_g = 0.0;
+    double nist_mass_energy_absorption_10kev_cm2_g = 0.0;
+
+    double run041_freq_norm_mean = 0.0;
+    double run041_amp_norm_mean = 0.0;
+    double run041_volt_norm_mean = 0.0;
+    double run041_curr_norm_mean = 0.0;
+    double run041_phase_lock_mean = 0.0;
+    double run041_joint_lock_mean = 0.0;
+    double run041_lattice_lock_mean = 0.0;
+    double run041_recurrence_mean = 0.0;
+    double run041_conservation_mean = 0.0;
+    double run041_composite_mean = 0.0;
+    double run041_feedback_ratio_mean = 0.0;
+    double run041_energy_drift_mean = 0.0;
+    double run041_pulse_period_mean = 0.0;
+
+    int32_t target_weights_q10[9] = {32, 32, 32, 64, 384, 192, 64, 128, 96};
+    int64_t target_denom_q[9] = {
+        TURN_SCALE, TURN_SCALE, TURN_SCALE, TURN_SCALE, TURN_SCALE / 2,
+        TURN_SCALE, TURN_SCALE, TURN_SCALE, TURN_SCALE
+    };
+    int64_t target_carrier_g_q32_32[9] = {
+        (1LL << 32), (1LL << 32), (1LL << 32), (1LL << 32), (1LL << 32),
+        (1LL << 32), (1LL << 32), (1LL << 32), (1LL << 32)
+    };
+    EwTimeDilationParams target_td_params = {
+        (1LL << 32), (1LL << 32), 0, 0, 0, TURN_SCALE, TURN_SCALE
+    };
+    uint16_t target_tau_delta_q15 = 8192;
+    int64_t target_theta_ref_turns_q = 0;
+    int64_t target_A_ref_q32_32 = (1LL << 32);
+    int64_t target_alpha_A_turns_q32_32 = (int64_t)((1LL << 32) / 8);
+    int64_t target_kappa_lnA_turns_q32_32 = (int64_t)((1LL << 32) / 32);
+    int64_t target_kappa_lnF_turns_q32_32 = (int64_t)((1LL << 32) / 64);
+    int64_t target_coherence_cmin_turns_q = (TURN_SCALE / 20);
+    int64_t target_omega0_turns_per_sec_q32_32 = (1LL << 32);
+    int64_t target_kappa_rho_q32_32 = (int64_t)(1LL << 30);
+    uint64_t target_temporal_envelope_ticks_u64 = 1024ull;
+    int64_t target_pulse_current_max_mA_q32_32 = (int64_t)(50LL << 32);
+    int64_t target_phase_max_displacement_q32_32 = (int64_t)(1LL << 32);
+    int64_t target_phase_orbital_displacement_unit_mA_q32_32 = (int64_t)(1LL << 20);
+    int64_t target_gradient_headroom_mA_q32_32 = (int64_t)(1LL << 21);
 };
 
 
@@ -908,6 +978,7 @@ public:
     int64_t phase_orbital_displacement_unit_mA_q32_32 = (int64_t)(1LL << 20);
     int64_t gradient_headroom_mA_q32_32 = (int64_t)(1LL << 21);
     uint64_t temporal_envelope_ticks_u64 = 1024;
+    EwTemporalDynamicsMacro temporal_macro;
     // -----------------------------------------------------------------
     // Genesis Engine carrier safety governor (deterministic)
     // -----------------------------------------------------------------
@@ -1764,6 +1835,17 @@ void corpus_crawl_stop();
     // Same behavior as set_projection_seed(), named to reflect that the value is derived from viewport content.
     void set_projection_viewport_basis(uint64_t basis_u64);
 
+    // Runtime-selectable temporal profile built from the NIST-backed silicon
+    // reference plus the ResearchConfinement Run41 summaries.
+    void temporal_dynamics_enable_nist_silicon(bool enabled);
+    void temporal_dynamics_enable_live_gpu_kernel(bool enabled);
+    void temporal_dynamics_rebuild_from_silicon_profile(bool begin_play);
+    void temporal_dynamics_reset_neutral_profile();
+    void temporal_dynamics_submit_live_gpu_calibration(uint64_t frame_dt_ns_u64,
+                                                       uint32_t viewport_width_u32,
+                                                       uint32_t viewport_height_u32);
+    std::string temporal_dynamics_status_utf8() const;
+
     // Configure global expansion from the Hubble constant.
     // This MUST be called before the first tick for the expansion to be active.
     // h0_q32_32 is H0 in 1/seconds (Q32.32). dt_seconds_q32_32 is tick dt.
@@ -1799,6 +1881,13 @@ void corpus_crawl_stop();
     // Build a visualization point set from the current anchor basis.
     // This is projection-only: it does not modify simulation state.
     void build_viz_points(std::vector<EwVizPoint>& out) const;
+
+    // Run a photon confinement experiment and emit viewport-ready points.
+    void run_photon_confinement_experiment(std::vector<EwVizPoint>& out,
+                                           int n_photons = 100,
+                                           int steps = 100,
+                                           float dt = 0.01f,
+                                           float field_strength = 0.1f);
 
     // Compile a deterministic experiment template from a user text line and
     // submit the resulting opcode program as operator packets.
@@ -1866,5 +1955,3 @@ public:
 };
 namespace genesis {
 } // namespace genesis
-
-

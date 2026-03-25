@@ -13,6 +13,9 @@
     <ClCompile Include="D:\GameCreation\GenesisEngine\vulkan_app\src\ai_ui.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="D:\GameCreation\GenesisEngine\vulkan_app\src\vk_ui_layer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="D:\GameCreation\GenesisEngine\vulkan_app\src\ew_openai_chat.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

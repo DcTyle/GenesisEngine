@@ -558,10 +558,10 @@ EwState evolve_state(const EwState& current_state, const EwInputs& inputs, const
         // its enforcement values from that stored representation.
 
         // Substrate microprocessor trace: incorporate the anchor's harmonic identity.
-        // Convert Q63 base_freq_code -> Q32.32 via right shift by 31.
-#if EW_ALU_TRACE_ENABLE
+        // Convert Q63 base_freq_code -> Q32.32 via arithmetic right shift by 31 (preserve sign).
+    #if EW_ALU_TRACE_ENABLE
         {
-            const int64_t base_q32_32 = (int64_t)((uint64_t)fp.base_freq_code_q63 >> 31);
+            const int64_t base_q32_32 = fp.base_freq_code_q63 >> 31;
             const uint64_t cid_fp = ew_alu_carrier_id_u64_from_q32_32_pair(ctx, base_q32_32, phi_committed_q32_32);
             ew_alu_trace(&an, cid_fp);
         }

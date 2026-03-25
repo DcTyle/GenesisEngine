@@ -8,24 +8,11 @@ static inline float q32_32_to_float(int64_t v_q32_32) {
 
 EwFieldLatticeCpu::EwFieldLatticeCpu(uint32_t gx, uint32_t gy, uint32_t gz) : gx_(gx), gy_(gy), gz_(gz) {
     const size_t n = (size_t)gx_ * (size_t)gy_ * (size_t)gz_;
-    E_prev_.assign(n, 0.0f);
-    E_curr_.assign(n, 0.0f);
-    E_next_.assign(n, 0.0f);
-    flux_.assign(n, 0.0f);
-    coherence_.assign(n, 1.0f);
-    curvature_.assign(n, 0.0f);
-    doppler_.assign(n, 0.0f);
+    state_prev_.resize(n);
+    state_curr_.resize(n);
+    state_next_.resize(n);
     density_u8_.assign(n, 0u);
     bh_exclude_u8_.assign(n, 0u);
-
-    // Operator vector fields start at zero. They are evolved deterministically
-    // and modulate transport/damping per-voxel (compute encoded as fields).
-    opA_.assign(n, 0.0f);
-    opB_.assign(n, 0.0f);
-    L0_.assign(n, 0.0f);
-    L1_.assign(n, 0.0f);
-    L2_.assign(n, 0.0f);
-    L3_.assign(n, 0.0f);
 }
 
 int EwFieldLatticeCpu::idx3_(int x, int y, int z) const {
@@ -34,17 +21,11 @@ int EwFieldLatticeCpu::idx3_(int x, int y, int z) const {
 
 void EwFieldLatticeCpu::init(uint64_t seed) {
     (void)seed;
-    std::fill(E_prev_.begin(), E_prev_.end(), 0.0f);
-    std::fill(E_curr_.begin(), E_curr_.end(), 0.0f);
-    std::fill(E_next_.begin(), E_next_.end(), 0.0f);
-    std::fill(flux_.begin(), flux_.end(), 0.0f);
-    std::fill(coherence_.begin(), coherence_.end(), 1.0f);
-    std::fill(curvature_.begin(), curvature_.end(), 0.0f);
-    std::fill(doppler_.begin(), doppler_.end(), 0.0f);
+    for (auto& s : state_prev_) std::fill(std::begin(s.d), std::end(s.d), 0.0f);
+    for (auto& s : state_curr_) std::fill(std::begin(s.d), std::end(s.d), 0.0f);
+    for (auto& s : state_next_) std::fill(std::begin(s.d), std::end(s.d), 0.0f);
     std::fill(density_u8_.begin(), density_u8_.end(), 0u);
     std::fill(bh_exclude_u8_.begin(), bh_exclude_u8_.end(), 0u);
-    std::fill(opA_.begin(), opA_.end(), 0.0f);
-    std::fill(opB_.begin(), opB_.end(), 0.0f);
     tick_index_ = 0;
     frame_seq_ = 0;
     pending_text_amp_q32_32_ = 0;
@@ -151,87 +132,103 @@ void EwFieldLatticeCpu::step_one_tick() {
         doppler_[i0] = (float)((tick_index_ % 1024ULL) / 1024.0);
     }
 
-    // Wave step.
+    // Canonical evolution: candidate_next_state = evolve_state(current_state, inputs, ctx)
     const float dt2 = dt_ * dt_;
     for (uint32_t z = 0; z < gz_; ++z) {
-        const int zm = (z > 0) ? (int)(z - 1) : (int)z;
-        const int zp = (z + 1 < gz_) ? (int)(z + 1) : (int)z;
         for (uint32_t y = 0; y < gy_; ++y) {
-            const int ym = (y > 0) ? (int)(y - 1) : (int)y;
-            const int yp = (y + 1 < gy_) ? (int)(y + 1) : (int)y;
             for (uint32_t x = 0; x < gx_; ++x) {
-                const int xm = (x > 0) ? (int)(x - 1) : (int)x;
-                const int xp = (x + 1 < gx_) ? (int)(x + 1) : (int)x;
                 const int iC = idx3_((int)x, (int)y, (int)z);
-                const int iXm = idx3_(xm, (int)y, (int)z);
-                const int iXp = idx3_(xp, (int)y, (int)z);
-                const int iYm = idx3_((int)x, ym, (int)z);
-                const int iYp = idx3_((int)x, yp, (int)z);
-                const int iZm = idx3_((int)x, (int)y, zm);
-                const int iZp = idx3_((int)x, (int)y, zp);
-
-                // Black hole event-horizon clamp: do not evolve inside.
                 if (bh_exclude_u8_[(size_t)iC] != 0u) {
-                    E_next_[(size_t)iC] = E_curr_[(size_t)iC];
-                    coherence_[(size_t)iC] = 0.0f;
-                    curvature_[(size_t)iC] = 0.0f;
-                    flux_[(size_t)iC] = 0.98f * flux_[(size_t)iC];
-                    doppler_[(size_t)iC] = 0.0f;
-                    opA_[(size_t)iC] = 0.999f * opA_[(size_t)iC];
-                    opB_[(size_t)iC] = 0.999f * opB_[(size_t)iC];
+                    state_next_[iC] = state_curr_[iC];
                     continue;
                 }
-
-                const float Ec = E_curr_[iC];
-                const float lap = (E_curr_[iXm] + E_curr_[iXp] + E_curr_[iYm] + E_curr_[iYp] + E_curr_[iZm] + E_curr_[iZp] - 6.0f * Ec);
-                const float dens = (float)density_u8_[iC] / 255.0f;
-                // Base operator terms (geometry-driven) plus operator-field modulation.
-                const float damp = (beta_ * (1.0f + 4.0f * dens)) + opB_[iC];
-                const float trans = (c2_ * (1.0f - 0.65f * dens)) + opA_[iC];
-                float En = 2.0f * Ec - E_prev_[iC] + trans * lap * dt2 - damp * Ec * dt2;
-
-                // Emergent contact constraint (CPU reference).
-                // Matches the GPU kernel: high density triggers a conservative
-                // pressure-like correction driven by the density Laplacian.
-                {
-                    const float dens_cap = 0.78f;
-                    const float overlap = (dens > dens_cap) ? (dens - dens_cap) : 0.0f;
-                    if (overlap > 0.0f) {
-                        const float dm = (float)density_u8_[iXm] / 255.0f;
-                        const float dp = (float)density_u8_[iXp] / 255.0f;
-                        const float em = (float)density_u8_[iYm] / 255.0f;
-                        const float ep = (float)density_u8_[iYp] / 255.0f;
-                        const float fm = (float)density_u8_[iZm] / 255.0f;
-                        const float fp = (float)density_u8_[iZp] / 255.0f;
-                        const float dens_lap = (dm + dp + em + ep + fm + fp - 6.0f * dens);
-                        const float k_contact = 0.35f;
-                        En += (k_contact * overlap * dens_lap) * dt2;
-
-                        const float k_flux = 0.08f;
-                        flux_[iC] = flux_[iC] - k_flux * overlap * dens_lap;
-                    }
+                // Only evolve if there is energy or field present (sparse/dynamic grid)
+                bool active = false;
+                for (int d = 0; d < 9; ++d) if (std::abs(state_curr_[iC].d[d]) > 1e-8f) active = true;
+                if (!active) {
+                    state_next_[iC] = state_curr_[iC];
+                    continue;
                 }
+                // Canonical operator: evolve_state(current_state, inputs, ctx)
+                Ew9DState candidate_next_state = state_curr_[iC];
+                // Temporal index: 3 (per DMT spec: [x, y, z, temporal, coherence, flux, phantom, aether, nexus])
+                // Integrate temporal dynamics (memory/temporal persistence)
+                float temporal_lap = 0.0f;
+                if (x > 0) temporal_lap += state_curr_[idx3_(x-1, y, z)].d[3];
+                if (x+1 < gx_) temporal_lap += state_curr_[idx3_(x+1, y, z)].d[3];
+                if (y > 0) temporal_lap += state_curr_[idx3_(x, y-1, z)].d[3];
+                if (y+1 < gy_) temporal_lap += state_curr_[idx3_(x, y+1, z)].d[3];
+                if (z > 0) temporal_lap += state_curr_[idx3_(x, y, z-1)].d[3];
+                if (z+1 < gz_) temporal_lap += state_curr_[idx3_(x, y, z+1)].d[3];
+                temporal_lap -= 6.0f * state_curr_[iC].d[3];
+                float temporal_leakage = 0.001f * state_curr_[iC].d[3];
+                candidate_next_state.d[3] += 0.12f * temporal_lap * dt2 - temporal_leakage * dt2;
 
-                E_next_[iC] = En;
-
-                coherence_[iC] = 1.0f - dens;
-                curvature_[iC] = (lap >= 0.0f) ? lap : -lap;
-                flux_[iC] = 0.98f * flux_[iC] + 0.02f * En;
-                const float dx = E_curr_[iXp] - E_curr_[iXm];
-                const float adx = (dx >= 0.0f) ? dx : -dx;
-                doppler_[iC] = 0.995f * doppler_[iC] + 0.005f * adx;
-
-                // Deterministic operator-field persistence/decay.
-                // This is the minimal "operator as field" mechanism: operator
-                // parameters are state that evolves inside the substrate.
-                opA_[iC] = 0.999f * opA_[iC];
-                opB_[iC] = 0.999f * opB_[iC];
+                // Couple temporal to other dimensions (example: coherence and flux)
+                for (int d = 0; d < 9; ++d) {
+                    if (d == 3) continue; // already updated temporal
+                    float lap = 0.0f;
+                    if (x > 0) lap += state_curr_[idx3_(x-1, y, z)].d[d];
+                    if (x+1 < gx_) lap += state_curr_[idx3_(x+1, y, z)].d[d];
+                    if (y > 0) lap += state_curr_[idx3_(x, y-1, z)].d[d];
+                    if (y+1 < gy_) lap += state_curr_[idx3_(x, y+1, z)].d[d];
+                    if (z > 0) lap += state_curr_[idx3_(x, y, z-1)].d[d];
+                    if (z+1 < gz_) lap += state_curr_[idx3_(x, y, z+1)].d[d];
+                    lap -= 6.0f * state_curr_[iC].d[d];
+                    float leakage = 0.001f * state_curr_[iC].d[d];
+                    // Temporal coupling: modulate update by local temporal state
+                    float temporal_coupling = 1.0f + 0.2f * state_curr_[iC].d[3];
+                    candidate_next_state.d[d] += temporal_coupling * 0.1f * lap * dt2 - leakage * dt2;
+                }
+                // Accept state (placeholder: always accept for now)
+                state_next_[iC] = candidate_next_state;
             }
         }
     }
+    state_prev_.swap(state_curr_);
+    state_curr_.swap(state_next_);
 
-    E_prev_.swap(E_curr_);
-    E_curr_.swap(E_next_);
+    // --- TEMPORAL COUPLING DETECTION AND LOGGING ---
+    // For each site, check if the 9D velocity vector is approximately constant (temporally coupled event)
+    // If so, log the event (site, tick, velocity vector, and relevant constants)
+    static FILE* coupled_log = nullptr;
+    if (!coupled_log) {
+        coupled_log = fopen("temporal_coupling_events.csv", "w");
+        if (coupled_log) {
+            fprintf(coupled_log, "tick,x,y,z,vel0,vel1,vel2,vel3,vel4,vel5,vel6,vel7,vel8\n");
+        }
+    }
+    const float velocity_threshold = 1e-4f; // Adjustable: how close velocities must be to be considered coupled
+    for (uint32_t z = 0; z < gz_; ++z) {
+        for (uint32_t y = 0; y < gy_; ++y) {
+            for (uint32_t x = 0; x < gx_; ++x) {
+                const int i = idx3_((int)x, (int)y, (int)z);
+                if (bh_exclude_u8_[(size_t)i] != 0u) continue;
+                // Compute velocity vector (difference between current and previous state)
+                float v[9];
+                bool valid = true;
+                for (int d = 0; d < 9; ++d) {
+                    v[d] = state_curr_[i].d[d] - state_prev_[i].d[d];
+                    if (!std::isfinite(v[d])) valid = false;
+                }
+                if (!valid) continue;
+                // Check if all velocities are approximately equal (within threshold)
+                float v_ref = v[0];
+                bool coupled = true;
+                for (int d = 1; d < 9; ++d) {
+                    if (std::abs(v[d] - v_ref) > velocity_threshold) {
+                        coupled = false;
+                        break;
+                    }
+                }
+                if (coupled && coupled_log) {
+                    fprintf(coupled_log, "%llu,%u,%u,%u", (unsigned long long)tick_index_, x, y, z);
+                    for (int d = 0; d < 9; ++d) fprintf(coupled_log, ",%g", v[d]);
+                    fprintf(coupled_log, "\n");
+                }
+            }
+        }
+    }
 }
 
 void EwFieldLatticeCpu::get_radiance_slice_bgra8(uint32_t slice_z, std::vector<uint8_t>& out_bgra8, EwFieldFrameHeader& out_hdr) {

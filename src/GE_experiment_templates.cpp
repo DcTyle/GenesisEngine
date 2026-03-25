@@ -7,6 +7,14 @@
 #include <cctype>
 #include <cstring>
 
+// Convert an int64 integer to Q32.32 fixed-point safely (with 128-bit intermediate).
+static inline int64_t i64_to_q32_32(int64_t v) {
+    __int128 t = (__int128)v * (__int128(1) << 32);
+    if (t > (__int128)INT64_MAX) return INT64_MAX;
+    if (t < (__int128)INT64_MIN) return INT64_MIN;
+    return (int64_t)t;
+}
+
 namespace EigenWare {
 
 // ew_kv_params.hpp places parsing helpers in namespace ew.
@@ -93,20 +101,20 @@ bool ew_parse_experiment_request(const std::string& utf8_line, EwExperimentReque
     out.origin_z_u32 = 0;
 
     // Graph defaults: y = 2x + 1 on [-8..+8] sampled at 129.
-    out.graph_a_q32_32 = ((int64_t)2) << 32;
-    out.graph_b_q32_32 = ((int64_t)1) << 32;
-    out.graph_xmin_q32_32 = ((int64_t)-8) << 32;
-    out.graph_xmax_q32_32 = ((int64_t)8) << 32;
+    out.graph_a_q32_32 = i64_to_q32_32(2);
+    out.graph_b_q32_32 = i64_to_q32_32(1);
+    out.graph_xmin_q32_32 = i64_to_q32_32(-8);
+    out.graph_xmax_q32_32 = i64_to_q32_32(8);
     out.graph_samples_u32 = 129u;
 
     // Graph_2d defaults: f(x,y) = x + y on [-8..+8] x [-8..+8] at 65x65.
-    out.graph2_ax_q32_32 = ((int64_t)1) << 32;
-    out.graph2_by_q32_32 = ((int64_t)1) << 32;
+    out.graph2_ax_q32_32 = i64_to_q32_32(1);
+    out.graph2_by_q32_32 = i64_to_q32_32(1);
     out.graph2_c_q32_32 = 0;
-    out.graph2_xmin_q32_32 = ((int64_t)-8) << 32;
-    out.graph2_xmax_q32_32 = ((int64_t)8) << 32;
-    out.graph2_ymin_q32_32 = ((int64_t)-8) << 32;
-    out.graph2_ymax_q32_32 = ((int64_t)8) << 32;
+    out.graph2_xmin_q32_32 = i64_to_q32_32(-8);
+    out.graph2_xmax_q32_32 = i64_to_q32_32(8);
+    out.graph2_ymin_q32_32 = i64_to_q32_32(-8);
+    out.graph2_ymax_q32_32 = i64_to_q32_32(8);
     out.graph2_samples_x_u32 = 65u;
     out.graph2_samples_y_u32 = 65u;
 
@@ -155,16 +163,16 @@ bool ew_parse_experiment_request(const std::string& utf8_line, EwExperimentReque
             if (ew_parse_bool_ascii(v, b)) out.tag_render = b;
         } else if (k == "a") {
             int64_t iv = 0;
-            if (parse_i64(v, iv)) out.graph_a_q32_32 = (iv << 32);
+            if (parse_i64(v, iv)) out.graph_a_q32_32 = i64_to_q32_32(iv);
         } else if (k == "b") {
             int64_t iv = 0;
-            if (parse_i64(v, iv)) out.graph_b_q32_32 = (iv << 32);
+            if (parse_i64(v, iv)) out.graph_b_q32_32 = i64_to_q32_32(iv);
         } else if (k == "xmin") {
             int64_t iv = 0;
-            if (parse_i64(v, iv)) out.graph_xmin_q32_32 = (iv << 32);
+            if (parse_i64(v, iv)) out.graph_xmin_q32_32 = i64_to_q32_32(iv);
         } else if (k == "xmax") {
             int64_t iv = 0;
-            if (parse_i64(v, iv)) out.graph_xmax_q32_32 = (iv << 32);
+            if (parse_i64(v, iv)) out.graph_xmax_q32_32 = i64_to_q32_32(iv);
         } else if (k == "samples") {
             if (parse_u32(v, u)) out.graph_samples_u32 = clamp_u32(u, 8u, 4096u);
         } else if (k == "expr") {

@@ -451,15 +451,6 @@ EwState evolve_state(const EwState& current_state, const EwInputs& inputs, const
         const int32_t a_sample_i32 = (int32_t)a.last_a_code + (int32_t)((da * (int32_t)ctx.tau_delta_q15) >> 15);
         const uint16_t a_sample = (a_sample_i32 < 0) ? 0u : (uint16_t)a_sample_i32;
 
-        // Deterministic sampling for v/i carrier observables.
-        const int32_t dv = (int32_t)v_k_raw - (int32_t)a.last_v_code;
-        const int32_t v_sample_i32 = (int32_t)a.last_v_code + (int32_t)((dv * (int32_t)ctx.tau_delta_q15) >> 15);
-        const uint16_t v_sample = (v_sample_i32 < 0) ? 0u : (uint16_t)v_sample_i32;
-
-        const int32_t di = (int32_t)i_k_raw - (int32_t)a.last_i_code;
-        const int32_t i_sample_i32 = (int32_t)a.last_i_code + (int32_t)((di * (int32_t)ctx.tau_delta_q15) >> 15);
-        const uint16_t i_sample = (i_sample_i32 < 0) ? 0u : (uint16_t)i_sample_i32;
-
         // Apply governor by clamping effective amplitude (reduces harmonic fan-out).
         uint16_t a_eff = a_sample;
         if (governor_severity == 1) {
@@ -540,8 +531,6 @@ EwState evolve_state(const EwState& current_state, const EwInputs& inputs, const
             remaining_headroom,
             ctx.gradient_headroom_mA_q32_32);
 
-        const int64_t phi_committed_q32_32 = phi_q32_32;
-
         // Continuous environment + chemistry update (ancilla-driven).
         ew_update_env_and_reaction_continuous(&an, current_state, ctx, an.delta_I_mA_q32_32);
 
@@ -551,10 +540,11 @@ EwState evolve_state(const EwState& current_state, const EwInputs& inputs, const
         // its enforcement values from that stored representation.
 
         // Substrate microprocessor trace: incorporate the anchor's harmonic identity.
-        // Convert Q63 base_freq_code -> Q32.32 via right shift by 31.
-#if EW_ALU_TRACE_ENABLE
+        // Convert Q63 base_freq_code -> Q32.32 via arithmetic right shift by 31 (preserve sign).
+    #if EW_ALU_TRACE_ENABLE
         {
-            const int64_t base_q32_32 = (int64_t)((uint64_t)fp.base_freq_code_q63 >> 31);
+            const int64_t phi_committed_q32_32 = phi_q32_32;
+            const int64_t base_q32_32 = fp.base_freq_code_q63 >> 31;
             const uint64_t cid_fp = ew_alu_carrier_id_u64_from_q32_32_pair(ctx, base_q32_32, phi_committed_q32_32);
             ew_alu_trace(&an, cid_fp);
         }
@@ -562,6 +552,7 @@ EwState evolve_state(const EwState& current_state, const EwInputs& inputs, const
         // Substrate microprocessor rule: every dispatch is accompanied by a
         // carrier-wave collapse derived from the committed operands (Blueprint 3.x).
         {
+            const int64_t phi_committed_q32_32 = phi_q32_32;
             const uint64_t cid = ew_alu_carrier_id_u64_from_q32_32_pair(ctx, phi_prev_q32_32, phi_committed_q32_32);
             ew_alu_trace(&an, cid);
         }

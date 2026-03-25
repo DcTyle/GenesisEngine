@@ -1,3 +1,5 @@
+# Add anchorize_files tool for anchor pack generation
+add_executable(anchorize_files tools/anchorize_files.cpp)
 cmake_minimum_required(VERSION 3.18)
 project(GenesisEngine)
 
@@ -16,6 +18,10 @@ if (EW_BUILD_ASSIMP_TOOLS)
 endif()
 
 set(CMAKE_CXX_STANDARD 17)
+set_target_properties(anchorize_files PROPERTIES
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED ON
+)
 
 option(EW_ENABLE_CUDA "Enable CUDA evolution kernel (required for CUDA-only pipeline slices)" ON)
 if (EW_ENABLE_CUDA)
@@ -40,6 +46,13 @@ endif()
 
 # Optional verification harness (Blueprint v7 V31-A).
 option(EW_BUILD_RUNTIME_CLI "Build deterministic runtime_cli harness" ON)
+
+# Photon confinement module
+set(PHOTON_CONFINEMENT_SRC
+    src/photon_confinement.cpp
+    cuda/photon_confinement_kernels.cu
+    src/vulkan_photon_confinement.cpp
+)
 
 # Windows build policy:
 # EigenWareCore relies on true 128-bit integer arithmetic (e.g., __int128 / __uint128_t)
@@ -66,6 +79,7 @@ add_library(EigenWareCore
     src/GE_camera_anchor.cpp
     src/GE_pulse_trajectory_bound.cpp
     src/GE_project_settings.cpp
+    src/GE_research_confinement.cpp
     src/GE_g2p_english.cpp
     src/GE_asset_substrate.cpp
     src/GE_neural_phase_ai.cpp
@@ -164,6 +178,7 @@ add_library(EigenWareCore
 )
 target_include_directories(EigenWareCore PUBLIC include)
 
+target_sources(EigenWareCore PRIVATE ${PHOTON_CONFINEMENT_SRC})
 if (WIN32 AND EXISTS "${EW_CLANG_BUILTINS_LIB}")
     target_link_libraries(EigenWareCore PUBLIC "${EW_CLANG_BUILTINS_LIB}")
 endif()
@@ -175,16 +190,13 @@ endif()
 # -----------------------------------------------------------------------------
 # AnchorPack: embed selected repo process artifacts as carrier-encoded anchors
 # -----------------------------------------------------------------------------
-find_package(Python3 COMPONENTS Interpreter REQUIRED)
+
 set(EW_ANCHOR_PACK_LIST "${CMAKE_CURRENT_SOURCE_DIR}/scripts/anchor_pack_list.txt")
 set(EW_ANCHOR_PACK_GEN_CPP "${CMAKE_CURRENT_BINARY_DIR}/generated/anchor_pack_blobs.cpp")
 add_custom_command(
     OUTPUT "${EW_ANCHOR_PACK_GEN_CPP}"
-    COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/scripts/anchorize_files.py"
-            --root "${CMAKE_CURRENT_SOURCE_DIR}"
-            --list "${EW_ANCHOR_PACK_LIST}"
-            --out "${EW_ANCHOR_PACK_GEN_CPP}"
-    DEPENDS "${EW_ANCHOR_PACK_LIST}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/anchorize_files.py"
+    COMMAND $<TARGET_FILE:anchorize_files> --root "${CMAKE_CURRENT_SOURCE_DIR}" --list "${EW_ANCHOR_PACK_LIST}" --out "${EW_ANCHOR_PACK_GEN_CPP}"
+    DEPENDS "${EW_ANCHOR_PACK_LIST}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/anchorize_files.cpp"
     VERBATIM
 )
 target_sources(EigenWareCore PRIVATE "${EW_ANCHOR_PACK_GEN_CPP}")
@@ -203,6 +215,8 @@ find_package(Vulkan REQUIRED)
 target_link_libraries(EigenWareCore PRIVATE Vulkan::Vulkan)
 target_compile_definitions(EigenWareCore PRIVATE EW_ENABLE_GPU_COMPUTE=1)
 
+
+# --- Vulkan Compute Shaders ---
 set(EW_VK_COMPUTE_SHADER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vkcompute")
 set(EW_VK_COMPUTE_SHADER_OUT "${CMAKE_CURRENT_BINARY_DIR}/vkcompute_shaders")
 file(MAKE_DIRECTORY "${EW_VK_COMPUTE_SHADER_OUT}")
@@ -217,6 +231,16 @@ set(EW_VK_COMPUTE_SHADERS
     ge_topk_block.comp
     ge_topk_merge.comp
 )
+
+# Add photon confinement compute shader
+set(PHOTON_SHADER_SRC "${CMAKE_CURRENT_SOURCE_DIR}/shaders/photon/photon_confinement.comp")
+set(PHOTON_SHADER_DST "${CMAKE_CURRENT_BINARY_DIR}/photon_confinement.comp.spv")
+list(APPEND EW_VK_COMPUTE_SPV "${PHOTON_SHADER_DST}")
+ew_add_spirv_shader_command(
+    "${EW_VK_SHADER_COMPILER}"
+    "${EW_VK_COMP_MODE}"
+    "${PHOTON_SHADER_SRC}"
+    "${PHOTON_SHADER_DST}")
 
 set(EW_VK_COMPUTE_SPV)
 foreach(EW_VK_SHADER IN LISTS EW_VK_COMPUTE_SHADERS)
@@ -349,6 +373,12 @@ add_executable(test_contact_constraint
 target_link_libraries(test_contact_constraint PRIVATE EigenWareCore)
 add_test(NAME contact_constraint COMMAND test_contact_constraint)
 
+add_executable(test_research_confinement
+    tests/test_research_confinement.cpp
+)
+target_link_libraries(test_research_confinement PRIVATE EigenWareCore)
+add_test(NAME research_confinement COMMAND test_research_confinement)
+
 add_executable(ew_crawler_loop
     src/tools/crawler_loop_main.cpp
 )
@@ -455,6 +485,9 @@ if (EW_ENFORCE_COHERENCE_GATE)
     endif()
     if (TARGET test_contact_constraint)
         add_dependencies(coherence_gate test_contact_constraint)
+    endif()
+    if (TARGET test_research_confinement)
+        add_dependencies(coherence_gate test_research_confinement)
     endif()
     if (TARGET ew_contract_harness)
         add_dependencies(coherence_gate ew_contract_harness)

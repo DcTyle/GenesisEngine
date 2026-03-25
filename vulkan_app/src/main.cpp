@@ -3,9 +3,21 @@
 #include <shellapi.h>
 
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <string>
 
 namespace {
+
+static void append_startup_trace(const char* line_ascii) {
+    if (!line_ascii || !*line_ascii) return;
+    std::error_code ec;
+    const std::filesystem::path log_dir = std::filesystem::current_path(ec) / "GenesisEngineState" / "Logs";
+    std::filesystem::create_directories(log_dir, ec);
+    std::ofstream out(log_dir / "startup_trace.log", std::ios::app | std::ios::binary);
+    if (!out.good()) return;
+    out << line_ascii << '\n';
+}
 
 static std::string wide_to_utf8_local(const std::wstring& s) {
     if (s.empty()) return std::string();
@@ -71,6 +83,7 @@ static void apply_arg_kv(ewv::AppConfig& cfg, const std::string& key_in, const s
 } // namespace
 
 int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
+    append_startup_trace("wWinMain.begin");
     ewv::AppConfig cfg;
     cfg.app_title_utf8 = "Genesis Engine";
     cfg.initial_width = 1600;
@@ -112,7 +125,13 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
         }
         LocalFree(argv_w);
     }
+    append_startup_trace("wWinMain.args.done");
 
+    append_startup_trace("wWinMain.app.construct.begin");
     ewv::App app(cfg);
-    return app.Run(hInst);
+    append_startup_trace("wWinMain.app.construct.done");
+    append_startup_trace("wWinMain.run.begin");
+    const int rc = app.Run(hInst);
+    append_startup_trace("wWinMain.run.done");
+    return rc;
 }

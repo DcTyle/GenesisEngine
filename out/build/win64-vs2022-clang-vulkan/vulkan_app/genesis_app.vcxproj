@@ -376,6 +376,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ClCompile Include="D:\GameCreation\GenesisEngine\vulkan_app\src\GE_app.cpp" />
     <ClCompile Include="D:\GameCreation\GenesisEngine\vulkan_app\src\camera_controller.cpp" />
     <ClCompile Include="D:\GameCreation\GenesisEngine\vulkan_app\src\ai_ui.cpp" />
+    <ClCompile Include="D:\GameCreation\GenesisEngine\vulkan_app\src\vk_ui_layer.cpp" />
     <ClCompile Include="D:\GameCreation\GenesisEngine\vulkan_app\src\ew_openai_chat.cpp" />
     <ClCompile Include="D:\GameCreation\GenesisEngine\vulkan_app\src\openxr_runtime.cpp" />
     <ClCompile Include="D:\GameCreation\GenesisEngine\vulkan_app\src\obj_import.cpp" />

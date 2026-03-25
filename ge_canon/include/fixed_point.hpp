@@ -1,6 +1,7 @@
 
 #pragma once
 #include <cstdint>
+#include "canonical_ops.hpp"
 
 static const int64_t TURN_SCALE = 1000000000000000000LL; // 1e18
 
@@ -58,16 +59,4 @@ inline uint32_t clamp_u32(uint32_t v, uint32_t lo, uint32_t hi) {
     if (v < lo) return lo;
     if (v > hi) return hi;
     return v;
-}
-
-// Q32.32 helpers (deterministic fixed-point).
-inline int64_t mul_q32_32(int64_t a_q32_32, int64_t b_q32_32) {
-    __int128 p = (__int128)a_q32_32 * (__int128)b_q32_32;
-    return (int64_t)(p >> 32);
-}
-
-inline int64_t div_q32_32(int64_t num_q32_32, int64_t den_q32_32) {
-    if (den_q32_32 == 0) return 0;
-    __int128 n = (__int128)num_q32_32 << 32;
-    return (int64_t)(n / (__int128)den_q32_32);
 }

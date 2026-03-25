@@ -8,6 +8,9 @@ It includes:
 - raw run archives for those accessible runs
 - Python scripts used for the accessible runs when present on disk
 - a V4 run ledger, experiment archive, math stack summary, manifest, and continuation prompt
+- an append-only lab notebook that stitches run notes to their CSV log and data artifacts in chronology order: [LAB_NOTEBOOK_AND_LOG_SEQUENCE_V4.md](LAB_NOTEBOOK_AND_LOG_SEQUENCE_V4.md)
+- an append-only engine build/runtime notebook that consolidates captured build logs, install/package logs, and runtime/editor logs: [ENGINE_BUILD_RUNTIME_LAB_NOTEBOOK.md](ENGINE_BUILD_RUNTIME_LAB_NOTEBOOK.md)
+- a repo-wide context routing index for research, engine specifications, physics, logs, and lab notes: [docs/CONTEXT_CLASSIFICATION_INDEX.md](../../docs/CONTEXT_CLASSIFICATION_INDEX.md)
 
 Important honesty note:
 Some transient artifacts from earlier chat-only runs were not present on disk at consolidation time. Those runs are documented in `docs_v4/EXPERIMENT_ARCHIVE_V4.md` as missing transient artifacts, with the hypotheses and reported outcomes preserved from the conversation ledger. This package is therefore the most complete accessible byte-level continuation bundle available from the current session, but not a magical resurrection of deleted transient files.

@@ -1,16 +1,27 @@
+#include <string>
+
+// Utility conversion function declaration
+std::wstring utf8_to_wide(const std::string& s);
 #pragma once
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef _CRT_SECURE_NO_WARNINGS
+#define _CRT_SECURE_NO_WARNINGS
+#endif
 #include <windows.h>
 #include <commctrl.h>
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <unordered_map>
-#include <vector>
 #include <unordered_set>
+#include <vector>
 
 #include <utility>
 
@@ -18,6 +29,7 @@
 #include "../../include/GE_control_packets.hpp"
 #include "camera_controller.hpp"
 #include "openxr_runtime.hpp"
+#include "vk_ui_layer.hpp"
 
 namespace ewv {
 
@@ -36,26 +48,134 @@ struct AppConfig {
 
 class App {
 public:
+
     struct VkCtx;
-    struct Scene;
+
+    struct Scene {
+        SubstrateManager sm;
+        uint64_t next_object_id_u64 = 1;
+        double earth_orbit_angle_rad = 0.0;
+        EwFieldLatticeCpu lattice;
+        std::vector<uint8_t> density_mask_u8;
+
+        struct Object {
+            std::string name_utf8;
+            Transform xf;
+            EwObjMesh mesh;
+            uint64_t object_id_u64 = 0;
+            uint32_t anchor_id_u32 = 0;
+            float radius_m_f32 = 1.0f;
+            float atmosphere_thickness_m_f32 = 0.0f;
+            uint32_t albedo_rgba8 = 0xFFFFFFFFu;
+            uint32_t atmosphere_rgba8 = 0x00000000u;
+            float emissive_f32 = 0.0f;
+            uint8_t pbr_scan_u8 = 0;
+            uint8_t ai_training_meta_ready_u8 = 0;
+            std::string material_meta_hint_utf8;
+            EwObjectDna object_dna;
+            int32_t pos_q16_16[3] = {0,0,0};
+            int32_t rot_quat_q16_16[4] = {0,0,0,65536};
+            int32_t radius_q16_16 = 0;
+            int32_t atmosphere_thickness_q16_16 = 0;
+            int32_t emissive_q16_16 = 0;
+            void refresh_fixed_cache() {
+                pos_q16_16[0] = (int32_t)llround((double)xf.pos[0] * 65536.0);
+                pos_q16_16[1] = (int32_t)llround((double)xf.pos[1] * 65536.0);
+                pos_q16_16[2] = (int32_t)llround((double)xf.pos[2] * 65536.0);
+                radius_q16_16 = (int32_t)llround((double)radius_m_f32 * 65536.0);
+                atmosphere_thickness_q16_16 = (int32_t)llround((double)atmosphere_thickness_m_f32 * 65536.0);
+                emissive_q16_16 = (int32_t)llround((double)emissive_f32 * 65536.0);
+            }
+        };
+
+        std::vector<Object> objects;
+        int selected = -1;
+        std::vector<EwRenderInstance> instances;
+        genesis::GeResearchConfinementArchive research_confinement;
+
+        Scene();
+        void Tick();
+        bool PopUiLine(std::string& out_utf8);
+        void SubmitAiChatLine(const std::string& utf8, uint32_t chat_slot_u32 = 0u, uint32_t mode_u32 = SubstrateManager::EW_CHAT_MEMORY_MODE_TALK);
+        bool SnapshotAiChatMemory(uint32_t prefer_mode_u32, uint32_t max_entries_u32, std::vector<SubstrateManager::EwChatMemoryEntry>& out_entries, std::string& out_summary_utf8);
+        void ObserveAiChatMemory(uint32_t chat_slot_u32, uint32_t mode_u32, const std::string& utf8);
+        void LinkAiChatProject(uint32_t chat_slot_u32, const std::string& root_utf8, const std::vector<std::string>& rels_utf8);
+        bool SnapshotAiChatProject(uint32_t chat_slot_u32, SubstrateManager::EwProjectLinkEntry& out_entry);
+        bool SnapshotAiProjectSpectrumLines(uint32_t chat_slot_u32, uint32_t max_lines_u32, std::vector<std::string>& out_lines_utf8);
+        void SetLiveViewportProjection(bool enabled, int spectrum_band_i32, uint32_t lattice_sel_u32, bool volume_mode, uint32_t slice_z_u32, uint32_t stride_u32, uint32_t max_points_u32, uint8_t intensity_min_u8);
+        void SetLiveViewportMode(bool enabled, int spectrum_band_i32);
+        bool DuplicateSelectedObjectForEditor(float offset_x_m, float offset_y_m, float offset_z_m);
+        bool SpawnProceduralEditorTemplate(const std::wstring& template_label_w);
+        void ContentReindex();
+        bool SnapshotContentEntries(uint32_t limit_u32, std::vector<genesis::GeAssetEntry>& out_entries, std::string* out_err);
+        void ContentListAll(uint32_t limit_u32);
+        void SetRepoReaderEnabled(bool enabled);
+        void RescanRepoReader();
+        bool SnapshotRepoReaderStatus(std::string& out_status_utf8);
+        bool SnapshotRepoReaderFiles(uint32_t limit_u32, std::vector<std::string>& out_rel_paths_utf8, std::string* out_err);
+        bool SnapshotRepoFilePreview(const std::string& rel_path_utf8, uint32_t max_bytes_u32, std::string& out_preview_utf8, std::string* out_err);
+        bool SnapshotRepoFileCoherenceHits(const std::string& rel_path_utf8, uint32_t limit_u32, std::vector<genesis::GeCoherenceHit>& out_hits, std::string* out_err);
+        bool SnapshotCoherenceStats(std::string& out_stats_utf8);
+        bool SnapshotCoherenceQuery(const std::string& query_utf8, uint32_t limit_u32, std::vector<genesis::GeCoherenceHit>& out_hits, std::string* out_err);
+        bool SnapshotCoherenceRenamePlan(const std::string& old_ident_ascii, const std::string& new_ident_ascii, uint32_t limit_u32, std::vector<genesis::GeCoherenceHit>& out_hits, std::string* out_err);
+        bool SnapshotCoherenceRenamePatch(const std::string& old_ident_ascii, const std::string& new_ident_ascii, uint32_t limit_u32, std::string& out_patch_utf8, std::string* out_err);
+        bool SnapshotCoherenceSelftest(bool& out_ok, std::string& out_report_utf8);
+        void EmitCoherenceStats();
+        void EmitCoherenceQuery(const std::string& query_utf8, uint32_t limit_u32);
+        void EmitCoherenceRenamePlan(const std::string& old_ident_ascii, const std::string& new_ident_ascii, uint32_t limit_u32);
+        void SetCoherenceHighlightQuery(const std::string& query_utf8, uint32_t limit_u32);
+        void SetCoherenceHighlightPath(const std::string& rel_path_utf8);
+        bool SnapshotVaultEntries(uint32_t limit_u32, std::vector<std::string>& out_rel_paths_utf8, std::string* out_err);
+        bool SnapshotVaultEntryPreview(const std::string& rel_path_utf8, uint32_t max_bytes_u32, std::string& out_preview_utf8, std::string* out_err);
+        bool ImportVaultEntry(const std::string& rel_path_utf8, std::string& out_written_path_utf8, std::string* out_err);
+        void EmitVaultListAll(uint32_t limit_u32);
+        void RequestGameBootstrap(const std::string& request_utf8);
+        void EmitAiModelTrainReady(const std::string& base_name_utf8);
+    };
 
     explicit App(const AppConfig& cfg);
     int Run(HINSTANCE hInst);
 
 private:
     AppConfig cfg_;
+    std::unique_ptr<VkUiLayer> ui_layer_;
 
     // Win64
     HWND hwnd_main_ = nullptr;
     HWND hwnd_viewport_ = nullptr;
+    HWND hwnd_primary_tab_ = nullptr;
     HWND hwnd_panel_ = nullptr;
     HWND hwnd_dock_splitter_ = nullptr;
     HWND hwnd_topbar_ = nullptr;
     HWND hwnd_topbar_menu_ = nullptr;
+    HWND hwnd_topbar_menu_edit_ = nullptr;
+    HWND hwnd_topbar_menu_window_ = nullptr;
+    HWND hwnd_topbar_menu_tools_ = nullptr;
+    HWND hwnd_topbar_menu_build_ = nullptr;
+    HWND hwnd_topbar_menu_platforms_ = nullptr;
+    HWND hwnd_topbar_menu_select_ = nullptr;
+    HWND hwnd_topbar_menu_actor_ = nullptr;
+    HWND hwnd_topbar_menu_help_ = nullptr;
+    HWND hwnd_topbar_workspace_level_ = nullptr;
+    HWND hwnd_topbar_workspace_asset_ = nullptr;
+    HWND hwnd_topbar_workspace_voxel_ = nullptr;
     HWND hwnd_topbar_title_ = nullptr;
     HWND hwnd_topbar_project_ = nullptr;
     HWND hwnd_topbar_status_ = nullptr;
+    HWND hwnd_topbar_select_mode_ = nullptr;
+    HWND hwnd_topbar_add_actor_ = nullptr;
+    HWND hwnd_topbar_tool_translate_ = nullptr;
+    HWND hwnd_topbar_tool_rotate_ = nullptr;
+    HWND hwnd_topbar_tool_frame_ = nullptr;
+    HWND hwnd_topbar_view_perspective_ = nullptr;
+    HWND hwnd_topbar_view_lit_ = nullptr;
+    HWND hwnd_topbar_view_show_ = nullptr;
+    HWND hwnd_topbar_transport_back_ = nullptr;
+    HWND hwnd_topbar_transport_start_ = nullptr;
     HWND hwnd_topbar_sim_ = nullptr;
+    HWND hwnd_topbar_pause_ = nullptr;
+    HWND hwnd_topbar_stop_ = nullptr;
+    HWND hwnd_topbar_replay_ = nullptr;
     HWND hwnd_topbar_ai_ = nullptr;
     HWND hwnd_topbar_live_ = nullptr;
     HWND hwnd_topbar_photon_ = nullptr;
@@ -65,7 +185,18 @@ private:
     HWND hwnd_topbar_maximize_ = nullptr;
     HWND hwnd_topbar_close_ = nullptr;
 
+    // Left dock (Unreal-style Asset Vault panel).
+    HWND hwnd_left_panel_ = nullptr;
+    HWND hwnd_left_title_ = nullptr;
+    HWND hwnd_left_search_ = nullptr;
+    HWND hwnd_left_category_ = nullptr;
+    HWND hwnd_left_actor_thumb_ = nullptr;
+    HWND hwnd_left_actor_list_ = nullptr;
+    std::vector<std::string> left_vault_visible_paths_utf8_;
+    bool left_place_actor_sync_guard_ = false;
+
     // Right dock (Unreal-style): tab strip + panel registry
+    static constexpr uint32_t RDockPanelCount = 7u;
     HWND hwnd_rdock_tab_ = nullptr;
     HWND hwnd_rdock_outliner_ = nullptr;
     HWND hwnd_rdock_details_ = nullptr;
@@ -73,9 +204,12 @@ private:
     HWND hwnd_rdock_voxel_ = nullptr;
     HWND hwnd_rdock_node_ = nullptr;
     HWND hwnd_rdock_sequencer_ = nullptr;
+    HWND hwnd_rdock_ai_ = nullptr;
     uint32_t rdock_tab_index_u32_ = 0u;
-    bool rdock_panel_visible_[6] = {true, true, true, true, true, true};
-    bool rdock_panel_locked_[6] = {false, false, false, false, false, false};
+    bool rdock_panel_visible_[RDockPanelCount] = {true, true, true, true, true, true, true};
+    bool rdock_panel_locked_[RDockPanelCount] = {false, false, false, false, false, false, false};
+    bool rdock_panel_workspace_enabled_[RDockPanelCount] = {true, true, true, true, true, true, true};
+    uint32_t primary_workspace_tab_index_u32_ = 0u; // 0=Level Sim, 1=Asset Builder, 2=Voxel Builder
 
     // Tab-local toolbars (editor-grade feel). Pure UI; no core logic.
     HWND hwnd_tb_outliner_ = nullptr;
@@ -84,14 +218,23 @@ private:
     HWND hwnd_tb_voxel_    = nullptr;
     HWND hwnd_tb_node_     = nullptr;
     HWND hwnd_tb_sequencer_ = nullptr;
+    HWND hwnd_tb_ai_ = nullptr;
 
     // Toolbar controls
     HWND hwnd_outliner_search_ = nullptr;
     HWND hwnd_outliner_clear_  = nullptr;
+    HWND hwnd_outliner_header_item_ = nullptr;
+    HWND hwnd_outliner_header_type_ = nullptr;
     HWND hwnd_voxel_preset_    = nullptr;
     HWND hwnd_voxel_apply_     = nullptr;
     HWND hwnd_voxel_presets_list_ = nullptr;
     HWND hwnd_voxel_viewport_resonance_ = nullptr;
+    HWND hwnd_voxel_lattice_volume_ = nullptr;
+    HWND hwnd_voxel_lattice_apply_ = nullptr;
+    HWND hwnd_voxel_vector_visualization_ = nullptr;
+    HWND hwnd_voxel_vector_gain_ = nullptr;
+    HWND hwnd_voxel_field_depth_ = nullptr;
+    HWND hwnd_voxel_focal_length_ = nullptr;
     HWND hwnd_voxel_atom_nodes_ = nullptr;
     HWND hwnd_voxel_summary_   = nullptr;
     int  voxel_atom_node_selected_i32_ = 0;
@@ -102,6 +245,8 @@ private:
     HWND hwnd_asset_selected_  = nullptr;
     HWND hwnd_asset_gate_      = nullptr;
     HWND hwnd_asset_builder_status_ = nullptr;
+    HWND hwnd_asset_preview_title_ = nullptr;
+    HWND hwnd_asset_preview_caption_ = nullptr;
     HWND hwnd_asset_review_refs_ = nullptr;
     HWND hwnd_asset_ai_panel_button_ = nullptr;
     HWND hwnd_asset_label_tool_mode_ = nullptr;
@@ -150,7 +295,12 @@ private:
     HWND hwnd_seq_timeline_ = nullptr;
     HWND hwnd_seq_summary_ = nullptr;
     HWND hwnd_seq_add_key_ = nullptr;
+    HWND hwnd_seq_back_ = nullptr;
+    HWND hwnd_seq_start_ = nullptr;
     HWND hwnd_seq_play_ = nullptr;
+    HWND hwnd_seq_pause_ = nullptr;
+    HWND hwnd_seq_stop_ = nullptr;
+    HWND hwnd_seq_replay_ = nullptr;
     HWND hwnd_seq_loop_ = nullptr;
     HWND hwnd_seq_motion_match_ = nullptr;
     HWND hwnd_seq_stress_overlay_ = nullptr;
@@ -258,19 +408,26 @@ private:
     struct CanonicalReferenceSummary;
 
     void RebuildOutlinerList();
+    std::wstring BuildPlaceActorsStatusLine(const std::wstring& label_w) const;
+    bool OpenPlaceActorsBuilderByLabel(const std::wstring& label_w);
+    bool ActivatePlaceActorsEntryByLabel(const std::wstring& label_w);
     void RebuildContentBrowserViews();
+    void RebuildContentSourcesPanel();
+    void PushContentNavigationPrefix(const std::string& prefix_utf8);
+    void NavigateContentHistory(int direction_i32);
     void RefreshContentBrowserFromRuntime(uint32_t limit_u32);
     void RefreshNodePanel();
     void RefreshAssetDesignerPanel();
     void RefreshVoxelDesignerPanel();
     void SyncVoxelAtomNodeList();
     void RefreshViewportResonanceOverlay();
-    std::string BuildPhotonConfinementStatusUtf8() const;
     void RefreshSequencerPanel();
     void RefreshContentBrowserChrome();
+    void ConfigureContentBrowserListView();
     void RefreshContent3DBrowserSurface();
+    void ShowContentBrowserSettingsMenu(HWND anchor_hwnd);
     void SetContentBrowserViewMode(uint32_t mode_u32);
-    bool SelectContentRelativePath(const std::string& rel_utf8);
+    bool SelectContentRelativePath(const std::string& rel_utf8, bool honor_lock = true);
     bool ReviewReferencesForPath(const std::string& rel_utf8, const wchar_t* origin_w);
     bool SelectContentForSelectedObject();
     bool BuildCanonicalReferenceSummaryFromHits(const std::string& subject_rel_utf8,
@@ -293,7 +450,38 @@ private:
     HWND hwnd_content_list_ = nullptr;     // list view
     HWND hwnd_content_refresh_ = nullptr;  // refresh button
     HWND hwnd_content_search_ = nullptr;   // search box
+    HWND hwnd_content_tab_primary_ = nullptr;   // "Content Browser 1"
+    HWND hwnd_content_tab_secondary_ = nullptr; // "Content Browser 2"
+    HWND hwnd_content_settings_ = nullptr; // settings button / popup anchor
+    HWND hwnd_content_add_ = nullptr;
+    HWND hwnd_content_import_toolbar_ = nullptr;
+    HWND hwnd_content_save_all_ = nullptr;
+    HWND hwnd_content_fab_ = nullptr;
+    HWND hwnd_content_breadcrumb_ = nullptr;
+    HWND hwnd_content_back_ = nullptr;
+    HWND hwnd_content_forward_ = nullptr;
+    HWND hwnd_content_sources_ = nullptr;  // left sources tree
+    bool content_secondary_tab_active_ = false;
     bool content_visible_ = true;
+    bool content_sources_panel_visible_ = true;
+    bool content_show_favorites_ = true;
+    bool content_show_folders_ = true;
+    bool content_show_empty_folders_ = true;
+    bool content_organize_folders_ = true;
+    bool content_show_all_folder_ = true;
+    bool content_show_cpp_classes_ = true;
+    bool content_show_developers_content_ = true;
+    bool content_show_engine_content_ = false;
+    bool content_show_plugin_content_ = false;
+    bool content_show_localized_content_ = false;
+    bool content_search_asset_class_names_ = true;
+    bool content_search_asset_path_ = true;
+    bool content_search_collection_names_ = true;
+    bool content_thumbnail_edit_mode_ = false;
+    bool content_realtime_thumbnails_ = true;
+    bool content_always_expand_tooltips_ = true;
+    bool content_locked_ = false;
+    uint32_t content_thumbnail_size_u32_ = 2u; // 0 tiny .. 4 huge
 
     // Deterministic content browser model (populated from structured runtime snapshot)
     struct ContentItem {
@@ -320,10 +508,17 @@ private:
     // Visible mapping for list/thumb surfaces (because filters can hide items).
     // Each visible row i maps to content_items_[content_visible_indices_[i]].
     std::vector<size_t> content_visible_indices_;
+    std::string content_source_prefix_utf8_;
+    std::vector<std::string> content_source_favorites_utf8_;
+    std::unordered_map<HTREEITEM, std::string> content_source_paths_by_item_;
+    std::vector<std::string> content_nav_history_utf8_;
+    int32_t content_nav_index_i32_ = -1;
+    bool content_nav_suppress_push_ = false;
 
     // Selection mirror between list/thumb surfaces (tracks rel path).
     std::string content_selected_rel_utf8_;
     bool content_selection_sync_guard_ = false;
+    bool content_source_sync_guard_ = false;
     std::string asset_last_review_rel_utf8_;
     uint64_t asset_last_review_revision_u64_ = 0ull;
     // Content view toggles + surfaces (List / Thumb / 3D).
@@ -337,7 +532,7 @@ private:
     HWND hwnd_content_refcheck_ = nullptr;  // coherence/reference review
     HIMAGELIST himl_content_thumbs_ = nullptr; // 64x64 thumbs
     HIMAGELIST himl_content_icons_ = nullptr;  // 16x16 list icons
-    uint32_t content_view_mode_u32_ = 1; // 0=list,1=thumb,2=3d (default: thumbnail-first)
+    uint32_t content_view_mode_u32_ = 0; // 0=grid,1=list,2=columns
 
     // Coherence highlight (derived-only). Mirrors SubstrateManager::coh_highlight_paths.
     uint64_t coh_highlight_seen_revision_u64_ = 0;
@@ -452,7 +647,7 @@ private:
     HWND hwnd_ai_coh_label_results_ = nullptr;
     HWND hwnd_ai_coh_label_patch_ = nullptr;
     HWND hwnd_ai_coh_query_ = nullptr;
-    HWND hwnd_ai_coh_old_ = nullptr;
+    // hwnd_ai_coh_old_ removed: deprecated UI element no longer used.
     HWND hwnd_ai_coh_new_ = nullptr;
     HWND hwnd_ai_coh_results_ = nullptr;
     HWND hwnd_ai_coh_patch_ = nullptr;
@@ -571,6 +766,8 @@ private:
     void SetAiCoherenceResults(const std::vector<std::wstring>& lines_w, const std::vector<std::string>& paths_utf8, const std::string* preserve_rel_utf8 = nullptr);
     void UpdateAiCoherenceSelection();
     void SyncLiveModeProjection();
+    void ApplyViewportLatticeProjectionFromControls(bool emit_status);
+    void ApplyViewportVisualFxFromControls(bool emit_status);
     void ResetEditorSelectionLocal();
     void SetEditorSelectionLocal(uint64_t object_id_u64);
     void ToggleEditorSelectionLocal(uint64_t object_id_u64);
@@ -578,6 +775,7 @@ private:
     bool live_mode_enabled_ = false;
 
     bool running_ = true;
+    bool exit_requested_ = false;
     bool resized_ = false;
     int client_w_ = 0;
     int client_h_ = 0;
@@ -630,6 +828,7 @@ private:
     std::string visualization_fault_utf8_;
     bool confinement_particles_enabled_ = true;
     uint32_t viewport_projected_points_u32_ = 0u;
+    uint32_t viewport_research_points_u32_ = 0u;
     uint32_t viewport_anchor_points_visible_u32_ = 0u;
     uint32_t viewport_anchor_points_hidden_u32_ = 0u;
     std::wstring output_log_path_w_;
@@ -640,6 +839,16 @@ private:
     // Toggle: ` (VK_OEM_3). Hold ` + mouse wheel to shift spectrum band.
     bool resonance_view_ = false;
     int  spectrum_band_i32_ = 0; // 0=visible baseline, +down toward sonar, -up toward UV/X.
+    bool viewport_lattice_volume_mode_ = true;
+    uint32_t viewport_lattice_slice_z_u32_ = 0u;
+    uint32_t viewport_lattice_stride_u32_ = 2u;
+    uint32_t viewport_lattice_max_points_u32_ = 32768u;
+    uint8_t viewport_lattice_intensity_min_u8_ = 20u;
+    bool viewport_vector_visualization_enabled_ = true;
+    uint8_t viewport_vector_gain_u8_ = 78u;
+    float viewport_field_depth_m_f32_ = 16.0f;
+    float viewport_focal_length_mm_f32_ = 50.0f;
+    float viewport_temporal_phase_f32_ = 0.0f;
     float spectrum_phase_f32_ = 0.0f; // deterministic phase for carrier visualization.
     float sequencer_scrub_t_f32_ = 0.0f;
     float eye_offset_local_[3] = {0.0f, 0.0f, 1.65f};
@@ -653,6 +862,9 @@ private:
     void LayoutChildren(int w, int h);
     void SyncWindowMenu();
     int ResolveNextVisibleDockTab(int preferred_i32) const;
+    void ApplyPrimaryWorkspaceProfile();
+    void RefreshPrimaryWorkspaceTabs();
+    void SetPrimaryWorkspaceTab(uint32_t idx_u32);
     void ApplyRightDockVisibility();
     void SetRightDockActiveTab(uint32_t idx_u32);
     void SetRightDockPanelVisible(uint32_t idx_u32, bool visible);
@@ -675,13 +887,21 @@ private:
     bool IsAiLearningEnabledCanonical() const;
     bool IsAiCrawlingEnabledCanonical() const;
     bool IsRepoReaderEnabledCanonical() const;
+    bool IsAiPanelDocked() const;
+    bool IsAssistantPanelVisible() const;
+    void FocusAiPanel(uint32_t view_u32);
     void SubmitToggleControlPacket(EwControlPacketKind kind, bool enabled);
     void SetAiStateCanonical(bool ai_enabled, bool learning_enabled, bool crawling_enabled);
     void SetRepoReaderEnabledCanonical(bool enabled);
     void RefreshAiToggleWidgets();
     void RefreshTopBarChrome();
+    void ShowTopBarMenuForButton(uint32_t cmd_id_u32, HWND anchor_hwnd);
     void ShowTopBarWorkbenchMenu();
     void DisableVisualizationWithReason(const std::string& reason_utf8);
+    void InitializeRenderer();
+    bool InitializeRendererGuarded(unsigned long* out_exception_code);
+    bool ExecuteFrameGuarded(unsigned long* out_exception_code);
+    void RefreshPlaceActorsPanel();
 
     void OnApplyTransform();
 

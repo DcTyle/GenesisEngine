@@ -1,4 +1,6 @@
 #include "GE_runtime.hpp"
+#include "GE_research_confinement.hpp"
+#include "photon_confinement.hpp"
 #include "ew_eq_exec.h"
 #include "ew_kv_params.hpp"
 #include "ew_txn_file.hpp"
@@ -21,10 +23,18 @@
 #include "ew_gpu_compute.hpp"
 #include "code_artifact_ops.hpp"
 #include <map>
+#include <vector>
+#include <string>
 #include "substrate_alu.hpp"
 #include "substrate_harmonics.hpp"
 #include "ew_coherence_analyzer.hpp"
 #include "coherence_graph.hpp"
+#include "vsd_manager.hpp"
+
+// VSDManager integration: provide accessors if needed elsewhere
+// Example usage in SubstrateManager methods (add as needed):
+// std::string value;
+// if (vsd_manager_.get(key, value)) { ... }
 
 #include "GE_shell_mesh.hpp"
 #include "GE_object_ancilla.hpp"
@@ -39,6 +49,71 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+
+void SubstrateManager::run_photon_confinement_experiment(std::vector<EwVizPoint>& out,
+                                                         int n_photons,
+                                                         int steps,
+                                                         float dt,
+                                                         float field_strength) {
+    std::vector<PhotonConfinement::PhotonState> photons((size_t)std::max(0, n_photons));
+    const int count = (int)photons.size();
+    if (count <= 0) {
+        out.clear();
+        return;
+    }
+
+    for (int i = 0; i < count; ++i) {
+        photons[i].x = 0.0f;
+        photons[i].y = 0.0f;
+        photons[i].z = 0.0f;
+        const float angle = (float)i * 6.2831853071795864f / (float)count;
+        photons[i].px = std::cos(angle);
+        photons[i].py = std::sin(angle);
+        photons[i].pz = 0.1f * ((i & 1) ? 1.0f : -1.0f);
+        photons[i].energy = 1.0f;
+        photons[i].time = 0.0f;
+    }
+
+    for (int s = 0; s < std::max(0, steps); ++s) {
+        PhotonConfinement::simulate_step(photons, dt, field_strength);
+    }
+
+    out.clear();
+    out.reserve((size_t)count);
+    for (int i = 0; i < count; ++i) {
+        EwVizPoint p{};
+        p.x_q16_16 = (int32_t)llround((double)photons[i].x * 65536.0);
+        p.y_q16_16 = (int32_t)llround((double)photons[i].y * 65536.0);
+        p.z_q16_16 = (int32_t)llround((double)photons[i].z * 65536.0);
+        // Assign type and color
+        // White: photon, Red: weighted, Yellow: flavor, Blue: charged
+        uint32_t color = 0xFFFFFFFFu; // default white
+        if (i % 4 == 0) {
+            color = 0xFFFFFFFFu; // photon (white)
+        } else if (i % 4 == 1) {
+            color = 0xFF0000FFu; // weighted (red)
+        } else if (i % 4 == 2) {
+            color = 0xFFFFFF00u; // flavor (yellow)
+        } else if (i % 4 == 3) {
+            color = 0xFF00FFFFu; // charged (blue)
+        }
+        p.rgba8 = color;
+        p.anchor_id = 0u;
+        // Set vector fields to normalized photon momentum
+        float px = photons[i].px, py = photons[i].py, pz = photons[i].pz;
+        float plen = std::sqrt(px * px + py * py + pz * pz);
+        float inv_plen = (plen > 1e-6f) ? (1.0f / plen) : 0.0f;
+        auto q15_from_unit = [](float v) -> int16_t {
+            // Clamp to [-1,1], scale to Q1.15
+            float clamped = std::max(-1.0f, std::min(1.0f, v));
+            return (int16_t)std::lround(clamped * 32767.0f);
+        };
+        p.vec_x_q1_15 = q15_from_unit(px * inv_plen);
+        p.vec_y_q1_15 = q15_from_unit(py * inv_plen);
+        p.vec_z_q1_15 = q15_from_unit(pz * inv_plen);
+        out.push_back(p);
+    }
+}
 
 static inline int64_t q32_32_mul(int64_t a_q32_32, int64_t b_q32_32) {
     // (a*b)>>32, no rounding.
@@ -1001,6 +1076,274 @@ static inline int32_t q16_16_from_turns(int64_t turns_q) {
     return (int32_t)v;
 }
 
+static inline double ew_clamp_double_local(double v, double lo, double hi) {
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+static inline uint16_t ew_q15_from_unit_double_local(double v) {
+    const double clamped = ew_clamp_double_local(v, 0.0, 0.999969482421875);
+    const double scaled = clamped * 32768.0;
+    return (uint16_t)((scaled <= 0.0) ? 0.0 : std::floor(scaled + 0.5));
+}
+
+static inline double ew_q32_32_to_double_local(int64_t v_q32_32) {
+    return (double)v_q32_32 / 4294967296.0;
+}
+
+static void ew_reset_temporal_macro_targets_local(EwTemporalDynamicsMacro& macro) {
+    static const int32_t kBaseWeights[9] = {32, 32, 32, 64, 384, 192, 64, 128, 96};
+    static const int64_t kBaseDenoms[9] = {
+        TURN_SCALE, TURN_SCALE, TURN_SCALE, TURN_SCALE, TURN_SCALE / 2,
+        TURN_SCALE, TURN_SCALE, TURN_SCALE, TURN_SCALE
+    };
+    for (int i = 0; i < 9; ++i) {
+        macro.target_weights_q10[i] = kBaseWeights[i];
+        macro.target_denom_q[i] = kBaseDenoms[i];
+        macro.target_carrier_g_q32_32[i] = (1LL << 32);
+    }
+    macro.target_td_params.td_min_q32_32 = (1LL << 32);
+    macro.target_td_params.td_max_q32_32 = (1LL << 32);
+    macro.target_td_params.k_coh_q32_32 = 0;
+    macro.target_td_params.k_curv_q32_32 = 0;
+    macro.target_td_params.k_dop_q32_32 = 0;
+    macro.target_td_params.chi_ref_turns_q = TURN_SCALE;
+    macro.target_td_params.norm_turns_q = TURN_SCALE;
+    macro.target_tau_delta_q15 = 8192;
+    macro.target_theta_ref_turns_q = 0;
+    macro.target_A_ref_q32_32 = (1LL << 32);
+    macro.target_alpha_A_turns_q32_32 = (int64_t)((1LL << 32) / 8);
+    macro.target_kappa_lnA_turns_q32_32 = (int64_t)((1LL << 32) / 32);
+    macro.target_kappa_lnF_turns_q32_32 = (int64_t)((1LL << 32) / 64);
+    macro.target_coherence_cmin_turns_q = (TURN_SCALE / 20);
+    macro.target_omega0_turns_per_sec_q32_32 = (1LL << 32);
+    macro.target_kappa_rho_q32_32 = (int64_t)(1LL << 30);
+    macro.target_temporal_envelope_ticks_u64 = 1024ull;
+    macro.target_pulse_current_max_mA_q32_32 = (int64_t)(50LL << 32);
+    macro.target_phase_max_displacement_q32_32 = (int64_t)(1LL << 32);
+    macro.target_phase_orbital_displacement_unit_mA_q32_32 = (int64_t)(1LL << 20);
+    macro.target_gradient_headroom_mA_q32_32 = (int64_t)(1LL << 21);
+}
+
+static void ew_seed_temporal_macro_from_research_local(EwTemporalDynamicsMacro& macro) {
+    ew_reset_temporal_macro_targets_local(macro);
+
+    macro.nist_d220_m = 0.0;
+    macro.nist_lattice_constant_m = 0.0;
+    macro.nist_density_g_cm3 = 0.0;
+    macro.nist_z_over_a = 0.0;
+    macro.nist_atomic_weight_u = 0.0;
+    macro.nist_mean_excitation_energy_ev = 0.0;
+    macro.nist_first_ionization_energy_ev = 0.0;
+    macro.nist_k_edge_energy_ev = 0.0;
+    macro.nist_mass_attenuation_10kev_cm2_g = 0.0;
+    macro.nist_mass_energy_absorption_10kev_cm2_g = 0.0;
+    macro.run041_freq_norm_mean = 0.0;
+    macro.run041_amp_norm_mean = 0.0;
+    macro.run041_volt_norm_mean = 0.0;
+    macro.run041_curr_norm_mean = 0.0;
+    macro.run041_phase_lock_mean = 0.0;
+    macro.run041_joint_lock_mean = 0.0;
+    macro.run041_lattice_lock_mean = 0.0;
+    macro.run041_recurrence_mean = 0.0;
+    macro.run041_conservation_mean = 0.0;
+    macro.run041_composite_mean = 0.0;
+    macro.run041_feedback_ratio_mean = 0.0;
+    macro.run041_energy_drift_mean = 0.0;
+    macro.run041_pulse_period_mean = 0.0;
+
+    const genesis::GeNistSiliconReference nist_reference = genesis::ge_load_nist_silicon_reference();
+    if (nist_reference.loaded) {
+        macro.nist_d220_m = nist_reference.lattice_spacing_d220_m;
+        macro.nist_lattice_constant_m = nist_reference.lattice_constant_m;
+        macro.nist_density_g_cm3 = nist_reference.density_g_cm3;
+        macro.nist_z_over_a = nist_reference.z_over_a;
+        macro.nist_atomic_weight_u = nist_reference.atomic_weight_u;
+        macro.nist_mean_excitation_energy_ev = nist_reference.mean_excitation_energy_ev;
+        macro.nist_first_ionization_energy_ev = nist_reference.first_ionization_energy_ev;
+        macro.nist_k_edge_energy_ev = nist_reference.k_edge_energy_ev;
+        macro.nist_mass_attenuation_10kev_cm2_g = nist_reference.mass_attenuation_10kev_cm2_g;
+        macro.nist_mass_energy_absorption_10kev_cm2_g =
+            nist_reference.mass_energy_absorption_10kev_cm2_g;
+    }
+
+    const genesis::GeResearchConfinementArchive archive =
+        genesis::ge_load_research_confinement_archive();
+    if (!archive.loaded || archive.run041_tasks.empty()) {
+        return;
+    }
+
+    const double inv_count = 1.0 / (double)archive.run041_tasks.size();
+    for (const genesis::GeResearchTaskSummary& task : archive.run041_tasks) {
+        macro.run041_freq_norm_mean += task.freq_norm;
+        macro.run041_amp_norm_mean += task.amp_norm;
+        macro.run041_volt_norm_mean += task.volt_norm;
+        macro.run041_curr_norm_mean += task.curr_norm;
+        macro.run041_phase_lock_mean += task.phase_lock_fraction;
+        macro.run041_joint_lock_mean += task.joint_lock_fraction;
+        macro.run041_lattice_lock_mean += task.lattice_lock_fraction;
+        macro.run041_recurrence_mean += task.recurrence_alignment;
+        macro.run041_conservation_mean += task.conservation_alignment;
+        macro.run041_composite_mean += task.composite_score;
+        macro.run041_feedback_ratio_mean += task.feedback_to_signal_ratio;
+        macro.run041_energy_drift_mean += task.mean_energy_drift;
+        macro.run041_pulse_period_mean += task.pulse_period_steps;
+    }
+
+    macro.run041_freq_norm_mean *= inv_count;
+    macro.run041_amp_norm_mean *= inv_count;
+    macro.run041_volt_norm_mean *= inv_count;
+    macro.run041_curr_norm_mean *= inv_count;
+    macro.run041_phase_lock_mean *= inv_count;
+    macro.run041_joint_lock_mean *= inv_count;
+    macro.run041_lattice_lock_mean *= inv_count;
+    macro.run041_recurrence_mean *= inv_count;
+    macro.run041_conservation_mean *= inv_count;
+    macro.run041_composite_mean *= inv_count;
+    macro.run041_feedback_ratio_mean *= inv_count;
+    macro.run041_energy_drift_mean *= inv_count;
+    macro.run041_pulse_period_mean *= inv_count;
+
+    const double freq_mean = ew_clamp_double_local(macro.run041_freq_norm_mean, 0.0, 1.0);
+    const double amp_mean = ew_clamp_double_local(macro.run041_amp_norm_mean, 0.0, 1.0);
+    const double volt_mean = ew_clamp_double_local(macro.run041_volt_norm_mean, 0.0, 1.0);
+    const double curr_mean = ew_clamp_double_local(macro.run041_curr_norm_mean, 0.0, 1.0);
+    const double phase_lock_mean = ew_clamp_double_local(macro.run041_phase_lock_mean, 0.0, 1.0);
+    const double joint_lock_mean = ew_clamp_double_local(macro.run041_joint_lock_mean, 0.0, 1.0);
+    const double lattice_lock_mean = ew_clamp_double_local(macro.run041_lattice_lock_mean, 0.0, 1.0);
+    const double recurrence_mean = ew_clamp_double_local(macro.run041_recurrence_mean, 0.0, 1.0);
+    const double conservation_mean = ew_clamp_double_local(macro.run041_conservation_mean, 0.0, 1.0);
+    const double composite_mean = ew_clamp_double_local(macro.run041_composite_mean, 0.0, 1.0);
+    const double attenuation10 =
+        ew_clamp_double_local(macro.nist_mass_attenuation_10kev_cm2_g / 100.0, 0.0, 1.0);
+    const double excitation_ratio = (macro.nist_first_ionization_energy_ev > 1.0e-9)
+        ? ew_clamp_double_local(macro.nist_mean_excitation_energy_ev /
+                                    macro.nist_first_ionization_energy_ev / 32.0,
+                                0.0, 1.0)
+        : 0.0;
+    const double density_ratio =
+        ew_clamp_double_local(macro.nist_density_g_cm3 / 4.0, 0.0, 1.0);
+
+    static const int32_t kBaseWeights[9] = {32, 32, 32, 64, 384, 192, 64, 128, 96};
+    double factors[9] = {
+        1.0 + 0.30 * lattice_lock_mean,
+        1.0 + 0.22 * recurrence_mean,
+        1.0 + 0.26 * conservation_mean,
+        1.0 + 0.28 * joint_lock_mean,
+        1.0 + 0.22 * excitation_ratio + 0.16 * (1.0 - phase_lock_mean) + 0.10 * lattice_lock_mean,
+        1.0 + 0.26 * curr_mean + 0.10 * density_ratio,
+        1.0 + 0.22 * volt_mean + 0.08 * attenuation10,
+        1.0 + 0.24 * amp_mean + 0.08 * composite_mean,
+        1.0 + 0.28 * freq_mean + 0.06 * attenuation10
+    };
+    double total_weight = 0.0;
+    for (int i = 0; i < 9; ++i) total_weight += (double)kBaseWeights[i] * factors[i];
+    int running_sum = 0;
+    for (int i = 0; i < 8; ++i) {
+        const double unit = (double)kBaseWeights[i] * factors[i] / total_weight;
+        int w_q10 = (int)std::lround(unit * 1024.0);
+        if (w_q10 < 1) w_q10 = 1;
+        macro.target_weights_q10[i] = w_q10;
+        running_sum += w_q10;
+    }
+    int last_weight = 1024 - running_sum;
+    if (last_weight < 1) {
+        int deficit = 1 - last_weight;
+        for (int i = 7; i >= 0 && deficit > 0; --i) {
+            const int reducible = std::max(0, macro.target_weights_q10[i] - 1);
+            const int take = (reducible > deficit) ? deficit : reducible;
+            macro.target_weights_q10[i] -= take;
+            deficit -= take;
+        }
+        last_weight = 1;
+    }
+    macro.target_weights_q10[8] = last_weight;
+
+    macro.target_denom_q[0] = TURN_SCALE;
+    macro.target_denom_q[1] = TURN_SCALE;
+    macro.target_denom_q[2] = TURN_SCALE;
+    macro.target_denom_q[3] = TURN_SCALE;
+    macro.target_denom_q[4] = std::max<int64_t>(
+        TURN_SCALE / 4,
+        (int64_t)std::llround((0.42 + 0.18 * (1.0 - phase_lock_mean)) * (double)TURN_SCALE));
+    macro.target_denom_q[5] = (int64_t)std::llround((1.0 + 0.20 * curr_mean) * (double)TURN_SCALE);
+    macro.target_denom_q[6] = (int64_t)std::llround((1.0 + 0.18 * volt_mean) * (double)TURN_SCALE);
+    macro.target_denom_q[7] = (int64_t)std::llround((1.0 + 0.14 * amp_mean) * (double)TURN_SCALE);
+    macro.target_denom_q[8] = (int64_t)std::llround((1.0 + 0.16 * freq_mean) * (double)TURN_SCALE);
+
+    const double g_values[9] = {
+        1.0 + 0.06 * lattice_lock_mean,
+        1.0 + 0.05 * recurrence_mean,
+        1.0 + 0.06 * conservation_mean,
+        1.0 + 0.08 * joint_lock_mean,
+        1.0 + 0.22 * excitation_ratio + 0.08 * lattice_lock_mean,
+        1.0 + 0.12 * curr_mean,
+        1.0 + 0.10 * volt_mean,
+        1.0 + 0.10 * amp_mean,
+        1.0 + 0.12 * freq_mean
+    };
+    for (int i = 0; i < 9; ++i) {
+        macro.target_carrier_g_q32_32[i] = q32_32_from_double(g_values[i]);
+    }
+
+    const double td_min = ew_clamp_double_local(
+        0.82 + 0.12 * lattice_lock_mean - 0.04 * freq_mean - 0.02 * attenuation10,
+        0.78, 0.98);
+    const double td_max = ew_clamp_double_local(
+        1.02 + 0.14 * lattice_lock_mean + 0.04 * recurrence_mean + 0.02 * excitation_ratio,
+        1.02, 1.24);
+    const double k_coh = ew_clamp_double_local(
+        0.10 + 0.22 * lattice_lock_mean + 0.12 * conservation_mean + 0.06 * composite_mean,
+        0.05, 0.55);
+    const double k_curv = ew_clamp_double_local(
+        0.04 + 0.18 * (1.0 - phase_lock_mean) + 0.10 * attenuation10,
+        0.04, 0.42);
+    const double k_dop = ew_clamp_double_local(
+        0.03 + 0.20 * freq_mean + 0.08 * volt_mean,
+        0.03, 0.28);
+
+    macro.target_td_params.td_min_q32_32 = q32_32_from_double(td_min);
+    macro.target_td_params.td_max_q32_32 = q32_32_from_double(td_max);
+    macro.target_td_params.k_coh_q32_32 = q32_32_from_double(k_coh);
+    macro.target_td_params.k_curv_q32_32 = q32_32_from_double(k_curv);
+    macro.target_td_params.k_dop_q32_32 = q32_32_from_double(k_dop);
+    macro.target_td_params.chi_ref_turns_q =
+        (int64_t)std::llround((0.70 + 0.30 * joint_lock_mean) * (double)TURN_SCALE);
+    macro.target_td_params.norm_turns_q =
+        (int64_t)std::llround((0.58 + 0.22 * lattice_lock_mean + 0.08 * phase_lock_mean) * (double)TURN_SCALE);
+
+    const double tau_fraction = ew_clamp_double_local(
+        0.0625 + 0.09375 * (1.0 - phase_lock_mean) + 0.03125 * (1.0 - joint_lock_mean),
+        0.0625, 0.25);
+    macro.target_tau_delta_q15 = ew_q15_from_unit_double_local(tau_fraction);
+    macro.target_theta_ref_turns_q =
+        (int64_t)std::llround((0.18 + 0.22 * joint_lock_mean + 0.10 * excitation_ratio) * (double)TURN_SCALE);
+    macro.target_A_ref_q32_32 = q32_32_from_double(1.0 + 0.20 * amp_mean);
+    macro.target_alpha_A_turns_q32_32 =
+        q32_32_from_double(0.125 + 0.050 * amp_mean + 0.030 * lattice_lock_mean);
+    macro.target_kappa_lnA_turns_q32_32 =
+        q32_32_from_double(0.03125 + 0.020 * amp_mean + 0.010 * composite_mean);
+    macro.target_kappa_lnF_turns_q32_32 =
+        q32_32_from_double(0.015625 + 0.035 * freq_mean + 0.010 * attenuation10);
+    macro.target_coherence_cmin_turns_q =
+        (int64_t)std::llround((0.025 + 0.030 * lattice_lock_mean) * (double)TURN_SCALE);
+    macro.target_omega0_turns_per_sec_q32_32 =
+        q32_32_from_double(2.0 + 4.0 * freq_mean + 2.0 * lattice_lock_mean + 1.0 * excitation_ratio);
+    macro.target_kappa_rho_q32_32 =
+        q32_32_from_double(0.16 + 0.14 * curr_mean + 0.06 * density_ratio);
+    macro.target_temporal_envelope_ticks_u64 = (uint64_t)std::llround(
+        ew_clamp_double_local(macro.run041_pulse_period_mean * (2.0 + lattice_lock_mean), 256.0, 4096.0));
+    macro.target_pulse_current_max_mA_q32_32 =
+        q32_32_from_double(50.0 + 40.0 * curr_mean + 8.0 * density_ratio);
+    macro.target_phase_max_displacement_q32_32 =
+        q32_32_from_double(1.0 + 0.20 * lattice_lock_mean + 0.05 * excitation_ratio);
+    macro.target_phase_orbital_displacement_unit_mA_q32_32 =
+        q32_32_from_double(0.020 + 0.012 * volt_mean + 0.006 * attenuation10);
+    macro.target_gradient_headroom_mA_q32_32 =
+        q32_32_from_double(0.045 + 0.040 * composite_mean + 0.020 * curr_mean);
+}
+
 SubstrateManager::SubstrateManager(size_t count) {
     int32_t w[9] = {32,32,32,64,384,192,64,128,96}; // sum 1024
     for (int i = 0; i < 9; ++i) weights_q10[i] = w[i];
@@ -1055,6 +1398,10 @@ for (size_t i = 0; i < count; ++i) anchors.emplace_back((uint32_t)i);
 
     // Initialize deterministic AI policy table.
     ai_policy.init(projection_seed);
+
+    // Precompute the NIST-backed silicon temporal profile at boot, but keep
+    // the live runtime neutral until play begins or the profile is requested.
+    ew_seed_temporal_macro_from_research_local(temporal_macro);
 
     // Initialize canonical N-body integrator state.
     genesis::ew_nbody_init_default(&nbody_state);
@@ -1587,6 +1934,165 @@ void SubstrateManager::set_projection_seed(uint64_t seed) {
 
 void SubstrateManager::set_projection_viewport_basis(uint64_t basis_u64) {
     set_projection_seed(basis_u64);
+}
+
+void SubstrateManager::temporal_dynamics_enable_nist_silicon(bool enabled) {
+    temporal_macro.nist_silicon_enabled_u32 = enabled ? 1u : 0u;
+}
+
+void SubstrateManager::temporal_dynamics_enable_live_gpu_kernel(bool enabled) {
+    temporal_macro.live_gpu_kernel_enabled_u32 = enabled ? 1u : 0u;
+}
+
+void SubstrateManager::temporal_dynamics_reset_neutral_profile() {
+    static const int32_t kBaseWeights[9] = {32, 32, 32, 64, 384, 192, 64, 128, 96};
+    static const int64_t kBaseDenoms[9] = {
+        TURN_SCALE, TURN_SCALE, TURN_SCALE, TURN_SCALE, TURN_SCALE / 2,
+        TURN_SCALE, TURN_SCALE, TURN_SCALE, TURN_SCALE
+    };
+    for (int i = 0; i < 9; ++i) {
+        weights_q10[i] = kBaseWeights[i];
+        denom_q[i] = kBaseDenoms[i];
+        carrier_g_q32_32[i] = (1LL << 32);
+    }
+
+    const int64_t one_q32_32 = (1LL << 32);
+    td_params.td_min_q32_32 = one_q32_32;
+    td_params.td_max_q32_32 = one_q32_32;
+    td_params.k_coh_q32_32 = 0;
+    td_params.k_curv_q32_32 = 0;
+    td_params.k_dop_q32_32 = 0;
+    td_params.chi_ref_turns_q = TURN_SCALE;
+    td_params.norm_turns_q = TURN_SCALE;
+
+    tau_delta_q15 = 8192;
+    theta_ref_turns_q = 0;
+    A_ref_q32_32 = one_q32_32;
+    alpha_A_turns_q32_32 = (int64_t)((1LL << 32) / 8);
+    kappa_lnA_turns_q32_32 = (int64_t)((1LL << 32) / 32);
+    kappa_lnF_turns_q32_32 = (int64_t)((1LL << 32) / 64);
+    coherence_cmin_turns_q = (TURN_SCALE / 20);
+    omega0_turns_per_sec_q32_32 = one_q32_32;
+    kappa_rho_q32_32 = (int64_t)(1LL << 30);
+    pulse_current_max_mA_q32_32 = (int64_t)(50LL << 32);
+    phase_max_displacement_q32_32 = (int64_t)(1LL << 32);
+    phase_orbital_displacement_unit_mA_q32_32 = (int64_t)(1LL << 20);
+    gradient_headroom_mA_q32_32 = (int64_t)(1LL << 21);
+    temporal_envelope_ticks_u64 = 1024ull;
+
+    temporal_macro.active_u32 = 0u;
+}
+
+void SubstrateManager::temporal_dynamics_rebuild_from_silicon_profile(bool begin_play) {
+    (void)begin_play;
+    ew_seed_temporal_macro_from_research_local(temporal_macro);
+    if (temporal_macro.nist_silicon_enabled_u32 == 0u) {
+        temporal_dynamics_reset_neutral_profile();
+        return;
+    }
+
+    for (int i = 0; i < 9; ++i) {
+        weights_q10[i] = temporal_macro.target_weights_q10[i];
+        denom_q[i] = temporal_macro.target_denom_q[i];
+        carrier_g_q32_32[i] = temporal_macro.target_carrier_g_q32_32[i];
+    }
+
+    td_params = temporal_macro.target_td_params;
+    tau_delta_q15 = temporal_macro.target_tau_delta_q15;
+    theta_ref_turns_q = temporal_macro.target_theta_ref_turns_q;
+    A_ref_q32_32 = temporal_macro.target_A_ref_q32_32;
+    alpha_A_turns_q32_32 = temporal_macro.target_alpha_A_turns_q32_32;
+    kappa_lnA_turns_q32_32 = temporal_macro.target_kappa_lnA_turns_q32_32;
+    kappa_lnF_turns_q32_32 = temporal_macro.target_kappa_lnF_turns_q32_32;
+    coherence_cmin_turns_q = temporal_macro.target_coherence_cmin_turns_q;
+    omega0_turns_per_sec_q32_32 = temporal_macro.target_omega0_turns_per_sec_q32_32;
+    kappa_rho_q32_32 = temporal_macro.target_kappa_rho_q32_32;
+    pulse_current_max_mA_q32_32 = temporal_macro.target_pulse_current_max_mA_q32_32;
+    phase_max_displacement_q32_32 = temporal_macro.target_phase_max_displacement_q32_32;
+    phase_orbital_displacement_unit_mA_q32_32 =
+        temporal_macro.target_phase_orbital_displacement_unit_mA_q32_32;
+    gradient_headroom_mA_q32_32 = temporal_macro.target_gradient_headroom_mA_q32_32;
+    temporal_envelope_ticks_u64 = temporal_macro.target_temporal_envelope_ticks_u64;
+
+    temporal_macro.active_u32 = 1u;
+    temporal_macro.last_apply_tick_u64 = canonical_tick_u64();
+}
+
+void SubstrateManager::temporal_dynamics_submit_live_gpu_calibration(uint64_t frame_dt_ns_u64,
+                                                                     uint32_t viewport_width_u32,
+                                                                     uint32_t viewport_height_u32) {
+    if (temporal_macro.live_gpu_kernel_enabled_u32 == 0u) return;
+    if (temporal_macro.active_u32 == 0u) return;
+
+    const uint64_t safe_dt_ns = (frame_dt_ns_u64 == 0u) ? 16666667ull : frame_dt_ns_u64;
+    const double frame_dt_s = (double)safe_dt_ns * 1.0e-9;
+    const double measured_hz = (frame_dt_s > 1.0e-9) ? (1.0 / frame_dt_s) : 60.0;
+    const uint64_t sweep_span = (temporal_envelope_ticks_u64 == 0u) ? 1024ull : temporal_envelope_ticks_u64;
+    const double sweep_t = (double)(canonical_tick_u64() % sweep_span) / (double)std::max<uint64_t>(1ull, sweep_span - 1ull);
+    const double descend = 1.0 - sweep_t;
+    const double harmonic = 0.5 + 0.5 * std::cos(sweep_t * 6.2831853071795864);
+    const double freq_mean = ew_clamp_double_local(temporal_macro.run041_freq_norm_mean, 0.0, 1.0);
+    const double amp_mean = ew_clamp_double_local(temporal_macro.run041_amp_norm_mean, 0.0, 1.0);
+    const double volt_mean = ew_clamp_double_local(temporal_macro.run041_volt_norm_mean, 0.0, 1.0);
+    const double curr_mean = ew_clamp_double_local(temporal_macro.run041_curr_norm_mean, 0.0, 1.0);
+    const double coherence_gain =
+        ew_clamp_double_local(ew_q32_32_to_double_local(td_params.k_coh_q32_32), 0.0, 1.0);
+
+    const double freq_ratio = ew_clamp_double_local(
+        0.15 + 0.70 * descend + 0.10 * harmonic + 0.05 * freq_mean,
+        0.05, 1.0);
+    const double amp_ratio = ew_clamp_double_local(
+        0.10 + 0.52 * descend + 0.18 * harmonic + 0.12 * amp_mean + 0.08 * curr_mean,
+        0.05, 1.0);
+    const double volt_ratio = ew_clamp_double_local(
+        0.08 + 0.52 * descend + 0.20 * coherence_gain + 0.20 * volt_mean,
+        0.05, 1.0);
+    const double curr_ratio = ew_clamp_double_local(
+        0.08 + 0.40 * descend + 0.24 * harmonic + 0.28 * curr_mean,
+        0.05, 1.0);
+
+    const uint64_t freq_ref_hz_u64 = (uint64_t)std::llround(std::max(60.0, measured_hz * 4.0));
+    const uint64_t freq_hz_u64 = (uint64_t)std::llround((double)freq_ref_hz_u64 * freq_ratio);
+    const uint32_t amp_ref_u32 = 4096u;
+    const uint32_t amp_u32 = (uint32_t)std::llround((double)amp_ref_u32 * amp_ratio);
+    const uint32_t volt_ref_u32 = 4096u;
+    const uint32_t volt_u32 = (uint32_t)std::llround((double)volt_ref_u32 * volt_ratio);
+    EwEnvelopeSample sample{};
+    sample.t_exec_ns_u64 = safe_dt_ns;
+    sample.t_budget_ns_u64 = 16666667ull;
+    sample.bytes_moved_u64 = (uint64_t)std::max<uint32_t>(1u, viewport_width_u32) *
+                             (uint64_t)std::max<uint32_t>(1u, viewport_height_u32) * 4ull;
+    sample.bytes_budget_u64 = sample.bytes_moved_u64 * 2ull;
+    sample.queue_backlog_u32 = (uint32_t)std::llround(
+        ew_clamp_double_local((frame_dt_s / (1.0 / 60.0) - 1.0) * 4.0 + 1.0 + curr_ratio * 2.0, 0.0, 32.0));
+    sample.queue_budget_u32 = 8u;
+    sample.gpu_carrier_hz_q32_32 = q32_32_from_double(measured_hz);
+    submit_envelope_sample(sample);
+    submit_gpu_pulse_sample_v2(freq_hz_u64, freq_ref_hz_u64, amp_u32, amp_ref_u32, volt_u32, volt_ref_u32);
+}
+
+std::string SubstrateManager::temporal_dynamics_status_utf8() const {
+    std::ostringstream oss;
+    oss.setf(std::ios::fixed);
+    oss.precision(4);
+    oss << "TEMPORAL_PROFILE mode="
+        << ((temporal_macro.nist_silicon_enabled_u32 != 0u) ? "nist_silicon" : "neutral")
+        << " active=" << ((temporal_macro.active_u32 != 0u) ? "1" : "0")
+        << " live_gpu=" << ((temporal_macro.live_gpu_kernel_enabled_u32 != 0u) ? "1" : "0")
+        << " begin_play=" << ((temporal_macro.begin_play_auto_apply_u32 != 0u) ? "1" : "0")
+        << " tau=" << (unsigned)tau_delta_q15
+        << " envelope=" << (unsigned long long)temporal_envelope_ticks_u64
+        << " td=[" << ew_q32_32_to_double_local(td_params.td_min_q32_32)
+        << "," << ew_q32_32_to_double_local(td_params.td_max_q32_32) << "]"
+        << " omega0=" << ew_q32_32_to_double_local(omega0_turns_per_sec_q32_32);
+    oss.setf(std::ios::scientific, std::ios::floatfield);
+    oss.precision(6);
+    oss << " lattice_a=" << temporal_macro.nist_lattice_constant_m;
+    oss.setf(std::ios::fixed, std::ios::floatfield);
+    oss.precision(4);
+    oss << " density=" << temporal_macro.nist_density_g_cm3
+        << " I_eV=" << temporal_macro.nist_mean_excitation_energy_ev;
+    return oss.str();
 }
 
 void SubstrateManager::configure_cosmic_expansion(int64_t h0_q32_32, int64_t dt_seconds_q32_32) {
@@ -4522,6 +5028,74 @@ if (utf8_line.rfind("/repo_reader", 0) == 0 || utf8_line.rfind("repo_reader:", 0
             }
         }
         (void)sim_load_from_file(name, false);
+        return;
+    }
+    if (utf8_line.rfind("/sim_play", 0) == 0 || utf8_line.rfind("sim_play:", 0) == 0) {
+        std::vector<std::string> toks;
+        ew::ew_split_shell_ascii(utf8_line, toks);
+        const std::string op = (toks.size() >= 2u) ? toks[1] : std::string("status");
+        if (op == "on" || op == "enable") {
+            emit_toggle_pkt(EwControlPacketKind::SimSetPlay, true);
+            emit_ui_line("SIM_PLAY:requested on");
+        } else if (op == "off" || op == "disable") {
+            emit_toggle_pkt(EwControlPacketKind::SimSetPlay, false);
+            emit_ui_line("SIM_PLAY:requested off");
+        } else if (op == "toggle") {
+            emit_toggle_pkt(EwControlPacketKind::SimSetPlay, sim_world_play_u32 == 0u);
+            emit_ui_line("SIM_PLAY:requested toggle");
+        } else {
+            emit_ui_line(std::string("SIM_PLAY:") + (sim_world_play_u32 ? "1" : "0"));
+        }
+        return;
+    }
+    if (utf8_line.rfind("/sim_temporal", 0) == 0 || utf8_line.rfind("sim_temporal:", 0) == 0) {
+        std::vector<std::string> toks;
+        ew::ew_split_shell_ascii(utf8_line, toks);
+        std::string op = (toks.size() >= 2u) ? toks[1] : std::string("status");
+        for (size_t i = 1; i < toks.size(); ++i) {
+            std::string_view k_sv, v_sv;
+            if (!ew::ew_split_kv_token_ascii(std::string_view(toks[i]), k_sv, v_sv)) continue;
+            if (k_sv == "begin_play") {
+                bool on = (temporal_macro.begin_play_auto_apply_u32 != 0u);
+                if (ew::ew_parse_bool_ascii(v_sv, on)) {
+                    temporal_macro.begin_play_auto_apply_u32 = on ? 1u : 0u;
+                }
+            }
+        }
+
+        if (op == "status") {
+            emit_ui_line(temporal_dynamics_status_utf8());
+        } else if (op == "off" || op == "disable" || op == "neutral") {
+            temporal_dynamics_enable_nist_silicon(false);
+            temporal_dynamics_reset_neutral_profile();
+            emit_ui_line(temporal_dynamics_status_utf8());
+        } else if (op == "on" || op == "enable" || op == "nist" || op == "apply" || op == "rebuild") {
+            temporal_dynamics_enable_nist_silicon(true);
+            temporal_dynamics_rebuild_from_silicon_profile(false);
+            emit_ui_line(temporal_dynamics_status_utf8());
+        } else if (op == "begin_play") {
+            if (toks.size() >= 3u) {
+                bool on = (temporal_macro.begin_play_auto_apply_u32 != 0u);
+                if (ew::ew_parse_bool_ascii(std::string_view(toks[2]), on)) {
+                    temporal_macro.begin_play_auto_apply_u32 = on ? 1u : 0u;
+                }
+            }
+            emit_ui_line(temporal_dynamics_status_utf8());
+        } else {
+            emit_ui_line(std::string("SIM_TEMPORAL:unknown op=") + op);
+        }
+        return;
+    }
+    if (utf8_line.rfind("/sim_live_gpu", 0) == 0 || utf8_line.rfind("sim_live_gpu:", 0) == 0) {
+        std::vector<std::string> toks;
+        ew::ew_split_shell_ascii(utf8_line, toks);
+        const std::string op = (toks.size() >= 2u) ? toks[1] : std::string("status");
+        if (op == "on" || op == "enable") {
+            temporal_dynamics_enable_live_gpu_kernel(true);
+        } else if (op == "off" || op == "disable") {
+            temporal_dynamics_enable_live_gpu_kernel(false);
+        }
+        emit_ui_line(temporal_dynamics_status_utf8());
         return;
     }
 
@@ -8195,8 +8769,15 @@ void SubstrateManager::tick() {
                 submit_compute_bus(4u, canonical_tick);
             } else if (p.kind == EwControlPacketKind::SimSetPlay) {
                 // World-play toggle: gates world evolution only.
+                const uint32_t prev_play_u32 = sim_world_play_u32;
                 sim_world_play_u32 = (p.payload.sim_set_play.enabled_u8 != 0u) ? 1u : 0u;
                 emit_ui_line(sim_world_play_u32 ? "SIM_PLAY:ON" : "SIM_PLAY:OFF");
+                if (sim_world_play_u32 != 0u &&
+                    prev_play_u32 == 0u &&
+                    temporal_macro.begin_play_auto_apply_u32 != 0u &&
+                    temporal_macro.nist_silicon_enabled_u32 != 0u) {
+                    temporal_dynamics_rebuild_from_silicon_profile(true);
+                }
             } else if (p.kind == EwControlPacketKind::AiSetEnabled) {
                 ai_enabled_u32 = (p.payload.ai_set_enabled.enabled_u8 != 0u) ? 1u : 0u;
                 emit_ui_line(ai_enabled_u32 ? "AI:ON" : "AI:OFF");
@@ -11584,9 +12165,28 @@ void SubstrateManager::build_viz_points(std::vector<EwVizPoint>& out) const {
     auto pack_rgba = [](uint8_t r, uint8_t g, uint8_t b, uint8_t a) -> uint32_t {
         return (uint32_t)r | ((uint32_t)g << 8) | ((uint32_t)b << 16) | ((uint32_t)a << 24);
     };
+    auto q15_from_unit = [](double v) -> int16_t {
+        if (v < -1.0) v = -1.0;
+        if (v > 1.0) v = 1.0;
+        const double q = v * 32767.0;
+        if (q <= -32768.0) return (int16_t)-32768;
+        if (q >= 32767.0) return (int16_t)32767;
+        return (int16_t)((q >= 0.0) ? (q + 0.5) : (q - 0.5));
+    };
+    auto uq15_from_unit = [&](double v) -> uint16_t {
+        const double c = clamp01(v);
+        return (uint16_t)(c * 32767.0 + 0.5);
+    };
+    auto q16_16_from_unit = [](double u)->int32_t {
+        // u in [-1,1]
+        const double v = u * 65536.0;
+        if (v >= (double)INT32_MAX) return INT32_MAX;
+        if (v <= (double)INT32_MIN) return INT32_MIN;
+        return (int32_t)v;
+    };
 
     // If a lattice projection tag is enabled and the GPU lattice exists, project
-    // a deterministic point cloud from a radiance slice. This is read-only.
+    // a deterministic point cloud from radiance samples. This is read-only.
     EwFieldLatticeGpu* viz_lat = nullptr;
     if (lattice_proj_tag_.enabled) {
         const uint32_t sel = lattice_proj_tag_.lattice_sel_u32;
@@ -11596,53 +12196,102 @@ void SubstrateManager::build_viz_points(std::vector<EwVizPoint>& out) const {
 
     if (lattice_proj_tag_.enabled && viz_lat) {
         const uint32_t gx = viz_lat->grid_x();
-        const uint32_t gy = lattice_gpu_->grid_y();
-        const uint32_t gz = lattice_gpu_->grid_z();
+        const uint32_t gy = viz_lat->grid_y();
+        const uint32_t gz = viz_lat->grid_z();
         if (gx != 0 && gy != 0 && gz != 0) {
-            const uint32_t slice = (lattice_proj_tag_.slice_z_u32 < gz) ? lattice_proj_tag_.slice_z_u32 : (gz - 1u);
-            std::vector<uint8_t> bgra;
-            EwFieldFrameHeader hdr{};
-            viz_lat->get_radiance_slice_bgra8(slice, bgra, hdr);
-
             const uint32_t stride = (lattice_proj_tag_.stride_u32 == 0) ? 1u : lattice_proj_tag_.stride_u32;
             const uint32_t max_pts = (lattice_proj_tag_.max_points_u32 == 0) ? 1u : lattice_proj_tag_.max_points_u32;
             const uint8_t min_i = (uint8_t)lattice_proj_tag_.intensity_min_u8;
-            out.reserve((size_t)std::min<uint32_t>(max_pts, gx * gy));
-
-            auto q16_16_from_unit = [](double u)->int32_t {
-                // u in [-1,1]
-                const double v = u * 65536.0;
-                if (v >= (double)INT32_MAX) return INT32_MAX;
-                if (v <= (double)INT32_MIN) return INT32_MIN;
-                return (int32_t)v;
+            const bool project_volume = (lattice_proj_tag_.slice_z_u32 == 0xFFFFFFFFu);
+            const uint32_t selected_slice = (lattice_proj_tag_.slice_z_u32 < gz) ? lattice_proj_tag_.slice_z_u32 : (gz - 1u);
+            uint32_t sx = stride;
+            uint32_t sy = stride;
+            uint32_t sz = project_volume ? stride : 1u;
+            auto ceil_div_u32 = [](uint32_t n, uint32_t d) -> uint32_t {
+                return (d == 0u) ? n : ((n + d - 1u) / d);
             };
-
+            auto est_points_u64 = [&](uint32_t tx, uint32_t ty, uint32_t tz) -> uint64_t {
+                const uint32_t z_count = project_volume ? ceil_div_u32(gz, tz) : 1u;
+                return (uint64_t)ceil_div_u32(gx, tx) * (uint64_t)ceil_div_u32(gy, ty) * (uint64_t)z_count;
+            };
+            while (est_points_u64(sx, sy, sz) > (uint64_t)max_pts) {
+                bool changed = false;
+                if (sx < gx) { ++sx; changed = true; }
+                if (sy < gy) { ++sy; changed = true; }
+                if (project_volume && sz < gz) { ++sz; changed = true; }
+                if (!changed) break;
+            }
+            out.reserve((size_t)std::min<uint32_t>(max_pts, (uint32_t)est_points_u64(sx, sy, sz)));
             uint32_t pushed = 0;
-            const size_t pixels = (size_t)gx * (size_t)gy;
-            if (bgra.size() >= pixels * 4u) {
-                for (uint32_t y = 0; y < gy; y += stride) {
-                    for (uint32_t x = 0; x < gx; x += stride) {
+            const uint32_t z_begin = project_volume ? 0u : selected_slice;
+            const uint32_t z_end = project_volume ? gz : (selected_slice + 1u);
+            const uint32_t z_step = project_volume ? std::max<uint32_t>(1u, sz) : 1u;
+            std::vector<uint8_t> bgra;
+            bgra.reserve((size_t)gx * (size_t)gy * 4u);
+            for (uint32_t z = z_begin; z < z_end; z += z_step) {
+                EwFieldFrameHeader hdr{};
+                viz_lat->get_radiance_slice_bgra8(z, bgra, hdr);
+                const size_t pixels = (size_t)gx * (size_t)gy;
+                if (bgra.size() < pixels * 4u) continue;
+                for (uint32_t y = 0; y < gy; y += sy) {
+                    const uint32_t ym = (y >= sy) ? (y - sy) : y;
+                    const uint32_t yp = (y + sy < gy) ? (y + sy) : y;
+                    for (uint32_t x = 0; x < gx; x += sx) {
+                        const uint32_t xm = (x >= sx) ? (x - sx) : x;
+                        const uint32_t xp = (x + sx < gx) ? (x + sx) : x;
                         const size_t idx = ((size_t)y * (size_t)gx + (size_t)x) * 4u;
+                        const size_t ixm = ((size_t)y * (size_t)gx + (size_t)xm) * 4u;
+                        const size_t ixp = ((size_t)y * (size_t)gx + (size_t)xp) * 4u;
+                        const size_t iym = ((size_t)ym * (size_t)gx + (size_t)x) * 4u;
+                        const size_t iyp = ((size_t)yp * (size_t)gx + (size_t)x) * 4u;
                         const uint8_t b = bgra[idx + 0];
                         const uint8_t g = bgra[idx + 1];
                         const uint8_t r = bgra[idx + 2];
                         const uint8_t a = bgra[idx + 3];
                         const uint8_t m = (r > g) ? ((r > b) ? r : b) : ((g > b) ? g : b);
                         if (m < min_i) continue;
+
+                        const int ixm_i = (int)bgra[ixm + 2];
+                        const int ixp_i = (int)bgra[ixp + 2];
+                        const int iym_i = (int)bgra[iym + 2];
+                        const int iyp_i = (int)bgra[iyp + 2];
+                        double vx = (double)(ixp_i - ixm_i) / 255.0;
+                        double vy = (double)(iyp_i - iym_i) / 255.0;
+                        double vz = ((double)g / 255.0) * 2.0 - 1.0;
+                        const double vlen = std::sqrt(vx * vx + vy * vy + vz * vz);
+                        if (vlen > 1.0e-6) {
+                            vx /= vlen;
+                            vy /= vlen;
+                            vz /= vlen;
+                        }
+
+                        const double density_n = clamp01((double)m / 255.0);
+                        const double specularity_n = clamp01(density_n * (1.0 - 0.35 * std::abs(vz)) + 0.25 * (std::abs(vx) + std::abs(vy)));
+                        const double roughness_n = clamp01((1.0 - density_n) * 0.55 + 0.45 * std::abs(vz));
+                        const double occlusion_n = clamp01(0.10 + (1.0 - density_n) * 0.70 + roughness_n * 0.20);
+                        const double phase_bias_n = std::max(-1.0, std::min(1.0, vz));
+
                         EwVizPoint p{};
                         const double fx = (gx > 1u) ? ((double)x / (double)(gx - 1u)) : 0.0;
                         const double fy = (gy > 1u) ? ((double)y / (double)(gy - 1u)) : 0.0;
-                        const double fz = (gz > 1u) ? ((double)slice / (double)(gz - 1u)) : 0.0;
+                        const double fz = (gz > 1u) ? ((double)z / (double)(gz - 1u)) : 0.0;
                         p.x_q16_16 = q16_16_from_unit(fx * 2.0 - 1.0);
                         p.y_q16_16 = q16_16_from_unit(fy * 2.0 - 1.0);
                         p.z_q16_16 = q16_16_from_unit(fz * 2.0 - 1.0);
                         p.rgba8 = (uint32_t)r | ((uint32_t)g << 8) | ((uint32_t)b << 16) | ((uint32_t)a << 24);
                         p.anchor_id = 0u;
+                        p.vec_x_q1_15 = q15_from_unit(vx);
+                        p.vec_y_q1_15 = q15_from_unit(vy);
+                        p.vec_z_q1_15 = q15_from_unit(vz);
+                        p.density_q0_15 = uq15_from_unit(density_n);
+                        p.specularity_q0_15 = uq15_from_unit(specularity_n);
+                        p.roughness_q0_15 = uq15_from_unit(roughness_n);
+                        p.occlusion_q0_15 = uq15_from_unit(occlusion_n);
+                        p.phase_bias_q1_15 = q15_from_unit(phase_bias_n);
                         out.push_back(p);
                         if (++pushed >= max_pts) return;
                     }
                 }
-                return;
             }
         }
         // Fallthrough to anchor projection if slice extraction is unavailable.
@@ -11715,6 +12364,19 @@ void SubstrateManager::build_viz_points(std::vector<EwVizPoint>& out) const {
             (uint8_t)(final_g * 255.0 + 0.5),
             (uint8_t)(final_b * 255.0 + 0.5),
             alpha);
+        const double px = std::max(-1.0, std::min(1.0, (double)p.x_q16_16 / 65536.0));
+        const double py = std::max(-1.0, std::min(1.0, (double)p.y_q16_16 / 65536.0));
+        const double pz = std::max(-1.0, std::min(1.0, (double)p.z_q16_16 / 65536.0));
+        const double plen = std::sqrt(px * px + py * py + pz * pz);
+        const double inv_plen = (plen > 1.0e-6) ? (1.0 / plen) : 0.0;
+        p.vec_x_q1_15 = q15_from_unit(px * inv_plen);
+        p.vec_y_q1_15 = q15_from_unit(py * inv_plen);
+        p.vec_z_q1_15 = q15_from_unit(pz * inv_plen);
+        p.density_q0_15 = uq15_from_unit(bind_n);
+        p.specularity_q0_15 = uq15_from_unit(bridge_n);
+        p.roughness_q0_15 = uq15_from_unit(1.0 - flow_n);
+        p.occlusion_q0_15 = uq15_from_unit(clamp01(0.12 + 0.58 * potential_n + 0.30 * (1.0 - bridge_n)));
+        p.phase_bias_q1_15 = q15_from_unit(std::max(-1.0, std::min(1.0, (double)a.doppler_q / ((double)TURN_SCALE * 0.75))));
         out.push_back(p);
     }
 }

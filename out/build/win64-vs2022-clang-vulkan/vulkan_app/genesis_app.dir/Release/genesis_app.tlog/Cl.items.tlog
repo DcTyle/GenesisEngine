@@ -2,6 +2,7 @@ D:\GameCreation\GenesisEngine\vulkan_app\src\main.cpp;D:\GameCreation\GenesisEng
 D:\GameCreation\GenesisEngine\vulkan_app\src\GE_app.cpp;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\genesis_app.dir\Release\GE_app.obj
 D:\GameCreation\GenesisEngine\vulkan_app\src\camera_controller.cpp;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\genesis_app.dir\Release\camera_controller.obj
 D:\GameCreation\GenesisEngine\vulkan_app\src\ai_ui.cpp;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\genesis_app.dir\Release\ai_ui.obj
+D:\GameCreation\GenesisEngine\vulkan_app\src\vk_ui_layer.cpp;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\genesis_app.dir\Release\vk_ui_layer.obj
 D:\GameCreation\GenesisEngine\vulkan_app\src\ew_openai_chat.cpp;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\genesis_app.dir\Release\ew_openai_chat.obj
 D:\GameCreation\GenesisEngine\vulkan_app\src\openxr_runtime.cpp;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\genesis_app.dir\Release\openxr_runtime.obj
 D:\GameCreation\GenesisEngine\vulkan_app\src\obj_import.cpp;D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\vulkan_app\genesis_app.dir\Release\obj_import.obj

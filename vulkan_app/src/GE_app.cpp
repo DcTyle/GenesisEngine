@@ -1,216 +1,48 @@
-#include "GE_app.hpp"
-#include "ew_openai_chat.hpp"
+
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
+
+#include "include/Mesh.hpp"
+#include "include/Object.hpp"
+#include "include/ObjectStore.hpp"
+#include "GE_runtime.hpp"
+#include "include/UITheme.hpp"
+#include "include/EwGlyphIcon.hpp"
+
+#include "include/obj_import.hpp" // EwObjMesh
+#include "include/GE_field_lattice.hpp" // EwFieldLatticeCpu
+#include "include/GE_render_instance.hpp" // EwRenderInstance
+#include "../../include/GE_research_confinement.hpp" // GeResearchConfinementArchive
+
 
 #ifndef VK_USE_PLATFORM_WIN32_KHR
 #define VK_USE_PLATFORM_WIN32_KHR 1
 #endif
+
+
+#include "include/Mesh.hpp"
+#include "include/Object.hpp"
+#include "include/ObjectStore.hpp"
+#include "GE_runtime.hpp"
+#include "include/UITheme.hpp"
+#include "include/EwGlyphIcon.hpp"
+
 #include <vulkan/vulkan.h>
 #include <shellscalingapi.h>
-#include <shellapi.h>
-#include <shlobj.h>
-#include <commdlg.h>
-#include <commctrl.h>
 #include <dwmapi.h>
-#include <windowsx.h>
-#pragma comment(lib, "Comctl32.lib")
-#pragma comment(lib, "Dwmapi.lib")
-
-
+#include <commctrl.h>
+#include <uxtheme.h>
 #include <algorithm>
-#include <cassert>
-#include <chrono>
-#include <cmath>
-#include <cstdio>
-#include <cstring>
-#include <stdexcept>
-#include <sstream>
-#include <cstdlib>
-#include <thread>
-
-#include "GE_runtime.hpp" // SubstrateManager
-#include "ew_runtime.h"      // ew_runtime_project_points
-#include "GE_object_memory.hpp"
-#include "GE_scene_types.hpp"
-#include "field_lattice_cpu.hpp"
-#include "obj_import.hpp"
-#include "GE_render_instance.hpp"
-#include "ewmesh_voxelizer.hpp"
-#include "carrier_bundle_gpu.hpp"
-#include "GE_control_packets.hpp"
-#include "GE_remote_control.hpp"
-
 #include <fstream>
-#include <filesystem>
+#include <streambuf>
+#include <vector>
+#include <string>
+#include <cstdint>
+#include <cwctype>
+#include <cmath>
 
-#ifndef EW_SHADER_OUT_DIR
-#define EW_SHADER_OUT_DIR "."
-#endif
-
-#pragma comment(lib, "Shcore.lib")
-
-namespace ewv {
-
-namespace {
-
-constexpr UINT EW_APPMSG_OPENAI_COMPLETE = WM_APP + 0x51u;
-
-struct EwOpenAiUiResult {
-    uint32_t chat_idx_u32 = 0u;
-    bool ok = false;
-    std::string text_utf8;
-    std::string status_utf8;
-};
-
-} // namespace
-
-// -----------------------------------------------------------------------------
-// UI Theme (Windows native host, Win64 app baseline)
-// - Unreal-inspired editor shell: black background, blue-grey foreground
-//   surfaces, and gold interaction accents.
-// - Important: purely presentation. The substrate simulation remains the
-//   authoritative backend that the editor depends on.
-// -----------------------------------------------------------------------------
-struct EwUiTheme {
-    COLORREF bg                 = RGB(8, 10, 13);
-    COLORREF bg_elevated        = RGB(12, 16, 21);
-    COLORREF panel              = RGB(20, 25, 32);
-    COLORREF panel_alt          = RGB(27, 34, 43);
-    COLORREF edit_bg            = RGB(14, 19, 25);
-    COLORREF edit_bg_alt        = RGB(18, 24, 31);
-    COLORREF text               = RGB(226, 232, 240);
-    COLORREF muted              = RGB(154, 165, 180);
-    COLORREF dim                = RGB(118, 128, 142);
-    COLORREF border             = RGB(60, 71, 84);
-    COLORREF border_soft        = RGB(40, 48, 58);
-    COLORREF gold               = RGB(212, 176, 68);
-    COLORREF gold_hot           = RGB(245, 210, 102);
-    COLORREF gold_dim           = RGB(132, 109, 46);
-    COLORREF gold_fill          = RGB(63, 52, 21);
-    COLORREF gold_fill_hot      = RGB(80, 66, 27);
-    COLORREF gold_fill_pressed  = RGB(96, 78, 32);
-    COLORREF steel              = RGB(99, 122, 156);
-    COLORREF steel_hot          = RGB(132, 160, 201);
-    COLORREF steel_fill         = RGB(31, 41, 55);
-    COLORREF highlight_bg       = RGB(29, 38, 49);
-    COLORREF highlight_bg_strong= RGB(39, 50, 64);
-    COLORREF badge_red          = RGB(191, 78, 56);
-    COLORREF chat_user_bg       = RGB(23, 29, 37);
-    COLORREF chat_assistant_bg  = RGB(15, 19, 26);
-};
-
-static EwUiTheme g_theme;
-static HBRUSH g_brush_bg    = nullptr;
-static HBRUSH g_brush_panel = nullptr;
-static HBRUSH g_brush_edit  = nullptr;
-static HBRUSH g_brush_splitter = nullptr;
-static HBRUSH g_brush_topbar = nullptr;
-
-static COLORREF ew_theme_button_fill(bool active, bool hot, bool pressed, bool disabled) {
-    if (disabled) return g_theme.bg_elevated;
-    if (pressed) return active ? g_theme.gold_fill_pressed : g_theme.panel_alt;
-    if (hot) return active ? g_theme.gold_fill_hot : g_theme.highlight_bg;
-    return active ? g_theme.gold_fill : g_theme.bg_elevated;
-}
-
-static COLORREF ew_theme_button_border(bool active, bool hot, bool disabled) {
-    if (disabled) return g_theme.border_soft;
-    if (hot) return active ? g_theme.gold_hot : g_theme.steel_hot;
-    return active ? g_theme.gold : g_theme.border;
-}
-
-static COLORREF ew_theme_button_text(bool active, bool disabled) {
-    if (disabled) return g_theme.dim;
-    return active ? g_theme.gold_hot : g_theme.text;
-}
-
-static COLORREF ew_theme_tab_fill(bool selected) {
-    return selected ? g_theme.panel_alt : g_theme.bg_elevated;
-}
-
-static COLORREF ew_theme_list_highlight_fill(bool selected) {
-    return selected ? g_theme.highlight_bg_strong : g_theme.highlight_bg;
-}
-
-#ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
-#define DWMWA_USE_IMMERSIVE_DARK_MODE 20
-#endif
-#ifndef DWMWA_WINDOW_CORNER_PREFERENCE
-#define DWMWA_WINDOW_CORNER_PREFERENCE 33
-#endif
-#ifndef DWMWA_BORDER_COLOR
-#define DWMWA_BORDER_COLOR 34
-#endif
-#ifndef DWMWA_CAPTION_COLOR
-#define DWMWA_CAPTION_COLOR 35
-#endif
-#ifndef DWMWA_TEXT_COLOR
-#define DWMWA_TEXT_COLOR 36
-#endif
-#ifndef DWMWA_SYSTEMBACKDROP_TYPE
-#define DWMWA_SYSTEMBACKDROP_TYPE 38
-#endif
-#ifndef DWMWCP_ROUND
-#define DWMWCP_ROUND 2
-#endif
-#ifndef DWMSBT_MAINWINDOW
-#define DWMSBT_MAINWINDOW 2
-#endif
-#ifndef DWMSBT_TRANSIENTWINDOW
-#define DWMSBT_TRANSIENTWINDOW 3
-#endif
-
-
-#ifndef GENESIS_EDITOR_BUILD
-#define GENESIS_EDITOR_BUILD 1
-#endif
-
-static constexpr bool ew_editor_build_enabled = (GENESIS_EDITOR_BUILD != 0);
-
-static HFONT g_font_ui = nullptr;
-static HFONT g_font_ui_bold = nullptr;
-static HFONT g_font_ui_small = nullptr;
-
-static std::wstring utf8_to_wide(const std::string& s);
-static std::string wide_to_utf8(const std::wstring& s);
-static bool ew_starts_with(const std::wstring& s, const wchar_t* prefix);
-static bool env_truthy(const char* name);
-static std::vector<std::wstring> ew_split_trim_pin_list_local(const std::wstring& s) {
-    std::vector<std::wstring> out;
-    std::wstring cur;
-    auto flush = [&]() {
-        size_t a = 0;
-        while (a < cur.size() && iswspace(cur[a])) ++a;
-        size_t b = cur.size();
-        while (b > a && iswspace(cur[b - 1])) --b;
-        if (b > a) out.push_back(cur.substr(a, b - a));
-        cur.clear();
-    };
-    for (wchar_t ch : s) {
-        if (ch == L',') flush();
-        else cur.push_back(ch);
-    }
-    flush();
-    return out;
-}
-
-static void ew_listview_get_item_text_w(HWND lv, int item, int sub, wchar_t* buffer, int cch_buffer) {
-    if (!buffer || cch_buffer <= 0) return;
-    buffer[0] = 0;
-    if (!lv || item < 0 || sub < 0) return;
-    LVITEMW it{};
-    it.iSubItem = sub;
-    it.pszText = buffer;
-    it.cchTextMax = cch_buffer;
-    (void)SendMessageW(lv, LVM_GETITEMTEXTW, (WPARAM)item, (LPARAM)&it);
-}
-
-static void ew_listview_set_item_text_w(HWND lv, int item, int sub, const std::wstring& s) {
-    if (!lv || item < 0 || sub < 0) return;
-    LVITEMW it{};
-    it.iSubItem = sub;
-    it.pszText = const_cast<LPWSTR>(s.c_str());
-    (void)SendMessageW(lv, LVM_SETITEMTEXTW, (WPARAM)item, (LPARAM)&it);
-}
 
 static std::wstring ew_extract_first_url_w(const std::wstring& text) {
     const size_t https_pos = text.find(L"https://");
@@ -255,6 +87,7 @@ static void ew_theme_init_once() {
     inited = true;
     g_brush_bg    = CreateSolidBrush(g_theme.bg);
     g_brush_panel = CreateSolidBrush(g_theme.panel);
+    g_brush_panel_alt = CreateSolidBrush(g_theme.panel_alt);
     g_brush_edit  = CreateSolidBrush(g_theme.edit_bg);
     g_brush_splitter = CreateSolidBrush(g_theme.border_soft);
     g_brush_topbar = CreateSolidBrush(g_theme.bg_elevated);
@@ -271,6 +104,9 @@ static void ew_theme_init_once() {
     g_font_ui_small = CreateFontW(-MulDiv(9, dpi_y, 72), 0, 0, 0, FW_NORMAL,
                            FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI Variable Text");
+    g_font_icon = CreateFontW(-MulDiv(12, dpi_y, 72), 0, 0, 0, FW_NORMAL,
+                           FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                           CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe MDL2 Assets");
 }
 
 static void ew_apply_modern_window_chrome(HWND hwnd, bool transient_window) {
@@ -324,16 +160,16 @@ static void ew_draw_window_chrome_button(const DRAWITEMSTRUCT* dis, bool is_clos
     if (is_close_button && !disabled) {
         if (pressed) {
             fill = RGB(124, 42, 42);
-            border = RGB(210, 88, 88);
-            text = RGB(255, 233, 233);
+            border = g_theme.gold_dim;
+            text = g_theme.gold_hot;
         } else if (hot) {
             fill = RGB(104, 34, 34);
-            border = RGB(196, 80, 80);
-            text = RGB(255, 236, 236);
+            border = g_theme.gold;
+            text = g_theme.gold_hot;
         } else {
             fill = g_theme.panel_alt;
-            border = g_theme.border;
-            text = g_theme.text;
+            border = g_theme.gold;
+            text = g_theme.gold;
         }
     }
     ew_draw_rounded_surface(dc, rc, fill, border, 12, is_close_button ? 2 : 1);
@@ -354,7 +190,7 @@ static void ew_draw_project_badge(const DRAWITEMSTRUCT* dis) {
     HDC dc = dis->hDC;
     RECT rc = dis->rcItem;
     InflateRect(&rc, -1, -2);
-    ew_draw_rounded_surface(dc, rc, g_theme.highlight_bg, g_theme.steel, 14, 1);
+    ew_draw_rounded_surface(dc, rc, g_theme.highlight_bg, g_theme.gold, 14, 1);
     RECT dot = rc;
     dot.left += 10;
     dot.right = dot.left + 8;
@@ -393,6 +229,86 @@ static void ew_apply_editor_fonts(HWND root) {
     ew_apply_font_recursive(root, g_font_ui);
 }
 
+static bool ew_is_class_name(HWND hwnd, const wchar_t* class_name_w) {
+    if (!hwnd || !class_name_w) return false;
+    wchar_t cls[64]{};
+    if (GetClassNameW(hwnd, cls, (int)_countof(cls)) <= 0) return false;
+    return _wcsicmp(cls, class_name_w) == 0;
+}
+
+static void ew_make_button_ownerdraw_if_push(HWND hwnd_button) {
+    if (!hwnd_button) return;
+    const LONG_PTR style = GetWindowLongPtrW(hwnd_button, GWL_STYLE);
+    const LONG_PTR type = style & BS_TYPEMASK;
+    const bool push_like = (type == BS_PUSHBUTTON || type == BS_DEFPUSHBUTTON);
+    if (!push_like || ((style & BS_OWNERDRAW) != 0)) return;
+    const LONG_PTR next_style = (style & ~BS_TYPEMASK) | BS_OWNERDRAW;
+    SetWindowLongPtrW(hwnd_button, GWL_STYLE, next_style);
+    SetWindowPos(hwnd_button, nullptr, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+}
+
+static void ew_apply_dark_palette_to_control(HWND hwnd_ctrl) {
+    if (!hwnd_ctrl) return;
+    ew_theme_init_once();
+    if (ew_is_class_name(hwnd_ctrl, L"Button")) {
+        ew_make_button_ownerdraw_if_push(hwnd_ctrl);
+        InvalidateRect(hwnd_ctrl, nullptr, TRUE);
+        return;
+    }
+    if (ew_is_class_name(hwnd_ctrl, WC_LISTVIEWW)) {
+        SetWindowTheme(hwnd_ctrl, L"", nullptr);
+        ListView_SetBkColor(hwnd_ctrl, g_theme.edit_bg);
+        ListView_SetTextBkColor(hwnd_ctrl, g_theme.edit_bg);
+        ListView_SetTextColor(hwnd_ctrl, g_theme.text);
+        ListView_SetOutlineColor(hwnd_ctrl, g_theme.border_soft);
+        if (HWND header = ListView_GetHeader(hwnd_ctrl)) {
+            SetWindowTheme(header, L"", nullptr);
+            InvalidateRect(header, nullptr, TRUE);
+        }
+        InvalidateRect(hwnd_ctrl, nullptr, TRUE);
+        return;
+    }
+    if (ew_is_class_name(hwnd_ctrl, WC_TREEVIEWW)) {
+        SetWindowTheme(hwnd_ctrl, L"", nullptr);
+        TreeView_SetBkColor(hwnd_ctrl, g_theme.edit_bg);
+        TreeView_SetTextColor(hwnd_ctrl, g_theme.text);
+        TreeView_SetLineColor(hwnd_ctrl, g_theme.border_soft);
+        InvalidateRect(hwnd_ctrl, nullptr, TRUE);
+        return;
+    }
+    if (ew_is_class_name(hwnd_ctrl, WC_COMBOBOXW)) {
+        SetWindowTheme(hwnd_ctrl, L"", nullptr);
+        COMBOBOXINFO cbi{};
+        cbi.cbSize = sizeof(cbi);
+        if (GetComboBoxInfo(hwnd_ctrl, &cbi)) {
+            if (cbi.hwndList) SetWindowTheme(cbi.hwndList, L"", nullptr);
+            if (cbi.hwndItem) SetWindowTheme(cbi.hwndItem, L"", nullptr);
+        }
+        InvalidateRect(hwnd_ctrl, nullptr, TRUE);
+        return;
+    }
+    if (ew_is_class_name(hwnd_ctrl, WC_TABCONTROLW) || ew_is_class_name(hwnd_ctrl, TRACKBAR_CLASSW)) {
+        SetWindowTheme(hwnd_ctrl, L"", nullptr);
+        InvalidateRect(hwnd_ctrl, nullptr, TRUE);
+        return;
+    }
+    if (ew_is_class_name(hwnd_ctrl, WC_HEADERW) || ew_is_class_name(hwnd_ctrl, L"ListBox")) {
+        SetWindowTheme(hwnd_ctrl, L"", nullptr);
+        InvalidateRect(hwnd_ctrl, nullptr, TRUE);
+        return;
+    }
+}
+
+static void ew_apply_editor_dark_controls(HWND root) {
+    if (!root) return;
+    ew_apply_dark_palette_to_control(root);
+    EnumChildWindows(root, [](HWND h, LPARAM)->BOOL {
+        ew_apply_dark_palette_to_control(h);
+        return TRUE;
+    }, 0);
+}
+
 static void ew_set_edit_margins(HWND hwnd_edit) {
     if (!hwnd_edit) return;
     SendMessageW(hwnd_edit, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(8, 8));
@@ -403,12 +319,109 @@ static constexpr int EW_UI_RIGHT_DOCK_MIN_W_PX = 300;
 static constexpr int EW_UI_RIGHT_DOCK_MAX_W_PX = 860;
 static constexpr int EW_UI_RIGHT_DOCK_SPLITTER_W_PX = 8;
 static constexpr int EW_UI_RIGHT_DOCK_SPLITTER_GRAB_PX = 12;
+static constexpr int EW_UI_LEFT_DOCK_DEFAULT_W_PX = 292;
+static constexpr int EW_UI_LEFT_DOCK_MIN_W_PX = 220;
+static constexpr int EW_UI_LEFT_DOCK_MAX_W_PX = 360;
 static constexpr int EW_UI_VIEWPORT_MIN_W_PX = 320;
+static constexpr int EW_UI_CONTENT_SOURCES_W_PX = 218;
+static constexpr int EW_UI_CONTENT_SOURCES_MIN_W_PX = 180;
+static constexpr int EW_UI_PRIMARY_WORKSPACE_TAB_H_PX = 34;
+static constexpr uint32_t EW_RIGHT_DOCK_TAB_COUNT = 6u;
 
-static int ew_ui_clamp_right_dock_width_px(int desired_w_px, int window_w_px) {
-    const int max_w = std::max(EW_UI_RIGHT_DOCK_MIN_W_PX,
-                               std::min(EW_UI_RIGHT_DOCK_MAX_W_PX,
-                                        window_w_px - EW_UI_VIEWPORT_MIN_W_PX));
+static constexpr UINT EW_CMD_CONTENT_SETTINGS_MENU = 1013u;
+static constexpr UINT EW_CMD_CONTENT_SOURCE_TREE = 1022u;
+static constexpr UINT EW_CMD_CONTENT_ADD = 1023u;
+static constexpr UINT EW_CMD_CONTENT_IMPORT = 1024u;
+static constexpr UINT EW_CMD_CONTENT_SAVE_ALL = 1025u;
+static constexpr UINT EW_CMD_CONTENT_FAB = 1026u;
+static constexpr UINT EW_CMD_CONTENT_BACK = 1027u;
+static constexpr UINT EW_CMD_CONTENT_FORWARD = 1028u;
+static constexpr UINT EW_CMD_CONTENT_BREADCRUMB = 1029u;
+static constexpr UINT EW_CMD_CONTENT_TAB_PRIMARY = 1031u;
+static constexpr UINT EW_CMD_CONTENT_TAB_SECONDARY = 1032u;
+static constexpr UINT EW_CMD_PRIMARY_WORKSPACE_TAB = 1450u;
+static constexpr UINT EW_CMD_TOPBAR_MENU_FILE = 1607u;
+static constexpr UINT EW_CMD_TOPBAR_MENU_EDIT = 1612u;
+static constexpr UINT EW_CMD_TOPBAR_MENU_WINDOW = 1613u;
+static constexpr UINT EW_CMD_TOPBAR_MENU_TOOLS = 1614u;
+static constexpr UINT EW_CMD_TOPBAR_MENU_BUILD = 1615u;
+static constexpr UINT EW_CMD_TOPBAR_MENU_PLATFORMS = 1616u;
+static constexpr UINT EW_CMD_TOPBAR_MENU_SELECT = 1617u;
+static constexpr UINT EW_CMD_TOPBAR_MENU_ACTOR = 1618u;
+static constexpr UINT EW_CMD_TOPBAR_MENU_HELP = 1619u;
+static constexpr UINT EW_CMD_TOPBAR_SELECT_MODE = 1620u;
+static constexpr UINT EW_CMD_TOPBAR_ADD_ACTOR = 1621u;
+static constexpr UINT EW_CMD_TOPBAR_TOOL_TRANSLATE = 1622u;
+static constexpr UINT EW_CMD_TOPBAR_TOOL_ROTATE = 1623u;
+static constexpr UINT EW_CMD_TOPBAR_TOOL_FRAME = 1624u;
+static constexpr UINT EW_CMD_TOPBAR_VIEW_PERSPECTIVE = 1625u;
+static constexpr UINT EW_CMD_TOPBAR_VIEW_LIT = 1626u;
+static constexpr UINT EW_CMD_TOPBAR_VIEW_SHOW = 1627u;
+static constexpr UINT EW_CMD_TOPBAR_TRANSPORT_BACK = 1628u;
+static constexpr UINT EW_CMD_TOPBAR_TRANSPORT_START = 1629u;
+static constexpr UINT EW_CMD_TOPBAR_PAUSE = 1630u;
+static constexpr UINT EW_CMD_TOPBAR_WORKSPACE_LEVEL = 1631u;
+static constexpr UINT EW_CMD_TOPBAR_WORKSPACE_ASSET = 1632u;
+static constexpr UINT EW_CMD_TOPBAR_WORKSPACE_VOXEL = 1633u;
+static constexpr UINT EW_CMD_TOPBAR_STOP = 1634u;
+static constexpr UINT EW_CMD_TOPBAR_REPLAY = 1635u;
+static constexpr UINT EW_CMD_CONTENT_OPT_VIEW_GRID = 9310u;
+static constexpr UINT EW_CMD_CONTENT_OPT_VIEW_LIST = 9311u;
+static constexpr UINT EW_CMD_CONTENT_OPT_VIEW_COLUMNS = 9312u;
+static constexpr UINT EW_CMD_CONTENT_OPT_SOURCES_PANEL = 9313u;
+static constexpr UINT EW_CMD_CONTENT_OPT_SHOW_FAVORITES = 9314u;
+static constexpr UINT EW_CMD_CONTENT_OPT_SHOW_FOLDERS = 9315u;
+static constexpr UINT EW_CMD_CONTENT_OPT_SHOW_EMPTY_FOLDERS = 9316u;
+static constexpr UINT EW_CMD_CONTENT_OPT_ORGANIZE_FOLDERS = 9317u;
+static constexpr UINT EW_CMD_CONTENT_OPT_SHOW_ALL_FOLDER = 9318u;
+static constexpr UINT EW_CMD_CONTENT_OPT_SHOW_CPP = 9319u;
+static constexpr UINT EW_CMD_CONTENT_OPT_SHOW_DEVELOPERS = 9320u;
+static constexpr UINT EW_CMD_CONTENT_OPT_SHOW_ENGINE = 9321u;
+static constexpr UINT EW_CMD_CONTENT_OPT_SHOW_PLUGIN = 9322u;
+static constexpr UINT EW_CMD_CONTENT_OPT_SHOW_LOCALIZED = 9323u;
+static constexpr UINT EW_CMD_CONTENT_OPT_SEARCH_CLASS = 9324u;
+static constexpr UINT EW_CMD_CONTENT_OPT_SEARCH_PATH = 9325u;
+static constexpr UINT EW_CMD_CONTENT_OPT_SEARCH_COLLECTION = 9326u;
+static constexpr UINT EW_CMD_CONTENT_OPT_THUMB_TINY = 9327u;
+static constexpr UINT EW_CMD_CONTENT_OPT_THUMB_SMALL = 9328u;
+static constexpr UINT EW_CMD_CONTENT_OPT_THUMB_MEDIUM = 9329u;
+static constexpr UINT EW_CMD_CONTENT_OPT_THUMB_LARGE = 9330u;
+static constexpr UINT EW_CMD_CONTENT_OPT_THUMB_HUGE = 9331u;
+static constexpr UINT EW_CMD_CONTENT_OPT_THUMB_EDIT = 9332u;
+static constexpr UINT EW_CMD_CONTENT_OPT_THUMB_REALTIME = 9333u;
+static constexpr UINT EW_CMD_CONTENT_OPT_EXPAND_TOOLTIPS = 9334u;
+static constexpr UINT EW_CMD_CONTENT_OPT_LOCK_BROWSER = 9335u;
+
+static constexpr uint32_t EW_LATTICE_SLICE_VOLUME_SENTINEL_U32 = 0xFFFFFFFFu;
+static constexpr int EW_VOXEL_LATTICE_SLICE_ID = 2620;
+static constexpr int EW_VOXEL_LATTICE_STRIDE_ID = 2621;
+static constexpr int EW_VOXEL_LATTICE_MAXPTS_ID = 2622;
+static constexpr int EW_VOXEL_LATTICE_INTENSITY_ID = 2623;
+static constexpr int EW_VOXEL_LATTICE_APPLY_ID = 2624;
+static constexpr int EW_VOXEL_LATTICE_VOLUME_ID = 2625;
+static constexpr int EW_VOXEL_VECTOR_VIS_ID = 2626;
+static constexpr int EW_VOXEL_VECTOR_GAIN_ID = 2627;
+static constexpr int EW_VOXEL_FIELD_DEPTH_ID = 2628;
+static constexpr int EW_VOXEL_FOCAL_MM_ID = 2629;
+
+enum EwPrimaryWorkspace : uint32_t {
+    EW_WORKSPACE_LEVEL_SIM = 0u,
+    EW_WORKSPACE_ASSET_BUILDER = 1u,
+    EW_WORKSPACE_VOXEL_BUILDER = 2u,
+    EW_PRIMARY_WORKSPACE_COUNT = 3u
+};
+
+static int ew_ui_left_dock_width_px(int window_w_px) {
+    const int max_w = std::max(EW_UI_LEFT_DOCK_MIN_W_PX,
+                               std::min(EW_UI_LEFT_DOCK_MAX_W_PX, window_w_px / 3));
+    const int min_w = std::min(EW_UI_LEFT_DOCK_MIN_W_PX, max_w);
+    return std::max(min_w, std::min(EW_UI_LEFT_DOCK_DEFAULT_W_PX, max_w));
+}
+
+static int ew_ui_clamp_right_dock_width_px(int desired_w_px, int window_w_px, bool left_dock_visible) {
+    const int left_w = left_dock_visible ? ew_ui_left_dock_width_px(window_w_px) : 0;
+    const int max_budget_w = std::max(0, window_w_px - left_w - EW_UI_VIEWPORT_MIN_W_PX);
+    const int max_w = std::min(EW_UI_RIGHT_DOCK_MAX_W_PX, max_budget_w);
     const int min_w = std::min(EW_UI_RIGHT_DOCK_MIN_W_PX, max_w);
     return std::max(min_w, std::min(desired_w_px, max_w));
 }
@@ -427,22 +440,177 @@ static bool ew_ui_hit_test_right_dock_splitter_px(int mouse_x,
     return (mouse_y >= 0 && mouse_y < top_h && mouse_x >= (split_x - half) && mouse_x <= (split_x + half));
 }
 
+static const wchar_t* ew_workspace_name(uint32_t workspace_idx_u32) {
+    switch (workspace_idx_u32) {
+        case EW_WORKSPACE_LEVEL_SIM: return L"Level Simulation";
+        case EW_WORKSPACE_ASSET_BUILDER: return L"Asset Builder";
+        case EW_WORKSPACE_VOXEL_BUILDER: return L"Voxel Builder";
+        default: return L"Level Simulation";
+    }
+}
+
+static const wchar_t* ew_workspace_left_title(uint32_t workspace_idx_u32) {
+    switch (workspace_idx_u32) {
+        case EW_WORKSPACE_LEVEL_SIM: return L"Asset Vault";
+        case EW_WORKSPACE_ASSET_BUILDER: return L"Asset Builder";
+        case EW_WORKSPACE_VOXEL_BUILDER: return L"Voxel Builder";
+        default: return L"Asset Vault";
+    }
+}
+
+static const wchar_t* ew_workspace_left_search_cue(uint32_t workspace_idx_u32) {
+    switch (workspace_idx_u32) {
+        case EW_WORKSPACE_LEVEL_SIM: return L"Search classes";
+        case EW_WORKSPACE_ASSET_BUILDER: return L"Search assets";
+        case EW_WORKSPACE_VOXEL_BUILDER: return L"Search voxel tools";
+        default: return L"Search";
+    }
+}
+
+static bool ew_workspace_allows_panel(uint32_t workspace_idx_u32, uint32_t panel_idx_u32) {
+    switch (workspace_idx_u32) {
+        case EW_WORKSPACE_LEVEL_SIM:
+            return panel_idx_u32 == 0u || panel_idx_u32 == 1u || panel_idx_u32 == 2u || panel_idx_u32 == 3u || panel_idx_u32 == 4u || panel_idx_u32 == 5u;
+        case EW_WORKSPACE_ASSET_BUILDER:
+            return panel_idx_u32 == 0u || panel_idx_u32 == 1u || panel_idx_u32 == 2u || panel_idx_u32 == 3u || panel_idx_u32 == 4u;
+        case EW_WORKSPACE_VOXEL_BUILDER:
+            return panel_idx_u32 == 1u || panel_idx_u32 == 2u || panel_idx_u32 == 3u;
+        default:
+            return (panel_idx_u32 < EW_RIGHT_DOCK_TAB_COUNT);
+    }
+}
+
+static const wchar_t* ew_workspace_tab_label(uint32_t workspace_idx_u32, int tab_index_i32) {
+    if (tab_index_i32 == 2) return workspace_idx_u32 == EW_WORKSPACE_VOXEL_BUILDER ? L"Material Mixer" : L"Asset Builder";
+    if (tab_index_i32 == 3) return workspace_idx_u32 == EW_WORKSPACE_VOXEL_BUILDER ? L"Voxel Builder" : L"Voxelizer";
+    switch (tab_index_i32) {
+        case 0: return L"Outliner";
+        case 1: return L"Details";
+        case 4: return L"Node";
+        case 5: return L"Sequencer";
+        default: return L"";
+    }
+}
+
+static const wchar_t* ew_workspace_primary_tab_label(uint32_t workspace_idx_u32) {
+    switch (workspace_idx_u32) {
+        case EW_WORKSPACE_LEVEL_SIM: return L"Level Simulation";
+        case EW_WORKSPACE_ASSET_BUILDER: return L"Asset Builder";
+        case EW_WORKSPACE_VOXEL_BUILDER: return L"Voxel Builder";
+        default: return L"Level Simulation";
+    }
+}
+
+static bool ew_workspace_default_panel_visible(uint32_t workspace_idx_u32, uint32_t panel_idx_u32) {
+    switch (workspace_idx_u32) {
+        case EW_WORKSPACE_LEVEL_SIM:
+            return panel_idx_u32 == 0u || panel_idx_u32 == 1u || panel_idx_u32 == 2u || panel_idx_u32 == 4u || panel_idx_u32 == 5u;
+        case EW_WORKSPACE_ASSET_BUILDER:
+            return panel_idx_u32 == 0u || panel_idx_u32 == 1u || panel_idx_u32 == 2u || panel_idx_u32 == 3u || panel_idx_u32 == 4u;
+        case EW_WORKSPACE_VOXEL_BUILDER:
+            return panel_idx_u32 == 1u || panel_idx_u32 == 2u || panel_idx_u32 == 3u;
+        default:
+            return panel_idx_u32 == 0u || panel_idx_u32 == 1u || panel_idx_u32 == 2u;
+    }
+}
+
+static int ew_workspace_default_active_panel(uint32_t workspace_idx_u32) {
+    switch (workspace_idx_u32) {
+        case EW_WORKSPACE_LEVEL_SIM: return 0;
+        case EW_WORKSPACE_ASSET_BUILDER: return 2;
+        case EW_WORKSPACE_VOXEL_BUILDER: return 3;
+        default: return 0;
+    }
+}
+
+static std::wstring ew_to_lower_w(std::wstring s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](wchar_t ch) {
+        return (wchar_t)towlower(ch);
+    });
+    return s;
+}
+
+static int ew_semantic_thumb_image_index(const std::wstring& label_w, const std::wstring& class_w) {
+    const std::wstring joined_w = ew_to_lower_w(label_w + L" " + class_w);
+    if (joined_w.find(L"mesh") != std::wstring::npos || joined_w.find(L"actor") != std::wstring::npos || joined_w.find(L"collision") != std::wstring::npos) return 1;
+    if (joined_w.find(L"light") != std::wstring::npos || joined_w.find(L"camera") != std::wstring::npos || joined_w.find(L"sky") != std::wstring::npos) return 2;
+    if (joined_w.find(L"material") != std::wstring::npos || joined_w.find(L"texture") != std::wstring::npos || joined_w.find(L"atlas") != std::wstring::npos) return 3;
+    if (joined_w.find(L"character") != std::wstring::npos || joined_w.find(L"skeletal") != std::wstring::npos || joined_w.find(L"rig") != std::wstring::npos) return 4;
+    if (joined_w.find(L"planet") != std::wstring::npos || joined_w.find(L"surface") != std::wstring::npos || joined_w.find(L"atmo") != std::wstring::npos) return 5;
+    if (joined_w.find(L"voxel") != std::wstring::npos || joined_w.find(L"field") != std::wstring::npos || joined_w.find(L"lattice") != std::wstring::npos || joined_w.find(L"density") != std::wstring::npos || joined_w.find(L"opacity") != std::wstring::npos || joined_w.find(L"emission") != std::wstring::npos || joined_w.find(L"specular") != std::wstring::npos) return 6;
+    if (joined_w.find(L"ai") != std::wstring::npos || joined_w.find(L"coherence") != std::wstring::npos || joined_w.find(L"vault") != std::wstring::npos) return 7;
+    return 0;
+}
+
+static bool ew_contains_case_insensitive_w(const std::wstring& haystack, const std::wstring& needle) {
+    if (needle.empty()) return true;
+    const std::wstring h = ew_to_lower_w(haystack);
+    const std::wstring n = ew_to_lower_w(needle);
+    return h.find(n) != std::wstring::npos;
+}
+
 static void ew_set_visible_enabled(HWND hwnd, bool visible, bool enabled = true) {
     if (!hwnd) return;
     ShowWindow(hwnd, visible ? SW_SHOW : SW_HIDE);
     EnableWindow(hwnd, (visible && enabled) ? TRUE : FALSE);
 }
 
+static bool ew_is_forwarded_editor_container_message(UINT msg) {
+    switch (msg) {
+        case WM_COMMAND:
+        case WM_NOTIFY:
+        case WM_DRAWITEM:
+        case WM_MEASUREITEM:
+        case WM_DELETEITEM:
+        case WM_COMPAREITEM:
+        case WM_HSCROLL:
+        case WM_VSCROLL:
+        case WM_CTLCOLORSTATIC:
+        case WM_CTLCOLOREDIT:
+        case WM_CTLCOLORLISTBOX:
+        case WM_CTLCOLORBTN:
+        case WM_CHARTOITEM:
+        case WM_VKEYTOITEM:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static LRESULT CALLBACK ew_editor_container_subclass_proc(HWND hwnd,
+                                                          UINT msg,
+                                                          WPARAM w_param,
+                                                          LPARAM l_param,
+                                                          UINT_PTR subclass_id,
+                                                          DWORD_PTR ref_data) {
+    (void)ref_data;
+    if (ew_is_forwarded_editor_container_message(msg)) {
+        HWND root = GetAncestor(hwnd, GA_ROOT);
+        if (root && root != hwnd) {
+            return SendMessageW(root, msg, w_param, l_param);
+        }
+    }
+    if (msg == WM_NCDESTROY) {
+        RemoveWindowSubclass(hwnd, ew_editor_container_subclass_proc, subclass_id);
+    }
+    return DefSubclassProc(hwnd, msg, w_param, l_param);
+}
+
+static void ew_enable_editor_container_forwarding(HWND hwnd) {
+    if (!hwnd) return;
+    SetWindowSubclass(hwnd, ew_editor_container_subclass_proc, 1u, 0);
+}
+
 
 // -----------------------------------------------------------------------------
-// Windows native input bindings editor (minimal, Win64 app baseline)
+// Windows desktop input bindings editor (minimal, Win64 app baseline)
 // - Exposes a UI tool to edit input_bindings.ewcfg
 // - On save, writes the file and emits InputBindingsReload control packet.
 // - No input mapping effects are computed here; substrate remains the only
 //   place where bindings are interpreted.
 // -----------------------------------------------------------------------------
 
-struct EwBindingsEditorWin32 {
+struct EwBindingsEditorWindows {
     HWND hwnd = nullptr;
     HWND edit = nullptr;
     HWND btn_save = nullptr;
@@ -450,7 +618,7 @@ struct EwBindingsEditorWin32 {
     SubstrateManager* sm = nullptr;
 };
 
-static EwBindingsEditorWin32 g_bind_editor;
+static EwBindingsEditorWindows g_bind_editor;
 
 static LRESULT CALLBACK EwBindingsEditorProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
     switch (msg) {
@@ -600,27 +768,62 @@ static bool write_ewmesh_v1(const std::string& out_path_utf8, const EwObjMesh& m
     //  8: u32 index_count
     // 12: packed vertices (px,py,pz,u,v,nx,ny,nz) as f32
     // ..: packed indices as u32
-    FILE* f = nullptr;
-    _wfopen_s(&f, utf8_to_wide(out_path_utf8).c_str(), L"wb");
-    if (!f) return false;
+    std::ofstream f(out_path_utf8, std::ios::binary);
+    if (!f.is_open()) return false;
     const uint32_t vcount = (uint32_t)m.vertices.size();
     const uint32_t icount = (uint32_t)m.indices.size();
     const uint32_t magic = 0x314D5745u; // 'EWM1'
-    if (fwrite(&magic, 4, 1, f) != 1) { fclose(f); return false; }
-    if (fwrite(&vcount, 4, 1, f) != 1) { fclose(f); return false; }
-    if (fwrite(&icount, 4, 1, f) != 1) { fclose(f); return false; }
+    f.write(reinterpret_cast<const char*>(&magic), 4);
+    f.write(reinterpret_cast<const char*>(&vcount), 4);
+    f.write(reinterpret_cast<const char*>(&icount), 4);
     if (!m.vertices.empty()) {
-        if (fwrite(m.vertices.data(), sizeof(EwObjMesh::Vtx), m.vertices.size(), f) != m.vertices.size()) {
-            fclose(f); return false;
-        }
+        f.write(reinterpret_cast<const char*>(m.vertices.data()), sizeof(EwObjMesh::Vtx) * m.vertices.size());
     }
     if (!m.indices.empty()) {
-        if (fwrite(m.indices.data(), sizeof(uint32_t), m.indices.size(), f) != m.indices.size()) {
-            fclose(f); return false;
-        }
+        f.write(reinterpret_cast<const char*>(m.indices.data()), sizeof(uint32_t) * m.indices.size());
     }
-    fclose(f);
-    return true;
+    return f.good();
+}
+
+static EwObjMesh ew_make_box_mesh_local(float sx, float sy, float sz) {
+    const float hx = sx * 0.5f;
+    const float hy = sy * 0.5f;
+    const float hz = sz * 0.5f;
+    EwObjMesh mesh;
+    mesh.vertices = {
+        {-hx,-hy, hz,  0, 0, 1, 0, 1}, { hx,-hy, hz,  0, 0, 1, 1, 1}, { hx, hy, hz,  0, 0, 1, 1, 0}, {-hx, hy, hz,  0, 0, 1, 0, 0},
+        { hx,-hy,-hz,  0, 0,-1, 0, 1}, {-hx,-hy,-hz,  0, 0,-1, 1, 1}, {-hx, hy,-hz,  0, 0,-1, 1, 0}, { hx, hy,-hz,  0, 0,-1, 0, 0},
+        {-hx,-hy,-hz, -1, 0, 0, 0, 1}, {-hx,-hy, hz, -1, 0, 0, 1, 1}, {-hx, hy, hz, -1, 0, 0, 1, 0}, {-hx, hy,-hz, -1, 0, 0, 0, 0},
+        { hx,-hy, hz,  1, 0, 0, 0, 1}, { hx,-hy,-hz,  1, 0, 0, 1, 1}, { hx, hy,-hz,  1, 0, 0, 1, 0}, { hx, hy, hz,  1, 0, 0, 0, 0},
+        {-hx, hy, hz,  0, 1, 0, 0, 1}, { hx, hy, hz,  0, 1, 0, 1, 1}, { hx, hy,-hz,  0, 1, 0, 1, 0}, {-hx, hy,-hz,  0, 1, 0, 0, 0},
+        {-hx,-hy,-hz,  0,-1, 0, 0, 1}, { hx,-hy,-hz,  0,-1, 0, 1, 1}, { hx,-hy, hz,  0,-1, 0, 1, 0}, {-hx,-hy, hz,  0,-1, 0, 0, 0},
+    };
+    mesh.indices = {
+        0,1,2, 0,2,3,
+        4,5,6, 4,6,7,
+        8,9,10, 8,10,11,
+        12,13,14, 12,14,15,
+        16,17,18, 16,18,19,
+        20,21,22, 20,22,23,
+    };
+    return mesh;
+}
+
+static EwObjMesh ew_make_octa_mesh_local(float radius) {
+    EwObjMesh mesh;
+    mesh.vertices = {
+        { 0, 0, radius,  0, 0, 1, 0.5f, 0.0f},
+        { radius, 0, 0,  1, 0, 0, 1.0f, 0.5f},
+        { 0, radius, 0,  0, 1, 0, 0.5f, 0.5f},
+        {-radius, 0, 0, -1, 0, 0, 0.0f, 0.5f},
+        { 0,-radius, 0,  0,-1, 0, 0.5f, 1.0f},
+        { 0, 0,-radius,  0, 0,-1, 0.5f, 1.0f},
+    };
+    mesh.indices = {
+        0,1,2, 0,2,3, 0,3,4, 0,4,1,
+        5,2,1, 5,3,2, 5,4,3, 5,1,4,
+    };
+    return mesh;
 }
 
 struct App::Scene {
@@ -672,6 +875,7 @@ void refresh_fixed_cache() {
 
     // Shader-facing instance payload updated each frame.
     std::vector<EwRenderInstance> instances;
+    genesis::GeResearchConfinementArchive research_confinement;
 
     Scene() : sm(128), lattice(128u, 128u, 128u) {
         // seed one anchor pulse so AI loop is alive
@@ -683,6 +887,12 @@ void refresh_fixed_cache() {
         density_mask_u8.assign((size_t)128u * (size_t)128u * (size_t)128u, 0u);
         // Deterministic seed constant (ASCII mnemonic encoded as hex-ish).
         lattice.init(0xE16E5151ULL);
+        research_confinement = genesis::ge_load_research_confinement_archive();
+        if (research_confinement.loaded) {
+            sm.ui_observe_system_event_line("RESEARCH_CONFINEMENT: archive loaded");
+        } else if (!research_confinement.load_error_utf8.empty()) {
+            sm.ui_observe_system_event_line("RESEARCH_CONFINEMENT: " + research_confinement.load_error_utf8);
+        }
 
 // ------------------------------------------------------------
 // Default level: blank/static world
@@ -757,21 +967,32 @@ void Tick() {
     bool SnapshotAiProjectSpectrumLines(uint32_t chat_slot_u32, uint32_t max_lines_u32, std::vector<std::string>& out_lines_utf8) {
         return sm.ui_snapshot_project_spectrum_lines(chat_slot_u32, max_lines_u32, out_lines_utf8);
     }
-    void SetLiveViewportMode(bool enabled, int spectrum_band_i32) {
-        sm.sim_world_play_u32 = enabled ? 1u : 0u;
+    void SetLiveViewportProjection(bool enabled,
+                                   int spectrum_band_i32,
+                                   uint32_t lattice_sel_u32,
+                                   bool volume_mode,
+                                   uint32_t slice_z_u32,
+                                   uint32_t stride_u32,
+                                   uint32_t max_points_u32,
+                                   uint8_t intensity_min_u8) {
+        (void)spectrum_band_i32;
+        const uint32_t canonical_slice = volume_mode ? EW_LATTICE_SLICE_VOLUME_SENTINEL_U32 : slice_z_u32;
         if (enabled) {
-            uint32_t slice_z_u32 = 64u;
-            if (spectrum_band_i32 > 0) {
-                const uint32_t offs = (uint32_t)std::min(spectrum_band_i32 * 6, 56);
-                slice_z_u32 = 64u + offs;
-            } else if (spectrum_band_i32 < 0) {
-                const uint32_t offs = (uint32_t)std::min((-spectrum_band_i32) * 6, 56);
-                slice_z_u32 = 64u - offs;
-            }
-            sm.set_lattice_projection_tag_ex(0u, slice_z_u32, 1u, 65536u, 20u, true);
+            sm.set_lattice_projection_tag_ex(
+                lattice_sel_u32,
+                canonical_slice,
+                (stride_u32 == 0u) ? 1u : stride_u32,
+                (max_points_u32 == 0u) ? 1u : max_points_u32,
+                intensity_min_u8,
+                true);
         } else {
-            sm.set_lattice_projection_tag_ex(0u, 0u, 1u, 1u, 0u, false);
+            sm.set_lattice_projection_tag_ex(lattice_sel_u32, 0u, 1u, 1u, 0u, false);
         }
+    }
+    void SetLiveViewportMode(bool enabled, int spectrum_band_i32) {
+        // Compatibility wrapper retained for existing call sites; canonical
+        // projection tuning now flows through SetLiveViewportProjection().
+        SetLiveViewportProjection(enabled, spectrum_band_i32, 0u, true, 0u, 2u, 32768u, 20u);
     }
     bool DuplicateSelectedObjectForEditor(float offset_x_m, float offset_y_m, float offset_z_m) {
         if (selected < 0 || selected >= (int)objects.size()) return false;
@@ -826,6 +1047,115 @@ void Tick() {
         (void)ew_runtime_submit_control_packet(&sm, &cp);
 
         objects.push_back(std::move(dup));
+        selected = (int)objects.size() - 1;
+        return true;
+    }
+
+    bool SpawnProceduralEditorTemplate(const std::wstring& template_label_w) {
+        const std::wstring label = ew_to_lower_w(template_label_w);
+        EwObjMesh mesh;
+        Object o{};
+        o.name_utf8 = wide_to_utf8(template_label_w);
+        o.albedo_rgba8 = 0xFFD9C27Au;
+        o.atmosphere_rgba8 = 0x00000000u;
+        o.emissive_f32 = 0.0f;
+        o.radius_m_f32 = 0.75f;
+
+        if (label == L"actor") {
+            mesh = ew_make_box_mesh_local(1.0f, 1.0f, 1.0f);
+            o.albedo_rgba8 = 0xFFB8C6D8u;
+        } else if (label == L"camera rig") {
+            mesh = ew_make_box_mesh_local(0.45f, 0.45f, 1.25f);
+            o.albedo_rgba8 = 0xFF8CA9C8u;
+        } else if (label == L"directional light") {
+            mesh = ew_make_octa_mesh_local(0.55f);
+            o.albedo_rgba8 = 0xFFFFE0A0u;
+            o.emissive_f32 = 2.2f;
+        } else if (label == L"point light") {
+            mesh = ew_make_octa_mesh_local(0.40f);
+            o.albedo_rgba8 = 0xFFFFC86Au;
+            o.emissive_f32 = 1.8f;
+        } else if (label == L"sky atmosphere") {
+            mesh = ew_make_octa_mesh_local(2.4f);
+            o.albedo_rgba8 = 0xFF7DB8FFu;
+            o.atmosphere_rgba8 = 0x60A0D8FFu;
+            o.atmosphere_thickness_m_f32 = 0.65f;
+            o.radius_m_f32 = 2.4f;
+        } else if (label == L"photon lattice emitter") {
+            mesh = ew_make_box_mesh_local(0.65f, 0.65f, 0.65f);
+            o.albedo_rgba8 = 0xFFFFD35Fu;
+            o.emissive_f32 = 1.4f;
+        } else if (label == L"resonance volume") {
+            mesh = ew_make_box_mesh_local(1.8f, 1.8f, 1.8f);
+            o.albedo_rgba8 = 0xFF72C6D6u;
+            o.atmosphere_rgba8 = 0x4066D4FFu;
+            o.atmosphere_thickness_m_f32 = 0.25f;
+            o.radius_m_f32 = 1.3f;
+        } else if (label == L"collision proxy") {
+            mesh = ew_make_box_mesh_local(1.1f, 1.1f, 1.1f);
+            o.albedo_rgba8 = 0xFF7D8793u;
+        } else if (label == L"simulation controller") {
+            mesh = ew_make_box_mesh_local(0.9f, 0.4f, 0.9f);
+            o.albedo_rgba8 = 0xFF8B9D66u;
+        } else {
+            return false;
+        }
+
+        o.mesh = std::move(mesh);
+        const float x_offset = 0.45f * (float)objects.size();
+        o.xf.pos[0] = x_offset;
+        o.xf.pos[1] = 0.0f;
+        o.xf.pos[2] = 0.25f * (float)(objects.size() % 3u);
+        o.object_id_u64 = next_object_id_u64++;
+        o.object_dna = ew_object_dna_seed_from_geometry(o.object_id_u64,
+                                                        (uint32_t)(o.mesh.indices.size() / 3u),
+                                                        (uint32_t)o.mesh.vertices.size(),
+                                                        o.radius_m_f32 * 2.0f,
+                                                        o.radius_m_f32 * 2.0f,
+                                                        o.radius_m_f32 * 2.0f);
+        o.refresh_fixed_cache();
+
+        EwObjectEntry e{};
+        e.object_id_u64 = o.object_id_u64;
+        e.label_utf8 = ew_obj_basename_utf8(o.name_utf8);
+        const uint32_t tricount = (uint32_t)(o.mesh.indices.size() / 3u);
+        const uint32_t vcount = (uint32_t)o.mesh.vertices.size();
+        const uint64_t cost_units = 1u + (uint64_t)(tricount / 128u) + (uint64_t)(vcount / 256u);
+        e.mass_or_cost_q32_32 = (int64_t)(cost_units << 32);
+        e.geomcoord9_u64x9.u64x9[0] = (uint64_t)q32_32_from_f32(o.xf.pos[0]);
+        e.geomcoord9_u64x9.u64x9[1] = (uint64_t)q32_32_from_f32(o.xf.pos[1]);
+        e.geomcoord9_u64x9.u64x9[2] = (uint64_t)q32_32_from_f32(o.xf.pos[2]);
+        e.geomcoord9_u64x9.u64x9[3] = (uint64_t)tricount;
+        e.geomcoord9_u64x9.u64x9[4] = (uint64_t)vcount;
+        e.geomcoord9_u64x9.u64x9[5] = (uint64_t)o.object_id_u64;
+        e.geomcoord9_u64x9.u64x9[8] = (uint64_t)o.object_id_u64;
+        const uint64_t s0 = o.object_id_u64 * 6364136223846793005ULL + 1442695040888963407ULL;
+        const uint64_t s1 = ((uint64_t)tricount << 32) ^ (uint64_t)vcount;
+        e.phase_seed_u64 = s0 ^ (s1 * 2862933555777941757ULL);
+        e.object_dna = o.object_dna;
+        (void)sm.object_store.upsert(e);
+        const uint32_t synth_g = 24u;
+        (void)genesis_synthesize_voxelize_local(sm.object_store, o.mesh, o.object_id_u64, sm.materials_calib_done, synth_g, synth_g, synth_g);
+        genesis_apply_object_density_to_lattice(o.object_id_u64);
+
+        EwControlPacket cp{};
+        cp.kind = EwControlPacketKind::ObjectRegister;
+        cp.source_u16 = 1;
+        cp.tick_u64 = sm.canonical_tick;
+        cp.payload.object_register.object_id_u64 = o.object_id_u64;
+        cp.payload.object_register.kind_u32 = EW_ANCHOR_KIND_OBJECT;
+        cp.payload.object_register.pos_q16_16[0] = o.pos_q16_16[0];
+        cp.payload.object_register.pos_q16_16[1] = o.pos_q16_16[1];
+        cp.payload.object_register.pos_q16_16[2] = o.pos_q16_16[2];
+        for (int k = 0; k < 4; ++k) cp.payload.object_register.rot_quat_q16_16[k] = o.rot_quat_q16_16[k];
+        cp.payload.object_register.radius_m_q16_16 = o.radius_q16_16;
+        cp.payload.object_register.albedo_rgba8 = o.albedo_rgba8;
+        cp.payload.object_register.atmosphere_rgba8 = o.atmosphere_rgba8;
+        cp.payload.object_register.atmosphere_thickness_m_q16_16 = o.atmosphere_thickness_q16_16;
+        cp.payload.object_register.emissive_q16_16 = o.emissive_q16_16;
+        (void)ew_runtime_submit_control_packet(&sm, &cp);
+
+        objects.push_back(std::move(o));
         selected = (int)objects.size() - 1;
         return true;
     }
@@ -1142,6 +1472,10 @@ struct App::VkCtx {
     VkDebugUtilsMessengerEXT dbg = VK_NULL_HANDLE;
 
     void DestroySwap() {
+        if (dev && cmdpool && !cmdbufs.empty()) {
+            vkFreeCommandBuffers(dev, cmdpool, (uint32_t)cmdbufs.size(), cmdbufs.data());
+        }
+        cmdbufs.clear();
         for (auto v : swap_views) if (v) vkDestroyImageView(dev, v, nullptr);
         swap_views.clear();
         swap_images.clear();
@@ -1364,6 +1698,67 @@ static const char* ew_ai_provider_name_ascii_local(uint32_t provider_u32) {
         case 1u: return "chatgpt_api";
         case 2u:
         default: return "hybrid";
+    }
+}
+
+static std::filesystem::path ew_resolve_notebook_repo_root_local() {
+    std::error_code ec;
+    std::vector<std::filesystem::path> probes;
+    const std::filesystem::path cwd = std::filesystem::current_path(ec);
+    if (!cwd.empty()) probes.push_back(cwd);
+
+    wchar_t exe_buf[MAX_PATH] = {};
+    const DWORD exe_n = GetModuleFileNameW(nullptr, exe_buf, MAX_PATH);
+    if (exe_n > 0u && exe_n < MAX_PATH) probes.push_back(std::filesystem::path(exe_buf).parent_path());
+
+    for (std::filesystem::path probe : probes) {
+        while (!probe.empty()) {
+            const std::filesystem::path notebook_cfg = probe / "ProjectSettings" / "notebook_logging.json";
+            const std::filesystem::path project_cfg = probe / "ProjectSettings" / "project_settings.ewcfg";
+            if ((std::filesystem::exists(notebook_cfg, ec) && std::filesystem::is_regular_file(notebook_cfg, ec)) ||
+                (std::filesystem::exists(project_cfg, ec) && std::filesystem::is_regular_file(project_cfg, ec))) {
+                return probe;
+            }
+            const std::filesystem::path parent = probe.parent_path();
+            if (parent == probe) break;
+            probe = parent;
+        }
+    }
+    return {};
+}
+
+static void ew_dispatch_notebook_log_capture_local(const std::filesystem::path& repo_root,
+                                                   const wchar_t* event_w,
+                                                   const wchar_t* status_w,
+                                                   const std::wstring& log_path_w) {
+    if (repo_root.empty() || log_path_w.empty()) return;
+    std::error_code ec;
+    const std::filesystem::path logger = repo_root / "scripts" / "update_research_notebook.py";
+    if (!std::filesystem::exists(logger, ec) || !std::filesystem::is_regular_file(logger, ec)) return;
+
+    std::wstring command_line = L"cmd.exe /C python \"" + logger.wstring() +
+                                L"\" capture --repo-root \"" + repo_root.wstring() +
+                                L"\" --event \"" + std::wstring(event_w ? event_w : L"genesis_session") +
+                                L"\" --status \"" + std::wstring(status_w ? status_w : L"observed") +
+                                L"\" --script \"vulkan_app/src/GE_app.cpp\" --log \"" + log_path_w +
+                                L"\" --also-known-logs >nul 2>nul";
+
+    STARTUPINFOW startup_info{};
+    startup_info.cb = sizeof(startup_info);
+    PROCESS_INFORMATION process_info{};
+    std::wstring working_directory = repo_root.wstring();
+    if (CreateProcessW(nullptr,
+                       command_line.data(),
+                       nullptr,
+                       nullptr,
+                       FALSE,
+                       CREATE_NO_WINDOW,
+                       nullptr,
+                       working_directory.c_str(),
+                       &startup_info,
+                       &process_info)) {
+        CloseHandle(process_info.hThread);
+        CloseHandle(process_info.hProcess);
     }
 }
 
@@ -1803,7 +2198,6 @@ static void ew_startup_splash_show(EwStartupSplash* splash, HINSTANCE hInst, con
         wc.lpszClassName = L"GenesisEngineSplashWnd";
         wc.hCursor = LoadCursor(nullptr, IDC_WAIT);
         wc.hIcon = ew_get_genesis_icon(false);
-        wc.hIconSm = ew_get_genesis_icon(true);
         wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
         splash_class = RegisterClassExW(&wc);
     }
@@ -1921,25 +2315,79 @@ static bool ew_create_or_resize_instance_buffer(App::VkCtx& vk, VkDeviceSize nee
     return true;
 }
 
-
-static void ew_transition_image(VkCommandBuffer cmd, VkImage img, VkImageLayout oldL, VkImageLayout newL, uint32_t mip_levels) {
-    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-    b.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-    b.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT;
-    b.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-    b.dstAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT;
-    b.oldLayout = oldL;
-    b.newLayout = newL;
+static void ew_cmd_image_barrier_legacy(
+    VkCommandBuffer cmd,
+    VkPipelineStageFlags src_stage,
+    VkAccessFlags src_access,
+    VkPipelineStageFlags dst_stage,
+    VkAccessFlags dst_access,
+    VkImageLayout old_layout,
+    VkImageLayout new_layout,
+    VkImage img,
+    VkImageAspectFlags aspect_mask,
+    uint32_t mip_levels,
+    uint32_t layer_count) {
+    VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    b.srcAccessMask = src_access;
+    b.dstAccessMask = dst_access;
+    b.oldLayout = old_layout;
+    b.newLayout = new_layout;
+    b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     b.image = img;
-    b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    b.subresourceRange.aspectMask = aspect_mask;
     b.subresourceRange.baseMipLevel = 0;
     b.subresourceRange.levelCount = mip_levels;
     b.subresourceRange.baseArrayLayer = 0;
-    b.subresourceRange.layerCount = 1;
-    VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    dep.imageMemoryBarrierCount = 1;
-    dep.pImageMemoryBarriers = &b;
-    vkCmdPipelineBarrier2(cmd, &dep);
+    b.subresourceRange.layerCount = layer_count;
+    vkCmdPipelineBarrier(cmd, src_stage, dst_stage, 0, 0, nullptr, 0, nullptr, 1, &b);
+}
+
+
+static void ew_transition_image(VkCommandBuffer cmd, VkImage img, VkImageLayout oldL, VkImageLayout newL, uint32_t mip_levels) {
+    VkPipelineStageFlags src_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+    VkAccessFlags src_access = 0u;
+    if (oldL == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+        src_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        src_access = VK_ACCESS_SHADER_READ_BIT;
+    } else if (oldL == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+        src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        src_access = VK_ACCESS_TRANSFER_WRITE_BIT;
+    } else if (oldL == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
+        src_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        src_access = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    } else if (oldL == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
+        src_stage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+        src_access = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    }
+
+    VkPipelineStageFlags dst_stage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+    VkAccessFlags dst_access = 0u;
+    if (newL == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+        dst_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        dst_access = VK_ACCESS_SHADER_READ_BIT;
+    } else if (newL == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+        dst_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        dst_access = VK_ACCESS_TRANSFER_WRITE_BIT;
+    } else if (newL == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
+        dst_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dst_access = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    } else if (newL == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
+        dst_stage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+        dst_access = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    }
+
+    ew_cmd_image_barrier_legacy(cmd,
+                                src_stage,
+                                src_access,
+                                dst_stage,
+                                dst_access,
+                                oldL,
+                                newL,
+                                img,
+                                VK_IMAGE_ASPECT_COLOR_BIT,
+                                mip_levels,
+                                1u);
 }
 
 // --- Production virtual texturing -------------------------------------------------------------
@@ -1969,6 +2417,7 @@ static void ew_vt_build_pagetable(App::VkCtx& vk) {
 }
 
 static void ew_vt_upload_pagetable(App::VkCtx& vk) {
+    ew_trace_renderer_step("RENDER_INIT step=vt.pagetable_upload.begin");
     const size_t header_u32 = 4 + 16 + 16;
     const size_t total_u32 = header_u32 + vk.vt_entries.size();
     const size_t bytes = total_u32 * sizeof(uint32_t);
@@ -2033,10 +2482,12 @@ static void ew_vt_upload_pagetable(App::VkCtx& vk) {
     vkFreeCommandBuffers(vk.dev, vk.cmdpool, 1, &cmd);
     vkDestroyBuffer(vk.dev, staging, nullptr);
     vkFreeMemory(vk.dev, staging_mem, nullptr);
+    ew_trace_renderer_step("RENDER_INIT step=vt.pagetable_upload.done");
 }
 
 static void ew_vt_init(App::VkCtx& vk) {
     if (vk.vt_atlas_image) return;
+    ew_trace_renderer_step("RENDER_INIT step=vt.init.begin");
 
     char buf[64] = {0};
     DWORD n = GetEnvironmentVariableA("GENESIS_VT_VIRTUAL_DIM", buf, (DWORD)sizeof(buf));
@@ -2068,6 +2519,7 @@ static void ew_vt_init(App::VkCtx& vk) {
     ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     vk_check(vkCreateImage(vk.dev, &ici, nullptr, &vk.vt_atlas_image), "vkCreateImage(vt_atlas)");
+    ew_trace_renderer_step("RENDER_INIT step=vt.atlas_image.done");
 
     VkMemoryRequirements ireq{};
     vkGetImageMemoryRequirements(vk.dev, vk.vt_atlas_image, &ireq);
@@ -2086,6 +2538,7 @@ static void ew_vt_init(App::VkCtx& vk) {
     vci.subresourceRange.levelCount = 1;
     vci.subresourceRange.layerCount = 1;
     vk_check(vkCreateImageView(vk.dev, &vci, nullptr, &vk.vt_atlas_view), "vkCreateImageView(vt_atlas)");
+    ew_trace_renderer_step("RENDER_INIT step=vt.atlas_view.done");
 
     VkSamplerCreateInfo sci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
     sci.magFilter = VK_FILTER_LINEAR;
@@ -2097,6 +2550,7 @@ static void ew_vt_init(App::VkCtx& vk) {
     sci.minLod = 0.0f;
     sci.maxLod = 0.0f;
     vk_check(vkCreateSampler(vk.dev, &sci, nullptr, &vk.vt_atlas_sampler), "vkCreateSampler(vt_atlas)");
+    ew_trace_renderer_step("RENDER_INIT step=vt.atlas_sampler.done");
 
     const size_t header_u32 = 4 + 16 + 16;
     const size_t total_u32 = header_u32 + vk.vt_entries.size();
@@ -2106,15 +2560,34 @@ static void ew_vt_init(App::VkCtx& vk) {
     bc2.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     bc2.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     vk_check(vkCreateBuffer(vk.dev, &bc2, nullptr, &vk.vt_pagetable_buf), "vkCreateBuffer(vt_pagetable)");
+    ew_trace_renderer_step("RENDER_INIT step=vt.pagetable_buffer.done");
 
     VkMemoryRequirements breq{};
+    ew_trace_renderer_step("RENDER_INIT step=vt.pagetable_requirements.begin");
     vkGetBufferMemoryRequirements(vk.dev, vk.vt_pagetable_buf, &breq);
+    {
+        char req_line[160]{};
+        std::snprintf(req_line, sizeof(req_line),
+                      "RENDER_INIT step=vt.pagetable_requirements.done size=%llu type_bits=0x%08X",
+                      (unsigned long long)breq.size,
+                      (unsigned)breq.memoryTypeBits);
+        ew_trace_renderer_step(req_line);
+    }
     uint32_t mt = ew_find_memory_type(vk.phys, breq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    {
+        char type_line[128]{};
+        std::snprintf(type_line, sizeof(type_line),
+                      "RENDER_INIT step=vt.pagetable_memory_type index=%u",
+                      (unsigned)mt);
+        ew_trace_renderer_step(type_line);
+    }
     VkMemoryAllocateInfo bai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
     bai.allocationSize = breq.size;
     bai.memoryTypeIndex = mt;
     vk_check(vkAllocateMemory(vk.dev, &bai, nullptr, &vk.vt_pagetable_mem), "vkAllocateMemory(vt_pagetable)");
+    ew_trace_renderer_step("RENDER_INIT step=vt.pagetable_memory.done");
     vk_check(vkBindBufferMemory(vk.dev, vk.vt_pagetable_buf, vk.vt_pagetable_mem, 0), "vkBindBufferMemory(vt_pagetable)");
+    ew_trace_renderer_step("RENDER_INIT step=vt.pagetable_bind.done");
 
     VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
     cai.commandPool = vk.cmdpool;
@@ -2122,21 +2595,29 @@ static void ew_vt_init(App::VkCtx& vk) {
     cai.commandBufferCount = 1;
     VkCommandBuffer cmd = VK_NULL_HANDLE;
     vk_check(vkAllocateCommandBuffers(vk.dev, &cai, &cmd), "vkAllocateCommandBuffers(vt_init)");
+    ew_trace_renderer_step("RENDER_INIT step=vt.cmd_alloc.done");
     VkCommandBufferBeginInfo cbi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     cbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vk_check(vkBeginCommandBuffer(cmd, &cbi), "vkBeginCommandBuffer(vt_init)");
+    ew_trace_renderer_step("RENDER_INIT step=vt.cmd_begin.done");
 
     ew_transition_image(cmd, vk.vt_atlas_image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1);
+    ew_trace_renderer_step("RENDER_INIT step=vt.transition.done");
 
     vk_check(vkEndCommandBuffer(cmd), "vkEndCommandBuffer(vt_init)");
+    ew_trace_renderer_step("RENDER_INIT step=vt.cmd_end.done");
     VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
     si.commandBufferCount = 1;
     si.pCommandBuffers = &cmd;
     vk_check(vkQueueSubmit(vk.gfxq, 1, &si, VK_NULL_HANDLE), "vkQueueSubmit(vt_init)");
+    ew_trace_renderer_step("RENDER_INIT step=vt.submit.done");
     vk_check(vkQueueWaitIdle(vk.gfxq), "vkQueueWaitIdle(vt_init)");
+    ew_trace_renderer_step("RENDER_INIT step=vt.wait_idle.done");
     vkFreeCommandBuffers(vk.dev, vk.cmdpool, 1, &cmd);
+    ew_trace_renderer_step("RENDER_INIT step=vt.cmd_free.done");
 
     ew_vt_upload_pagetable(vk);
+    ew_trace_renderer_step("RENDER_INIT step=vt.init.done");
 }
 
 static void ew_vt_upload_tile_rgba8(App::VkCtx& vk, uint32_t atlas_x_tiles, uint32_t atlas_y_tiles,
@@ -2256,7 +2737,7 @@ static bool ew_vt_ensure_tile_resident(App::VkCtx& vk, uint32_t tick_u32, uint32
 
     // Evict: remove old mapping(s) (linear scan; acceptable at current sizes; deterministic).
     if (!found_free && vk.vt_slots[best].used) {
-        uint32_t old_key = vk.vt_slots[best].virt_key;
+        // Removed unused variable old_key.
         // Remove from page table entries
         for (size_t i=0;i<vk.vt_entries.size();++i) {
             uint32_t e = vk.vt_entries[i];
@@ -2269,7 +2750,7 @@ static bool ew_vt_ensure_tile_resident(App::VkCtx& vk, uint32_t tick_u32, uint32
             }
         }
         if (out_pt_changed) *out_pt_changed = true;
-        (void)old_key;
+        // Removed unused variable old_key.
     }
 
     uint32_t ax = best % vk.vt_tiles_per_row_atlas;
@@ -2388,14 +2869,6 @@ static VkSurfaceKHR create_surface(VkInstance inst, HWND hwnd) {
     return s;
 }
 
-static VkPhysicalDevice pick_phys(VkInstance inst) {
-    uint32_t n = 0;
-    vk_check(vkEnumeratePhysicalDevices(inst, &n, nullptr), "vkEnumeratePhysicalDevices(count)");
-    std::vector<VkPhysicalDevice> devs(n);
-    vk_check(vkEnumeratePhysicalDevices(inst, &n, devs.data()), "vkEnumeratePhysicalDevices");
-    return (n > 0) ? devs[0] : VK_NULL_HANDLE;
-}
-
 static uint32_t find_gfx_queue(VkPhysicalDevice phys, VkSurfaceKHR surf) {
     uint32_t n = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(phys, &n, nullptr);
@@ -2408,10 +2881,78 @@ static uint32_t find_gfx_queue(VkPhysicalDevice phys, VkSurfaceKHR surf) {
         vk_check(vkGetPhysicalDeviceSurfaceSupportKHR(phys, i, surf, &present), "vkGetPhysicalDeviceSurfaceSupportKHR");
         if (present) return i;
     }
-    return 0;
+    return UINT32_MAX;
+}
+
+static bool ew_has_device_extension(VkPhysicalDevice phys, const char* ext_name) {
+    uint32_t count = 0;
+    vk_check(vkEnumerateDeviceExtensionProperties(phys, nullptr, &count, nullptr), "vkEnumerateDeviceExtensionProperties(count)");
+    std::vector<VkExtensionProperties> exts(count);
+    vk_check(vkEnumerateDeviceExtensionProperties(phys, nullptr, &count, exts.data()), "vkEnumerateDeviceExtensionProperties");
+    for (const auto& ext : exts) {
+        if (std::strcmp(ext.extensionName, ext_name) == 0) return true;
+    }
+    return false;
+}
+
+static bool ew_query_canonical_renderer_support(VkPhysicalDevice phys,
+                                                VkPhysicalDeviceProperties* out_props,
+                                                VkPhysicalDeviceVulkan13Features* out_f13) {
+    if (out_props) std::memset(out_props, 0, sizeof(*out_props));
+    if (out_f13) std::memset(out_f13, 0, sizeof(*out_f13));
+
+    VkPhysicalDeviceProperties props{};
+    vkGetPhysicalDeviceProperties(phys, &props);
+    if (out_props) *out_props = props;
+    if (props.apiVersion < VK_API_VERSION_1_3) return false;
+    if (!ew_has_device_extension(phys, VK_KHR_SWAPCHAIN_EXTENSION_NAME)) return false;
+
+    VkPhysicalDeviceVulkan13Features f13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
+    VkPhysicalDeviceFeatures2 f2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+    f2.pNext = &f13;
+    vkGetPhysicalDeviceFeatures2(phys, &f2);
+    if (out_f13) *out_f13 = f13;
+    return f13.dynamicRendering == VK_TRUE && f13.synchronization2 == VK_TRUE;
+}
+
+static VkPhysicalDevice pick_phys(VkInstance inst, VkSurfaceKHR surf) {
+    uint32_t n = 0;
+    vk_check(vkEnumeratePhysicalDevices(inst, &n, nullptr), "vkEnumeratePhysicalDevices(count)");
+    std::vector<VkPhysicalDevice> devs(n);
+    vk_check(vkEnumeratePhysicalDevices(inst, &n, devs.data()), "vkEnumeratePhysicalDevices");
+
+    VkPhysicalDevice best = VK_NULL_HANDLE;
+    int best_score = std::numeric_limits<int>::min();
+    for (VkPhysicalDevice dev : devs) {
+        const uint32_t qfam = find_gfx_queue(dev, surf);
+        if (qfam == UINT32_MAX) continue;
+
+        VkPhysicalDeviceProperties props{};
+        VkPhysicalDeviceVulkan13Features f13{};
+        if (!ew_query_canonical_renderer_support(dev, &props, &f13)) continue;
+
+        int score = 0;
+        if (props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) score += 1000;
+        else if (props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU) score += 250;
+        score += (int)VK_VERSION_MAJOR(props.apiVersion) * 100;
+        score += (int)VK_VERSION_MINOR(props.apiVersion) * 10;
+        if (f13.dynamicRendering) score += 5;
+        if (f13.synchronization2) score += 5;
+        if (score > best_score) {
+            best = dev;
+            best_score = score;
+        }
+    }
+    return best;
 }
 
 static VkDevice create_device(VkPhysicalDevice phys, uint32_t qfam, VkQueue* out_q, const char* extra_exts_space_separated) {
+    VkPhysicalDeviceProperties props{};
+    VkPhysicalDeviceVulkan13Features available_f13{};
+    if (!ew_query_canonical_renderer_support(phys, &props, &available_f13)) {
+        throw std::runtime_error("Selected Vulkan device does not satisfy the canonical renderer contract (requires swapchain + Vulkan 1.3 dynamicRendering + synchronization2).");
+    }
+
     float prio = 1.0f;
     VkDeviceQueueCreateInfo qci{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
     qci.queueFamilyIndex = qfam;
@@ -2428,6 +2969,7 @@ static VkDevice create_device(VkPhysicalDevice phys, uint32_t qfam, VkQueue* out
     // Vulkan 1.3 core has dynamic rendering, but some drivers still prefer explicit enabling.
     VkPhysicalDeviceVulkan13Features f13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
     f13.dynamicRendering = VK_TRUE;
+    f13.synchronization2 = VK_TRUE;
 
     VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     dci.queueCreateInfoCount = 1;
@@ -2445,6 +2987,9 @@ static VkDevice create_device(VkPhysicalDevice phys, uint32_t qfam, VkQueue* out
 static VkSurfaceFormatKHR choose_format(VkPhysicalDevice phys, VkSurfaceKHR surf) {
     uint32_t n = 0;
     vk_check(vkGetPhysicalDeviceSurfaceFormatsKHR(phys, surf, &n, nullptr), "vkGetPhysicalDeviceSurfaceFormatsKHR(count)");
+    if (n == 0u) {
+        throw std::runtime_error("Vulkan surface reported zero supported surface formats.");
+    }
     std::vector<VkSurfaceFormatKHR> fmts(n);
     vk_check(vkGetPhysicalDeviceSurfaceFormatsKHR(phys, surf, &n, fmts.data()), "vkGetPhysicalDeviceSurfaceFormatsKHR");
     for (auto& f : fmts) {
@@ -2456,6 +3001,9 @@ static VkSurfaceFormatKHR choose_format(VkPhysicalDevice phys, VkSurfaceKHR surf
 static VkPresentModeKHR choose_present_mode(VkPhysicalDevice phys, VkSurfaceKHR surf) {
     uint32_t n = 0;
     vk_check(vkGetPhysicalDeviceSurfacePresentModesKHR(phys, surf, &n, nullptr), "vkGetPhysicalDeviceSurfacePresentModesKHR(count)");
+    if (n == 0u) {
+        throw std::runtime_error("Vulkan surface reported zero supported present modes.");
+    }
     std::vector<VkPresentModeKHR> modes(n);
     vk_check(vkGetPhysicalDeviceSurfacePresentModesKHR(phys, surf, &n, modes.data()), "vkGetPhysicalDeviceSurfacePresentModesKHR");
     for (auto m : modes) if (m == VK_PRESENT_MODE_MAILBOX_KHR) return m;
@@ -2473,6 +3021,9 @@ static void create_swap(App::VkCtx& vk, uint32_t w, uint32_t h) {
     if (extent.width == 0xFFFFFFFF) {
         extent.width = std::clamp(w, caps.minImageExtent.width, caps.maxImageExtent.width);
         extent.height = std::clamp(h, caps.minImageExtent.height, caps.maxImageExtent.height);
+    }
+    if (extent.width == 0u || extent.height == 0u) {
+        throw std::runtime_error("Vulkan swapchain extent resolved to zero.");
     }
 
     uint32_t image_count = caps.minImageCount + 1;
@@ -2497,6 +3048,9 @@ static void create_swap(App::VkCtx& vk, uint32_t w, uint32_t h) {
 
     uint32_t nimg = 0;
     vk_check(vkGetSwapchainImagesKHR(vk.dev, vk.swap, &nimg, nullptr), "vkGetSwapchainImagesKHR(count)");
+    if (nimg == 0u) {
+        throw std::runtime_error("Vulkan swapchain reported zero images.");
+    }
     vk.swap_images.resize(nimg);
     vk_check(vkGetSwapchainImagesKHR(vk.dev, vk.swap, &nimg, vk.swap_images.data()), "vkGetSwapchainImagesKHR");
 
@@ -2602,8 +3156,17 @@ static void destroy_pipeline(App::VkCtx& vk) {
     if (vk.ds_pool) { vkDestroyDescriptorPool(vk.dev, vk.ds_pool, nullptr); vk.ds_pool = VK_NULL_HANDLE; vk.ds = VK_NULL_HANDLE; }
 }
 
-static void create_pipeline(App::VkCtx& vk) {
+static void create_pipeline(App::VkCtx* vk_ptr) {
+    char ptr_line[96]{};
+    std::snprintf(ptr_line, sizeof(ptr_line), "RENDER_INIT step=pipeline.entry ptr=0x%p", (void*)vk_ptr);
+    ew_trace_renderer_step(ptr_line);
+    if (!vk_ptr) {
+        throw std::runtime_error("Renderer pipeline creation received a null Vulkan context.");
+    }
+    App::VkCtx& vk = *vk_ptr;
+    ew_trace_renderer_step("RENDER_INIT step=pipeline.destroy.begin");
     destroy_pipeline(vk);
+    ew_trace_renderer_step("RENDER_INIT step=pipeline.destroy.done");
 
     // Descriptor set:
     //  binding 0 = instances SSBO
@@ -2629,10 +3192,11 @@ static void create_pipeline(App::VkCtx& vk) {
     dlci.bindingCount = 3;
     dlci.pBindings = bindings;
     vk_check(vkCreateDescriptorSetLayout(vk.dev, &dlci, nullptr, &vk.ds_layout), "vkCreateDescriptorSetLayout");
+    ew_trace_renderer_step("RENDER_INIT step=pipeline.ds_layout.done");
 VkPushConstantRange pcr{};
     pcr.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     pcr.offset = 0;
-    pcr.size = 96; // mat4 (64) + vec3+float (16) + vec4 debug (16)
+    pcr.size = sizeof(EwViewportPushConstants);
 
     VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     plci.setLayoutCount = 1;
@@ -2640,6 +3204,7 @@ VkPushConstantRange pcr{};
     plci.pushConstantRangeCount = 1;
     plci.pPushConstantRanges = &pcr;
     vk_check(vkCreatePipelineLayout(vk.dev, &plci, nullptr, &vk.pipe_layout), "vkCreatePipelineLayout");
+    ew_trace_renderer_step("RENDER_INIT step=pipeline.layout.done");
 
     // Descriptor pool + set
     VkDescriptorPoolSize ps[3]{};
@@ -2655,16 +3220,20 @@ VkPushConstantRange pcr{};
     dpci.poolSizeCount = 3;
     dpci.pPoolSizes = ps;
     vk_check(vkCreateDescriptorPool(vk.dev, &dpci, nullptr, &vk.ds_pool), "vkCreateDescriptorPool");
+    ew_trace_renderer_step("RENDER_INIT step=pipeline.ds_pool.done");
 
     VkDescriptorSetAllocateInfo dsai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
     dsai.descriptorPool = vk.ds_pool;
     dsai.descriptorSetCount = 1;
     dsai.pSetLayouts = &vk.ds_layout;
     vk_check(vkAllocateDescriptorSets(vk.dev, &dsai, &vk.ds), "vkAllocateDescriptorSets");
+    ew_trace_renderer_step("RENDER_INIT step=pipeline.ds_alloc.done");
 
     // Ensure production virtual texture system is created before first draw.
     if (!vk.vt_atlas_image) {
+        ew_trace_renderer_step("RENDER_INIT step=pipeline.vt_init.begin");
         ew_vt_init(vk);
+        ew_trace_renderer_step("RENDER_INIT step=pipeline.vt_init.done");
     }
 
     VkDescriptorImageInfo di{};
@@ -2693,6 +3262,7 @@ VkPushConstantRange pcr{};
 
     VkWriteDescriptorSet writes[2] = {w1, w2};
     vkUpdateDescriptorSets(vk.dev, 2, writes, 0, nullptr);
+    ew_trace_renderer_step("RENDER_INIT step=pipeline.descriptors.done");
 
     // Load SPIR-V (built at compile time by Vulkan SDK tools)
     std::wstring vert_path = utf8_to_wide(std::string(EW_SHADER_OUT_DIR) + "\\instanced.vert.spv");
@@ -2702,8 +3272,10 @@ VkPushConstantRange pcr{};
     if (vert.empty() || frag.empty()) {
         throw std::runtime_error("Missing shader SPIR-V. Ensure Vulkan SDK is installed and shaders compiled.");
     }
+    ew_trace_renderer_step("RENDER_INIT step=pipeline.spv.done");
     VkShaderModule vs = ew_make_shader(vk.dev, vert);
     VkShaderModule fs = ew_make_shader(vk.dev, frag);
+    ew_trace_renderer_step("RENDER_INIT step=pipeline.shader_modules.done");
 
     VkPipelineShaderStageCreateInfo stages[2]{};
     stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -2722,6 +3294,19 @@ VkPushConstantRange pcr{};
     VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
     vp.viewportCount = 1;
     vp.scissorCount = 1;
+    VkViewport default_viewport{};
+    default_viewport.x = 0.0f;
+    default_viewport.y = 0.0f;
+    // Scale the simulation viewport to 70% of the available screen size for relative/distant viewing
+    default_viewport.width = (float)std::max(vk.swap_extent.width, 1u) * 0.7f;
+    default_viewport.height = (float)std::max(vk.swap_extent.height, 1u) * 0.7f;
+    default_viewport.minDepth = 0.0f;
+    default_viewport.maxDepth = 1.0f;
+    VkRect2D default_scissor{};
+    default_scissor.offset = {0, 0};
+    default_scissor.extent = {std::max(vk.swap_extent.width, 1u), std::max(vk.swap_extent.height, 1u)};
+    vp.pViewports = &default_viewport;
+    vp.pScissors = &default_scissor;
 
     VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
     rs.polygonMode = VK_POLYGON_MODE_FILL;
@@ -2734,6 +3319,13 @@ VkPushConstantRange pcr{};
 
     VkPipelineColorBlendAttachmentState cba{};
     cba.colorWriteMask = 0xF;
+    cba.blendEnable = VK_TRUE;
+    cba.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    cba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    cba.colorBlendOp = VK_BLEND_OP_ADD;
+    cba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    cba.alphaBlendOp = VK_BLEND_OP_ADD;
     VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
     cb.attachmentCount = 1;
     cb.pAttachments = &cba;
@@ -2770,173 +3362,15 @@ VkPushConstantRange pcr{};
     pci.layout = vk.pipe_layout;
     pci.renderPass = VK_NULL_HANDLE;
     pci.subpass = 0;
+    pci.flags = VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT;
 
     vk_check(vkCreateGraphicsPipelines(vk.dev, VK_NULL_HANDLE, 1, &pci, nullptr, &vk.pipe), "vkCreateGraphicsPipelines");
+    ew_trace_renderer_step("RENDER_INIT step=pipeline.graphics.done");
 
     vkDestroyShaderModule(vk.dev, vs, nullptr);
     vkDestroyShaderModule(vk.dev, fs, nullptr);
+    ew_trace_renderer_step("RENDER_INIT step=pipeline.cleanup.done");
 
-    // -----------------------------------------------------------------
-    // Camera sensor compute pipelines (depth histogram + deterministic median)
-    // -----------------------------------------------------------------
-    if (!vk.cam_ds_layout) {
-        VkDescriptorSetLayoutBinding cb[3]{};
-        // binding0: depth sampler
-        cb[0].binding = 0;
-        cb[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        cb[0].descriptorCount = 1;
-        cb[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-        // binding1: histogram SSBO
-        cb[1].binding = 1;
-        cb[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        cb[1].descriptorCount = 1;
-        cb[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-        // binding2: out SSBO
-        cb[2].binding = 2;
-        cb[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        cb[2].descriptorCount = 1;
-        cb[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-
-        VkDescriptorSetLayoutCreateInfo dl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        dl.bindingCount = 3;
-        dl.pBindings = cb;
-        vk_check(vkCreateDescriptorSetLayout(vk.dev, &dl, nullptr, &vk.cam_ds_layout), "vkCreateDescriptorSetLayout(cam)");
-
-        VkPushConstantRange pcr{};
-        pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-        pcr.offset = 0;
-        pcr.size = 8; // width,height
-
-        VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-        pl.setLayoutCount = 1;
-        pl.pSetLayouts = &vk.cam_ds_layout;
-        pl.pushConstantRangeCount = 1;
-        pl.pPushConstantRanges = &pcr;
-        vk_check(vkCreatePipelineLayout(vk.dev, &pl, nullptr, &vk.cam_pipe_layout), "vkCreatePipelineLayout(cam)");
-
-        // Buffers
-        {
-            VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-            bci.size = sizeof(uint32_t) * 256;
-            bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-            vk_check(vkCreateBuffer(vk.dev, &bci, nullptr, &vk.cam_hist_buf), "vkCreateBuffer(cam_hist)");
-            VkMemoryRequirements breq{};
-            vkGetBufferMemoryRequirements(vk.dev, vk.cam_hist_buf, &breq);
-            uint32_t mt = ew_find_memory_type(vk.phys, breq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-            VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-            mai.allocationSize = breq.size;
-            mai.memoryTypeIndex = mt;
-            vk_check(vkAllocateMemory(vk.dev, &mai, nullptr, &vk.cam_hist_mem), "vkAllocateMemory(cam_hist)");
-            vk_check(vkBindBufferMemory(vk.dev, vk.cam_hist_buf, vk.cam_hist_mem, 0), "vkBindBufferMemory(cam_hist)");
-        }
-        {
-            VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-            bci.size = sizeof(uint32_t) * 2;
-            bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-            vk_check(vkCreateBuffer(vk.dev, &bci, nullptr, &vk.cam_out_buf), "vkCreateBuffer(cam_out)");
-            VkMemoryRequirements breq{};
-            vkGetBufferMemoryRequirements(vk.dev, vk.cam_out_buf, &breq);
-            uint32_t mt = ew_find_memory_type(vk.phys, breq.memoryTypeBits,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-            VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-            mai.allocationSize = breq.size;
-            mai.memoryTypeIndex = mt;
-            vk_check(vkAllocateMemory(vk.dev, &mai, nullptr, &vk.cam_out_mem), "vkAllocateMemory(cam_out)");
-            vk_check(vkBindBufferMemory(vk.dev, vk.cam_out_buf, vk.cam_out_mem, 0), "vkBindBufferMemory(cam_out)");
-            vk_check(vkMapMemory(vk.dev, vk.cam_out_mem, 0, VK_WHOLE_SIZE, 0, &vk.cam_out_mapped), "vkMapMemory(cam_out)");
-        }
-
-        // Descriptor pool + sets
-        VkDescriptorPoolSize ps[3]{};
-        ps[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        ps[0].descriptorCount = 1;
-        ps[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        ps[1].descriptorCount = 2;
-        ps[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        ps[2].descriptorCount = 2;
-        VkDescriptorPoolCreateInfo dp{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-        dp.maxSets = 2;
-        dp.poolSizeCount = 3;
-        dp.pPoolSizes = ps;
-        vk_check(vkCreateDescriptorPool(vk.dev, &dp, nullptr, &vk.cam_ds_pool), "vkCreateDescriptorPool(cam)");
-
-        VkDescriptorSetLayout layouts[2] = {vk.cam_ds_layout, vk.cam_ds_layout};
-        VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-        ai.descriptorPool = vk.cam_ds_pool;
-        ai.descriptorSetCount = 2;
-        ai.pSetLayouts = layouts;
-        VkDescriptorSet sets[2]{};
-        vk_check(vkAllocateDescriptorSets(vk.dev, &ai, sets), "vkAllocateDescriptorSets(cam)");
-        vk.cam_hist_ds = sets[0];
-        vk.cam_median_ds = sets[1];
-
-        // Update descriptors
-        VkDescriptorImageInfo di{};
-        di.sampler = vk.depth_sampler;
-        di.imageView = vk.depth_view;
-        di.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-        VkDescriptorBufferInfo bi_hist{};
-        bi_hist.buffer = vk.cam_hist_buf;
-        bi_hist.offset = 0;
-        bi_hist.range = VK_WHOLE_SIZE;
-
-        VkDescriptorBufferInfo bi_out{};
-        bi_out.buffer = vk.cam_out_buf;
-        bi_out.offset = 0;
-        bi_out.range = VK_WHOLE_SIZE;
-
-        VkWriteDescriptorSet w[3]{};
-        w[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        w[0].dstSet = vk.cam_hist_ds;
-        w[0].dstBinding = 0;
-        w[0].descriptorCount = 1;
-        w[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        w[0].pImageInfo = &di;
-        w[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        w[1].dstSet = vk.cam_hist_ds;
-        w[1].dstBinding = 1;
-        w[1].descriptorCount = 1;
-        w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        w[1].pBufferInfo = &bi_hist;
-        w[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        w[2].dstSet = vk.cam_hist_ds;
-        w[2].dstBinding = 2;
-        w[2].descriptorCount = 1;
-        w[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        w[2].pBufferInfo = &bi_out;
-        vkUpdateDescriptorSets(vk.dev, 3, w, 0, nullptr);
-
-        VkWriteDescriptorSet w2[3]{};
-        w2[0] = w[0]; w2[0].dstSet = vk.cam_median_ds;
-        w2[1] = w[1]; w2[1].dstSet = vk.cam_median_ds;
-        w2[2] = w[2]; w2[2].dstSet = vk.cam_median_ds;
-        vkUpdateDescriptorSets(vk.dev, 3, w2, 0, nullptr);
-
-        // Pipelines
-        std::wstring hist_path = utf8_to_wide(std::string(EW_SHADER_OUT_DIR) + "\\cam_hist.comp.spv");
-        std::wstring med_path  = utf8_to_wide(std::string(EW_SHADER_OUT_DIR) + "\\cam_median.comp.spv");
-        auto hist_spv = ew_read_spv_u32(hist_path);
-        auto med_spv  = ew_read_spv_u32(med_path);
-        if (hist_spv.empty() || med_spv.empty()) {
-            throw std::runtime_error("Missing camera sensor compute shader SPIR-V.");
-        }
-        VkShaderModule hs = ew_make_shader(vk.dev, hist_spv);
-        VkShaderModule ms = ew_make_shader(vk.dev, med_spv);
-
-        VkComputePipelineCreateInfo cpi{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
-        cpi.layout = vk.cam_pipe_layout;
-        cpi.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-        cpi.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-        cpi.stage.module = hs;
-        cpi.stage.pName = "main";
-        vk_check(vkCreateComputePipelines(vk.dev, VK_NULL_HANDLE, 1, &cpi, nullptr, &vk.cam_hist_pipe), "vkCreateComputePipelines(hist)");
-        cpi.stage.module = ms;
-        vk_check(vkCreateComputePipelines(vk.dev, VK_NULL_HANDLE, 1, &cpi, nullptr, &vk.cam_median_pipe), "vkCreateComputePipelines(median)");
-
-        vkDestroyShaderModule(vk.dev, hs, nullptr);
-        vkDestroyShaderModule(vk.dev, ms, nullptr);
-    }
 }
 
 App::App(const AppConfig& cfg) : cfg_(cfg) {
@@ -2947,6 +3381,7 @@ App::App(const AppConfig& cfg) : cfg_(cfg) {
     if (env_truthy("EW_IMMERSION")) {
         immersion_mode_ = true;
     }
+    ui_layer_ = std::make_unique<VkUiLayer>(this);
 }
 
 static void set_dpi_awareness() {
@@ -2976,7 +3411,6 @@ void App::CreateMainWindow(HINSTANCE hInst) {
     wc.lpszClassName = GE_REMOTE_WINDOW_CLASS_W;
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
     wc.hIcon = ew_get_genesis_icon(false);
-    wc.hIconSm = ew_get_genesis_icon(true);
     RegisterClassExW(&wc);
 
     RECT r{0,0,cfg_.initial_width,cfg_.initial_height};
@@ -2993,10 +3427,14 @@ void App::CreateMainWindow(HINSTANCE hInst) {
         SendMessageW(hwnd_main_, WM_SETICON, ICON_BIG, (LPARAM)ew_get_genesis_icon(false));
         SendMessageW(hwnd_main_, WM_SETICON, ICON_SMALL, (LPARAM)ew_get_genesis_icon(true));
         ew_apply_modern_window_chrome(hwnd_main_, false);
+        if (ui_layer_) {
+            ui_layer_->Initialize(hwnd_main_);
+            ui_layer_->SetTheme(g_theme);
+        }
     }
 
     // Primary workspace commands are surfaced through the custom top bar instead
-    // of a classical Win32 menu bar.
+    // of a classical Windows desktop menu bar.
     SetMenu(hwnd_main_, nullptr);
 
     ShowWindow(hwnd_main_, ew_editor_build_enabled ? SW_SHOWMAXIMIZED : SW_SHOW);
@@ -3009,12 +3447,23 @@ void App::CreateChildWindows() {
     GetClientRect(hwnd_main_, &rc);
     client_w_ = rc.right - rc.left;
     client_h_ = rc.bottom - rc.top;
-    right_dock_width_px_ = ew_ui_clamp_right_dock_width_px(right_dock_width_px_, client_w_);
+    right_dock_width_px_ = ew_ui_clamp_right_dock_width_px(right_dock_width_px_, client_w_, ew_editor_build_enabled);
     right_dock_width_previous_px_ = right_dock_width_px_;
     const int dock_w = right_dock_width_px_;
+    const int left_w = ew_editor_build_enabled ? ew_ui_left_dock_width_px(client_w_) : 0;
     const UINT main_dpi = hwnd_main_ ? GetDpiForWindow(hwnd_main_) : 96u;
-    const int topbar_h = ew_editor_build_enabled ? MulDiv(44, (int)main_dpi, 96) : 0;
+    const int topbar_h = ew_editor_build_enabled ? MulDiv(86, (int)main_dpi, 96) : 0;
+    const int primary_tab_h = ew_editor_build_enabled ? MulDiv(EW_UI_PRIMARY_WORKSPACE_TAB_H_PX, (int)main_dpi, 96) : 0;
     const int workspace_h = std::max(0, client_h_ - topbar_h);
+    const int viewport_y = topbar_h + primary_tab_h;
+    const int viewport_h = std::max(0, workspace_h - primary_tab_h);
+
+    {
+        INITCOMMONCONTROLSEX icc{};
+        icc.dwSize = sizeof(icc);
+        icc.dwICC = ICC_TAB_CLASSES | ICC_LISTVIEW_CLASSES | ICC_BAR_CLASSES;
+        InitCommonControlsEx(&icc);
+    }
 
     if (ew_editor_build_enabled) {
         const std::wstring project_label_w = cfg_.app_title_utf8.empty()
@@ -3024,63 +3473,178 @@ void App::CreateChildWindows() {
                                      WS_CHILD | WS_VISIBLE,
                                      0, 0, client_w_, topbar_h,
                                      hwnd_main_, (HMENU)1600, GetModuleHandleW(nullptr), nullptr);
-        hwnd_topbar_menu_ = CreateWindowW(L"BUTTON", L"Workbench",
-                                          WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-                                          16, 8, 108, 28,
-                                          hwnd_topbar_, (HMENU)1607, GetModuleHandleW(nullptr), nullptr);
+
         hwnd_topbar_title_ = CreateWindowW(L"STATIC", L"Genesis Engine",
                                            WS_CHILD | WS_VISIBLE,
-                                           136, 12, 152, 18,
+                                           12, 8, 150, 22,
                                            hwnd_topbar_, nullptr, GetModuleHandleW(nullptr), nullptr);
+
+        hwnd_topbar_menu_ = CreateWindowW(L"BUTTON", L"File",
+                                          WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                          84, 6, 54, 24,
+                                          hwnd_topbar_, (HMENU)EW_CMD_TOPBAR_MENU_FILE, GetModuleHandleW(nullptr), nullptr);
+        hwnd_topbar_menu_edit_ = CreateWindowW(L"BUTTON", L"Edit",
+                                               WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                               140, 6, 54, 24,
+                                               hwnd_topbar_, (HMENU)EW_CMD_TOPBAR_MENU_EDIT, GetModuleHandleW(nullptr), nullptr);
+        hwnd_topbar_menu_window_ = CreateWindowW(L"BUTTON", L"Window",
+                                                 WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                                 196, 6, 66, 24,
+                                                 hwnd_topbar_, (HMENU)EW_CMD_TOPBAR_MENU_WINDOW, GetModuleHandleW(nullptr), nullptr);
+        hwnd_topbar_menu_tools_ = CreateWindowW(L"BUTTON", L"Tools",
+                                                WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                                264, 6, 58, 24,
+                                                hwnd_topbar_, (HMENU)EW_CMD_TOPBAR_MENU_TOOLS, GetModuleHandleW(nullptr), nullptr);
+        hwnd_topbar_menu_build_ = CreateWindowW(L"BUTTON", L"Build",
+                                                WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                                324, 6, 58, 24,
+                                                hwnd_topbar_, (HMENU)EW_CMD_TOPBAR_MENU_BUILD, GetModuleHandleW(nullptr), nullptr);
+        hwnd_topbar_menu_platforms_ = CreateWindowW(L"BUTTON", L"Platforms",
+                                                    WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                                    384, 6, 76, 24,
+                                                    hwnd_topbar_, (HMENU)EW_CMD_TOPBAR_MENU_PLATFORMS, GetModuleHandleW(nullptr), nullptr);
+        hwnd_topbar_menu_select_ = CreateWindowW(L"BUTTON", L"Select",
+                                                 WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                                 462, 6, 58, 24,
+                                                 hwnd_topbar_, (HMENU)EW_CMD_TOPBAR_MENU_SELECT, GetModuleHandleW(nullptr), nullptr);
+        hwnd_topbar_menu_actor_ = CreateWindowW(L"BUTTON", L"Actor",
+                                                WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                                522, 6, 58, 24,
+                                                hwnd_topbar_, (HMENU)EW_CMD_TOPBAR_MENU_ACTOR, GetModuleHandleW(nullptr), nullptr);
+        hwnd_topbar_menu_help_ = CreateWindowW(L"BUTTON", L"Help",
+                                               WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                               582, 6, 58, 24,
+                                               hwnd_topbar_, (HMENU)EW_CMD_TOPBAR_MENU_HELP, GetModuleHandleW(nullptr), nullptr);
+
         hwnd_topbar_project_ = CreateWindowW(L"STATIC", project_label_w.c_str(),
                                              WS_CHILD | WS_VISIBLE | SS_OWNERDRAW,
-                                             292, 8, 164, 28,
+                                             652, 6, 172, 24,
                                              hwnd_topbar_, (HMENU)1608, GetModuleHandleW(nullptr), nullptr);
-        hwnd_topbar_sim_ = CreateWindowW(L"BUTTON", L"Sim",
+
+        hwnd_topbar_select_mode_ = CreateWindowW(L"BUTTON", L"Selection Mode",
+                                                 WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                                 14, 38, 132, 28,
+                                                 hwnd_topbar_, (HMENU)EW_CMD_TOPBAR_SELECT_MODE, GetModuleHandleW(nullptr), nullptr);
+        hwnd_topbar_add_actor_ = CreateWindowW(L"BUTTON", L"+ Add",
+                                               WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                               152, 38, 66, 28,
+                                               hwnd_topbar_, (HMENU)EW_CMD_TOPBAR_ADD_ACTOR, GetModuleHandleW(nullptr), nullptr);
+        hwnd_topbar_tool_translate_ = CreateWindowW(L"BUTTON", L"T",
+                                                    WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                                    224, 38, 30, 28,
+                                                    hwnd_topbar_, (HMENU)EW_CMD_TOPBAR_TOOL_TRANSLATE, GetModuleHandleW(nullptr), nullptr);
+        hwnd_topbar_tool_rotate_ = CreateWindowW(L"BUTTON", L"R",
+                                                 WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                                 258, 38, 30, 28,
+                                                 hwnd_topbar_, (HMENU)EW_CMD_TOPBAR_TOOL_ROTATE, GetModuleHandleW(nullptr), nullptr);
+        hwnd_topbar_tool_frame_ = CreateWindowW(L"BUTTON", L"F",
+                                                WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                                292, 38, 30, 28,
+                                                hwnd_topbar_, (HMENU)EW_CMD_TOPBAR_TOOL_FRAME, GetModuleHandleW(nullptr), nullptr);
+        hwnd_topbar_transport_back_ = CreateWindowW(L"BUTTON", L"",
+                                                    WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                                    330, 38, 30, 28,
+                                                    hwnd_topbar_, (HMENU)EW_CMD_TOPBAR_TRANSPORT_BACK, GetModuleHandleW(nullptr), nullptr);
+        hwnd_topbar_transport_start_ = CreateWindowW(L"BUTTON", L"",
+                                                     WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                                     364, 38, 30, 28,
+                                                     hwnd_topbar_, (HMENU)EW_CMD_TOPBAR_TRANSPORT_START, GetModuleHandleW(nullptr), nullptr);
+        hwnd_topbar_sim_ = CreateWindowW(L"BUTTON", L"",
                                          WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-                                         470, 8, 62, 28,
+                                         398, 38, 40, 28,
                                          hwnd_topbar_, (HMENU)1601, GetModuleHandleW(nullptr), nullptr);
+        hwnd_topbar_pause_ = CreateWindowW(L"BUTTON", L"",
+                                           WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                           442, 38, 30, 28,
+                                           hwnd_topbar_, (HMENU)EW_CMD_TOPBAR_PAUSE, GetModuleHandleW(nullptr), nullptr);
+        hwnd_topbar_stop_ = CreateWindowW(L"BUTTON", L"",
+                                          WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                          476, 38, 30, 28,
+                                          hwnd_topbar_, (HMENU)EW_CMD_TOPBAR_STOP, GetModuleHandleW(nullptr), nullptr);
+        hwnd_topbar_replay_ = CreateWindowW(L"BUTTON", L"",
+                                            WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                            510, 38, 30, 28,
+                                            hwnd_topbar_, (HMENU)EW_CMD_TOPBAR_REPLAY, GetModuleHandleW(nullptr), nullptr);
         hwnd_topbar_ai_ = CreateWindowW(L"BUTTON", L"AI",
                                         WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-                                        538, 8, 54, 28,
+                                        548, 38, 46, 28,
                                         hwnd_topbar_, (HMENU)1602, GetModuleHandleW(nullptr), nullptr);
         hwnd_topbar_live_ = CreateWindowW(L"BUTTON", L"Live",
                                           WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-                                          598, 8, 58, 28,
+                                          598, 38, 54, 28,
                                           hwnd_topbar_, (HMENU)1603, GetModuleHandleW(nullptr), nullptr);
         hwnd_topbar_photon_ = CreateWindowW(L"BUTTON", L"Photon",
                                             WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-                                            662, 8, 72, 28,
+                                            656, 38, 62, 28,
                                             hwnd_topbar_, (HMENU)1604, GetModuleHandleW(nullptr), nullptr);
         hwnd_topbar_content_ = CreateWindowW(L"BUTTON", L"Content",
                                              WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-                                             740, 8, 78, 28,
+                                             722, 38, 66, 28,
                                              hwnd_topbar_, (HMENU)1605, GetModuleHandleW(nullptr), nullptr);
         hwnd_topbar_assistant_ = CreateWindowW(L"BUTTON", L"Assistant",
                                                WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-                                               824, 8, 90, 28,
+                                               792, 38, 72, 28,
                                                hwnd_topbar_, (HMENU)1606, GetModuleHandleW(nullptr), nullptr);
-        hwnd_topbar_minimize_ = CreateWindowW(L"BUTTON", L"_",
+        hwnd_topbar_workspace_level_ = CreateWindowW(L"BUTTON", L"Level Sim",
+                                                     WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                                     872, 38, 94, 28,
+                                                     hwnd_topbar_, (HMENU)EW_CMD_TOPBAR_WORKSPACE_LEVEL, GetModuleHandleW(nullptr), nullptr);
+        hwnd_topbar_workspace_asset_ = CreateWindowW(L"BUTTON", L"Asset Builder",
+                                                     WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                                     970, 38, 106, 28,
+                                                     hwnd_topbar_, (HMENU)EW_CMD_TOPBAR_WORKSPACE_ASSET, GetModuleHandleW(nullptr), nullptr);
+        hwnd_topbar_workspace_voxel_ = CreateWindowW(L"BUTTON", L"Voxel Builder",
+                                                     WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                                     1080, 38, 102, 28,
+                                                     hwnd_topbar_, (HMENU)EW_CMD_TOPBAR_WORKSPACE_VOXEL, GetModuleHandleW(nullptr), nullptr);
+        hwnd_topbar_view_perspective_ = CreateWindowW(L"BUTTON", L"Perspective",
+                                                      WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                                      1188, 38, 92, 28,
+                                                      hwnd_topbar_, (HMENU)EW_CMD_TOPBAR_VIEW_PERSPECTIVE, GetModuleHandleW(nullptr), nullptr);
+        hwnd_topbar_view_lit_ = CreateWindowW(L"BUTTON", L"Lit",
                                               WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-                                              client_w_ - 122, 8, 32, 28,
-                                              hwnd_topbar_, (HMENU)1609, GetModuleHandleW(nullptr), nullptr);
-        hwnd_topbar_maximize_ = CreateWindowW(L"BUTTON", L"[]",
-                                              WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-                                              client_w_ - 86, 8, 32, 28,
-                                              hwnd_topbar_, (HMENU)1610, GetModuleHandleW(nullptr), nullptr);
-        hwnd_topbar_close_ = CreateWindowW(L"BUTTON", L"X",
-                                           WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-                                           client_w_ - 50, 8, 36, 28,
-                                           hwnd_topbar_, (HMENU)1611, GetModuleHandleW(nullptr), nullptr);
+                                              1284, 38, 50, 28,
+                                              hwnd_topbar_, (HMENU)EW_CMD_TOPBAR_VIEW_LIT, GetModuleHandleW(nullptr), nullptr);
+        hwnd_topbar_view_show_ = CreateWindowW(L"BUTTON", L"Show",
+                                               WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                               1338, 38, 56, 28,
+                                               hwnd_topbar_, (HMENU)EW_CMD_TOPBAR_VIEW_SHOW, GetModuleHandleW(nullptr), nullptr);
+        hwnd_topbar_minimize_ = nullptr;
+        hwnd_topbar_maximize_ = nullptr;
+        hwnd_topbar_close_ = nullptr;
         hwnd_topbar_status_ = CreateWindowW(L"STATIC", L"Workspace ready.",
                                             WS_CHILD | WS_VISIBLE | SS_RIGHT,
-                                            920, 12, std::max(120, client_w_ - 1058), 18,
+                                            1000, 10, std::max(120, client_w_ - 1140), 18,
                                             hwnd_topbar_, nullptr, GetModuleHandleW(nullptr), nullptr);
+
+        ew_register_icon_button(hwnd_topbar_transport_back_, EwGlyphIcon::Back);
+        ew_register_icon_button(hwnd_topbar_transport_start_, EwGlyphIcon::Back);
+        ew_register_icon_button(hwnd_topbar_sim_, EwGlyphIcon::Play);
+        ew_register_icon_button(hwnd_topbar_pause_, EwGlyphIcon::Pause);
+        ew_register_icon_button(hwnd_topbar_stop_, EwGlyphIcon::Stop);
+        ew_register_icon_button(hwnd_topbar_replay_, EwGlyphIcon::Replay);
+        ew_register_icon_button(hwnd_topbar_add_actor_, EwGlyphIcon::Folder);
+
+        hwnd_primary_tab_ = CreateWindowW(WC_TABCONTROLW, L"",
+                                          WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
+                                          left_w, topbar_h, std::max(120, client_w_ - dock_w - left_w), primary_tab_h,
+                                          hwnd_main_, (HMENU)EW_CMD_PRIMARY_WORKSPACE_TAB, GetModuleHandleW(nullptr), nullptr);
+        if (hwnd_primary_tab_) {
+            TCITEMW ti{};
+            ti.mask = TCIF_TEXT;
+            ti.pszText = (LPWSTR)L"Level Simulation";
+            TabCtrl_InsertItem(hwnd_primary_tab_, (int)EW_WORKSPACE_LEVEL_SIM, &ti);
+            ti.pszText = (LPWSTR)L"Asset Builder";
+            TabCtrl_InsertItem(hwnd_primary_tab_, (int)EW_WORKSPACE_ASSET_BUILDER, &ti);
+            ti.pszText = (LPWSTR)L"Voxel Builder";
+            TabCtrl_InsertItem(hwnd_primary_tab_, (int)EW_WORKSPACE_VOXEL_BUILDER, &ti);
+            SetWindowTheme(hwnd_primary_tab_, L"", nullptr);
+        }
     }
 
     hwnd_viewport_ = CreateWindowW(L"STATIC", L"",
                                    WS_CHILD | WS_VISIBLE,
-                                   0, topbar_h, ew_editor_build_enabled ? (client_w_ - dock_w) : client_w_, workspace_h,
+                                   left_w, viewport_y, ew_editor_build_enabled ? (client_w_ - dock_w - left_w) : client_w_, viewport_h,
                                    hwnd_main_, (HMENU)1001, GetModuleHandleW(nullptr), nullptr);
 
     if (ew_editor_build_enabled && hwnd_viewport_) {
@@ -3093,10 +3657,50 @@ void App::CreateChildWindows() {
     }
 
     if (!ew_editor_build_enabled) {
+        hwnd_primary_tab_ = nullptr;
+        hwnd_left_panel_ = nullptr;
+        hwnd_left_title_ = nullptr;
+        hwnd_left_search_ = nullptr;
+        hwnd_left_category_ = nullptr;
+        hwnd_left_actor_thumb_ = nullptr;
+        hwnd_left_actor_list_ = nullptr;
         hwnd_panel_ = nullptr;
         hwnd_dock_splitter_ = nullptr;
         return;
     }
+
+    hwnd_left_panel_ = CreateWindowW(L"STATIC", L"",
+                                     WS_CHILD | WS_VISIBLE,
+                                     0, topbar_h, left_w, workspace_h,
+                                     hwnd_main_, (HMENU)1400, GetModuleHandleW(nullptr), nullptr);
+    hwnd_left_title_ = CreateWindowW(L"STATIC", L"Asset Vault",
+                                     WS_CHILD | WS_VISIBLE,
+                                     10, 10, left_w - 20, 22,
+                                     hwnd_left_panel_, nullptr, GetModuleHandleW(nullptr), nullptr);
+    hwnd_left_search_ = CreateWindowW(L"EDIT", L"",
+                                      WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
+                                      10, 36, left_w - 20, 24,
+                                      hwnd_left_panel_, (HMENU)1401, GetModuleHandleW(nullptr), nullptr);
+    hwnd_left_category_ = CreateWindowW(WC_COMBOBOXW, L"",
+                                        WS_CHILD | WS_VISIBLE | WS_BORDER | CBS_DROPDOWNLIST,
+                                        10, 66, left_w - 20, 280,
+                                        hwnd_left_panel_, (HMENU)1402, GetModuleHandleW(nullptr), nullptr);
+    hwnd_left_actor_thumb_ = CreateWindowW(WC_LISTVIEWW, L"",
+                                           WS_CHILD | WS_VISIBLE | WS_BORDER | LVS_ICON | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
+                                           10, 96, left_w - 20, std::max(132, std::min(220, workspace_h / 3)),
+                                           hwnd_left_panel_, (HMENU)1404, GetModuleHandleW(nullptr), nullptr);
+    if (hwnd_left_actor_thumb_) {
+        ListView_SetExtendedListViewStyle(hwnd_left_actor_thumb_, LVS_EX_DOUBLEBUFFER | LVS_EX_INFOTIP);
+        ListView_SetBkColor(hwnd_left_actor_thumb_, g_theme.panel);
+        ListView_SetTextBkColor(hwnd_left_actor_thumb_, g_theme.panel);
+        ListView_SetTextColor(hwnd_left_actor_thumb_, g_theme.text);
+        SetWindowTheme(hwnd_left_actor_thumb_, L"", nullptr);
+    }
+    hwnd_left_actor_list_ = CreateWindowW(L"LISTBOX", L"",
+                                          WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL | LBS_NOINTEGRALHEIGHT | LBS_NOTIFY,
+                                          10, 96 + std::max(132, std::min(220, workspace_h / 3)) + 8, left_w - 20,
+                                          std::max(120, workspace_h - (96 + std::max(132, std::min(220, workspace_h / 3)) + 18)),
+                                          hwnd_left_panel_, (HMENU)1403, GetModuleHandleW(nullptr), nullptr);
 
     hwnd_panel_ = CreateWindowW(L"STATIC", L"",
                                 WS_CHILD | WS_VISIBLE,
@@ -3109,12 +3713,6 @@ void App::CreateChildWindows() {
                                         hwnd_main_, (HMENU)1004, GetModuleHandleW(nullptr), nullptr);
 
     // Right dock: tabbed panels (Unreal-style). Pure UI layer: no core logic changes.
-    {
-        INITCOMMONCONTROLSEX icc{};
-        icc.dwSize = sizeof(icc);
-        icc.dwICC = ICC_TAB_CLASSES | ICC_LISTVIEW_CLASSES | ICC_BAR_CLASSES;
-        InitCommonControlsEx(&icc);
-    }
     const int PAD = 12;
     const int TAB_H = 30;
     hwnd_rdock_tab_ = CreateWindowW(WC_TABCONTROLW, L"",
@@ -3128,7 +3726,7 @@ void App::CreateChildWindows() {
     TabCtrl_InsertItem(hwnd_rdock_tab_, 0, &ti);
     ti.pszText = (LPWSTR)L"Details";
     TabCtrl_InsertItem(hwnd_rdock_tab_, 1, &ti);
-    ti.pszText = (LPWSTR)L"Asset";
+    ti.pszText = (LPWSTR)L"Asset Builder";
     TabCtrl_InsertItem(hwnd_rdock_tab_, 2, &ti);
     ti.pszText = (LPWSTR)L"Voxel";
     TabCtrl_InsertItem(hwnd_rdock_tab_, 3, &ti);
@@ -3267,7 +3865,13 @@ void App::CreateChildWindows() {
                                       WS_CHILD | WS_BORDER | LVS_ICON | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
                                       10, TB_H + 10, panel_w - 20, 210,
                                       hwnd_rdock_asset_, (HMENU)2050, GetModuleHandleW(nullptr), nullptr);
-    if (hwnd_asset_thumb_) ListView_SetExtendedListViewStyle(hwnd_asset_thumb_, LVS_EX_DOUBLEBUFFER);
+    if (hwnd_asset_thumb_) {
+        ListView_SetExtendedListViewStyle(hwnd_asset_thumb_, LVS_EX_DOUBLEBUFFER);
+        ListView_SetBkColor(hwnd_asset_thumb_, g_theme.panel);
+        ListView_SetTextBkColor(hwnd_asset_thumb_, g_theme.panel);
+        ListView_SetTextColor(hwnd_asset_thumb_, g_theme.text);
+        SetWindowTheme(hwnd_asset_thumb_, L"", nullptr);
+    }
 
 
     // Voxel toolbar: presets.
@@ -3390,15 +3994,36 @@ void App::CreateChildWindows() {
     CreateWindowW(L"BUTTON", L"Close", WS_CHILD | WS_VISIBLE,
                   panel_w - 240, 5, 54, 24,
                   hwnd_tb_sequencer_, (HMENU)1545, GetModuleHandleW(nullptr), nullptr);
-    hwnd_seq_play_ = CreateWindowW(L"BUTTON", L"Play", WS_CHILD | WS_VISIBLE,
-                                   10, 5, 64, 24,
+    hwnd_seq_back_ = CreateWindowW(L"BUTTON", L"", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                   10, 5, 30, 24,
+                                   hwnd_tb_sequencer_, (HMENU)2728, GetModuleHandleW(nullptr), nullptr);
+    hwnd_seq_start_ = CreateWindowW(L"BUTTON", L"", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                    44, 5, 30, 24,
+                                    hwnd_tb_sequencer_, (HMENU)2729, GetModuleHandleW(nullptr), nullptr);
+    hwnd_seq_play_ = CreateWindowW(L"BUTTON", L"", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                   78, 5, 30, 24,
                                    hwnd_tb_sequencer_, (HMENU)2722, GetModuleHandleW(nullptr), nullptr);
-    hwnd_seq_loop_ = CreateWindowW(L"BUTTON", L"Loop Build", WS_CHILD | WS_VISIBLE,
-                                   80, 5, 82, 24,
+    hwnd_seq_pause_ = CreateWindowW(L"BUTTON", L"", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                    112, 5, 30, 24,
+                                    hwnd_tb_sequencer_, (HMENU)2730, GetModuleHandleW(nullptr), nullptr);
+    hwnd_seq_stop_ = CreateWindowW(L"BUTTON", L"", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                   146, 5, 30, 24,
+                                   hwnd_tb_sequencer_, (HMENU)2737, GetModuleHandleW(nullptr), nullptr);
+    hwnd_seq_replay_ = CreateWindowW(L"BUTTON", L"", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                     180, 5, 30, 24,
+                                     hwnd_tb_sequencer_, (HMENU)2738, GetModuleHandleW(nullptr), nullptr);
+    hwnd_seq_loop_ = CreateWindowW(L"BUTTON", L"Loop Build", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                   216, 5, 90, 24,
                                    hwnd_tb_sequencer_, (HMENU)2723, GetModuleHandleW(nullptr), nullptr);
-    hwnd_seq_stress_overlay_ = CreateWindowW(L"BUTTON", L"Stress Overlay", WS_CHILD | WS_VISIBLE,
-                                   168, 5, 108, 24,
+    hwnd_seq_stress_overlay_ = CreateWindowW(L"BUTTON", L"Stress Overlay", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                   310, 5, 108, 24,
                                    hwnd_tb_sequencer_, (HMENU)2725, GetModuleHandleW(nullptr), nullptr);
+    ew_register_icon_button(hwnd_seq_back_, EwGlyphIcon::Back);
+    ew_register_icon_button(hwnd_seq_start_, EwGlyphIcon::Back);
+    ew_register_icon_button(hwnd_seq_play_, EwGlyphIcon::Play);
+    ew_register_icon_button(hwnd_seq_pause_, EwGlyphIcon::Pause);
+    ew_register_icon_button(hwnd_seq_stop_, EwGlyphIcon::Stop);
+    ew_register_icon_button(hwnd_seq_replay_, EwGlyphIcon::Replay);
     hwnd_seq_timeline_ = CreateWindowW(L"LISTBOX", L"",
                                        WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL |
                                        LBS_NOINTEGRALHEIGHT | LBS_NOTIFY,
@@ -3418,87 +4043,213 @@ void App::CreateChildWindows() {
 
     rdock_tab_index_u32_ = 0u;
     TabCtrl_SetCurSel(hwnd_rdock_tab_, (int)rdock_tab_index_u32_);
+
+    for (HWND container : {
+            hwnd_topbar_,
+            hwnd_viewport_,
+            hwnd_left_panel_,
+            hwnd_panel_,
+            hwnd_rdock_outliner_,
+            hwnd_rdock_details_,
+            hwnd_rdock_asset_,
+            hwnd_rdock_voxel_,
+            hwnd_rdock_node_,
+            hwnd_rdock_sequencer_,
+            hwnd_tb_outliner_,
+            hwnd_tb_details_,
+            hwnd_tb_asset_,
+            hwnd_tb_voxel_,
+            hwnd_tb_node_,
+            hwnd_tb_sequencer_,
+            hwnd_content_ }) {
+        ew_enable_editor_container_forwarding(container);
+    }
+
     ApplyRightDockVisibility();
     RefreshNodePanel();
     RefreshAssetDesignerPanel();
     RefreshVoxelDesignerPanel();
     RefreshSequencerPanel();
 
-    // Bottom-docked content browser (v1: list view). Toggle via Window menu.
+        // Bottom-docked content browser (Unreal-style: sources panel + asset view + settings).
     hwnd_content_ = CreateWindowW(L"STATIC", L"",
                                   WS_CHILD | (content_visible_ ? WS_VISIBLE : 0) | WS_BORDER,
                                   0, client_h_ - 260, client_w_, 260,
                                   hwnd_main_, (HMENU)1010, GetModuleHandleW(nullptr), nullptr);
     hwnd_content_search_ = CreateWindowW(L"EDIT", L"",
                                          WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT,
-                                         10, 10, 260, 24,
+                                         10, 10, 220, 24,
                                          hwnd_content_, (HMENU)1011, GetModuleHandleW(nullptr), nullptr);
     hwnd_content_refresh_ = CreateWindowW(L"BUTTON", L"Refresh",
-                                          WS_CHILD | WS_VISIBLE,
-                                          278, 10, 80, 24,
+                                          WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                          236, 10, 86, 24,
                                           hwnd_content_, (HMENU)1012, GetModuleHandleW(nullptr), nullptr);
+    if (hwnd_content_refresh_) ew_register_icon_button(hwnd_content_refresh_, EwGlyphIcon::Refresh);
+    hwnd_content_add_ = CreateWindowW(L"BUTTON", L"Add",
+                                      WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                      326, 10, 56, 24,
+                                      hwnd_content_, (HMENU)EW_CMD_CONTENT_ADD, GetModuleHandleW(nullptr), nullptr);
+    if (hwnd_content_add_) ew_register_icon_button(hwnd_content_add_, EwGlyphIcon::Folder);
+    hwnd_content_import_toolbar_ = CreateWindowW(L"BUTTON", L"Import",
+                                                 WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                                 386, 10, 70, 24,
+                                                 hwnd_content_, (HMENU)EW_CMD_CONTENT_IMPORT, GetModuleHandleW(nullptr), nullptr);
+    if (hwnd_content_import_toolbar_) ew_register_icon_button(hwnd_content_import_toolbar_, EwGlyphIcon::Folder);
+    hwnd_content_save_all_ = CreateWindowW(L"BUTTON", L"Save All",
+                                           WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                           460, 10, 84, 24,
+                                           hwnd_content_, (HMENU)EW_CMD_CONTENT_SAVE_ALL, GetModuleHandleW(nullptr), nullptr);
+    if (hwnd_content_save_all_) ew_register_icon_button(hwnd_content_save_all_, EwGlyphIcon::Save);
+    hwnd_content_fab_ = CreateWindowW(L"BUTTON", L"Fab",
+                                      WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                      548, 10, 52, 24,
+                                      hwnd_content_, (HMENU)EW_CMD_CONTENT_FAB, GetModuleHandleW(nullptr), nullptr);
+    hwnd_content_settings_ = CreateWindowW(L"BUTTON", L"Settings",
+                                          WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                          606, 10, 80, 24,
+                                          hwnd_content_, (HMENU)EW_CMD_CONTENT_SETTINGS_MENU, GetModuleHandleW(nullptr), nullptr);
+    if (hwnd_content_settings_) ew_register_icon_button(hwnd_content_settings_, EwGlyphIcon::Settings);
+    hwnd_content_tab_primary_ = CreateWindowW(L"BUTTON", L"Content Browser 1",
+                                              WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                              690, 10, 128, 24,
+                                              hwnd_content_, (HMENU)EW_CMD_CONTENT_TAB_PRIMARY, GetModuleHandleW(nullptr), nullptr);
+    hwnd_content_tab_secondary_ = CreateWindowW(L"BUTTON", L"Content Browser 2",
+                                                WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                                822, 10, 128, 24,
+                                                hwnd_content_, (HMENU)EW_CMD_CONTENT_TAB_SECONDARY, GetModuleHandleW(nullptr), nullptr);
+    hwnd_content_breadcrumb_ = CreateWindowW(L"EDIT", L"All > Content",
+                                             WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL | ES_READONLY,
+                                             956, 10, 286, 24,
+                                             hwnd_content_, (HMENU)EW_CMD_CONTENT_BREADCRUMB, GetModuleHandleW(nullptr), nullptr);
+    hwnd_content_back_ = CreateWindowW(L"BUTTON", L"",
+                                       WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                       1248, 10, 30, 24,
+                                       hwnd_content_, (HMENU)EW_CMD_CONTENT_BACK, GetModuleHandleW(nullptr), nullptr);
+    hwnd_content_forward_ = CreateWindowW(L"BUTTON", L"",
+                                          WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                          1282, 10, 30, 24,
+                                          hwnd_content_, (HMENU)EW_CMD_CONTENT_FORWARD, GetModuleHandleW(nullptr), nullptr);
+    ew_register_icon_button(hwnd_content_back_, EwGlyphIcon::Back);
+    ew_register_icon_button(hwnd_content_forward_, EwGlyphIcon::Forward);
 
-    // Content view toggles (v2): List / Thumbs / 3D.
-    hwnd_content_view_list_ = CreateWindowW(L"BUTTON", L"List",
-                                           WS_CHILD | WS_VISIBLE,
-                                           366, 10, 60, 24,
+    // Content view toggles: Grid / List / Columns.
+    hwnd_content_view_list_ = CreateWindowW(L"BUTTON", L"Grid",
+                                           WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                           1318, 10, 56, 24,
                                            hwnd_content_, (HMENU)1014, GetModuleHandleW(nullptr), nullptr);
-    hwnd_content_view_thumb_ = CreateWindowW(L"BUTTON", L"Thumb",
-                                            WS_CHILD | WS_VISIBLE,
-                                            430, 10, 70, 24,
+    if (hwnd_content_view_list_) ew_register_icon_button(hwnd_content_view_list_, EwGlyphIcon::Grid);
+    hwnd_content_view_thumb_ = CreateWindowW(L"BUTTON", L"List",
+                                            WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                            1378, 10, 56, 24,
                                             hwnd_content_, (HMENU)1015, GetModuleHandleW(nullptr), nullptr);
-    hwnd_content_view_3d_ = CreateWindowW(L"BUTTON", L"3D",
-                                         WS_CHILD | WS_VISIBLE,
-                                         504, 10, 46, 24,
-                                         hwnd_content_, (HMENU)1016, GetModuleHandleW(nullptr), nullptr);
+    if (hwnd_content_view_thumb_) ew_register_icon_button(hwnd_content_view_thumb_, EwGlyphIcon::List);
+    hwnd_content_view_3d_ = CreateWindowW(L"BUTTON", L"Column",
+                                           WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                           1438, 10, 70, 24,
+                                           hwnd_content_, (HMENU)1016, GetModuleHandleW(nullptr), nullptr);
+    if (hwnd_content_view_3d_) ew_register_icon_button(hwnd_content_view_3d_, EwGlyphIcon::Columns);
     hwnd_content_refcheck_ = CreateWindowW(L"BUTTON", L"Refs",
-                                           WS_CHILD | WS_VISIBLE,
-                                           556, 10, 54, 24,
+                                           WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                           1512, 10, 60, 24,
                                            hwnd_content_, (HMENU)1019, GetModuleHandleW(nullptr), nullptr);
+    if (hwnd_content_refcheck_) ew_register_icon_button(hwnd_content_refcheck_, EwGlyphIcon::Reference);
     hwnd_content_status_ = CreateWindowW(L"STATIC", L"List mode.",
                                          WS_CHILD | WS_VISIBLE | SS_LEFT,
-                                         620, 12, 320, 18,
+                                                                                 10, 40, 620, 18,
                                          hwnd_content_, (HMENU)1020, GetModuleHandleW(nullptr), nullptr);
     hwnd_content_selected_ = CreateWindowW(L"STATIC", L"Selected: none",
                                            WS_CHILD | WS_VISIBLE | SS_LEFT,
                                            10, 228, client_w_ - 20, 18,
                                            hwnd_content_, (HMENU)1021, GetModuleHandleW(nullptr), nullptr);
-    // Thumbnail view list (v1). Uses icon mode with a deterministic placeholder image list.
+
+        hwnd_content_sources_ = CreateWindowW(WC_TREEVIEWW, L"",
+                                                                                    WS_CHILD | WS_VISIBLE | WS_BORDER | TVS_HASBUTTONS | TVS_HASLINES |
+                                                                                    TVS_LINESATROOT | TVS_SHOWSELALWAYS,
+                                                                                    10, 40, EW_UI_CONTENT_SOURCES_W_PX, 182,
+                                                                                    hwnd_content_, (HMENU)EW_CMD_CONTENT_SOURCE_TREE, GetModuleHandleW(nullptr), nullptr);
+        if (hwnd_content_sources_) {
+            TreeView_SetBkColor(hwnd_content_sources_, g_theme.panel);
+            TreeView_SetTextColor(hwnd_content_sources_, g_theme.text);
+            SetWindowTheme(hwnd_content_sources_, L"", nullptr);
+        }
+
+        hwnd_content_list_ = CreateWindowW(WC_LISTVIEWW, L"",
+                                             WS_CHILD | WS_VISIBLE | WS_BORDER | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
+                                             10 + EW_UI_CONTENT_SOURCES_W_PX + 10, 40,
+                                             client_w_ - (10 + EW_UI_CONTENT_SOURCES_W_PX + 20), 182,
+                                             hwnd_content_, (HMENU)1017, GetModuleHandleW(nullptr), nullptr);
+        if (hwnd_content_list_) {
+            ListView_SetExtendedListViewStyle(hwnd_content_list_, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_INFOTIP);
+            ListView_SetBkColor(hwnd_content_list_, g_theme.panel);
+            ListView_SetTextBkColor(hwnd_content_list_, g_theme.panel);
+            ListView_SetTextColor(hwnd_content_list_, g_theme.text);
+            SetWindowTheme(hwnd_content_list_, L"", nullptr);
+        }
+
+        // Grid view uses icon mode with a deterministic placeholder image list.
     hwnd_content_thumb_ = CreateWindowW(WC_LISTVIEWW, L"",
                                         WS_CHILD | WS_BORDER | LVS_ICON | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
-                                        10, 40, client_w_ - 20, 210,
-                                        hwnd_content_, (HMENU)1017, GetModuleHandleW(nullptr), nullptr);
-    if (hwnd_content_thumb_) ListView_SetExtendedListViewStyle(hwnd_content_thumb_, LVS_EX_DOUBLEBUFFER);
+                                                                                10 + EW_UI_CONTENT_SOURCES_W_PX + 10, 40,
+                                                                                client_w_ - (10 + EW_UI_CONTENT_SOURCES_W_PX + 20), 182,
+                                                                                hwnd_content_, (HMENU)1018, GetModuleHandleW(nullptr), nullptr);
+    if (hwnd_content_thumb_) {
+        ListView_SetExtendedListViewStyle(hwnd_content_thumb_, LVS_EX_DOUBLEBUFFER);
+        ListView_SetBkColor(hwnd_content_thumb_, g_theme.panel);
+        ListView_SetTextBkColor(hwnd_content_thumb_, g_theme.panel);
+        ListView_SetTextColor(hwnd_content_thumb_, g_theme.text);
+        SetWindowTheme(hwnd_content_thumb_, L"", nullptr);
+    }
 
-    // Deterministic placeholder thumbnail image list (solid gold tile).
-    himl_content_thumbs_ = ImageList_Create(64, 64, ILC_COLOR32, 1, 0);
+    // Deterministic semantic thumbnail image list for actor/content categories.
+    himl_content_thumbs_ = ImageList_Create(64, 64, ILC_COLOR32, 8, 0);
     if (himl_content_thumbs_) {
         ew_theme_init_once();
         HDC hdc = GetDC(hwnd_content_thumb_);
-        HBITMAP bmp = CreateCompatibleBitmap(hdc, 64, 64);
-        HDC mem = CreateCompatibleDC(hdc);
-        HGDIOBJ old = SelectObject(mem, bmp);
-        RECT r{0,0,64,64};
-        HBRUSH br_bg = CreateSolidBrush(g_theme.panel_alt);
-        FillRect(mem, &r, br_bg);
-        DeleteObject(br_bg);
-        RECT inner{6,6,58,58};
-        HBRUSH br_inner = CreateSolidBrush(g_theme.highlight_bg);
-        FillRect(mem, &inner, br_inner);
-        DeleteObject(br_inner);
-        RECT accent{10,44,54,50};
-        HBRUSH br_accent = CreateSolidBrush(g_theme.gold);
-        FillRect(mem, &accent, br_accent);
-        DeleteObject(br_accent);
-        SelectObject(mem, old);
-        DeleteDC(mem);
+        struct ThumbVariant {
+            COLORREF inner;
+            COLORREF accent;
+            RECT badge;
+        };
+        const ThumbVariant variants[] = {
+            { g_theme.highlight_bg, g_theme.gold, { 10, 10, 22, 22 } },
+            { RGB(113, 167, 255), g_theme.gold, { 9, 10, 23, 22 } },
+            { RGB(255, 194, 94), RGB(255, 245, 180), { 41, 10, 55, 22 } },
+            { RGB(110, 208, 188), RGB(196, 255, 220), { 10, 28, 22, 40 } },
+            { RGB(244, 129, 168), RGB(255, 208, 224), { 42, 28, 54, 40 } },
+            { RGB(145, 198, 121), RGB(220, 243, 170), { 24, 10, 40, 22 } },
+            { RGB(147, 126, 233), RGB(213, 201, 255), { 24, 28, 40, 40 } },
+            { RGB(205, 137, 236), RGB(255, 220, 255), { 27, 12, 37, 20 } },
+        };
+        for (const ThumbVariant& variant : variants) {
+            HBITMAP bmp = CreateCompatibleBitmap(hdc, 64, 64);
+            HDC mem = CreateCompatibleDC(hdc);
+            HGDIOBJ old = SelectObject(mem, bmp);
+            RECT r{0,0,64,64};
+            HBRUSH br_bg = CreateSolidBrush(g_theme.panel_alt);
+            FillRect(mem, &r, br_bg);
+            DeleteObject(br_bg);
+            RECT inner{6,6,58,58};
+            HBRUSH br_inner = CreateSolidBrush(variant.inner);
+            FillRect(mem, &inner, br_inner);
+            DeleteObject(br_inner);
+            RECT accent{10,44,54,50};
+            HBRUSH br_accent = CreateSolidBrush(variant.accent);
+            FillRect(mem, &accent, br_accent);
+            DeleteObject(br_accent);
+            HBRUSH br_badge = CreateSolidBrush(g_theme.panel);
+            FillRect(mem, &variant.badge, br_badge);
+            DeleteObject(br_badge);
+            SelectObject(mem, old);
+            DeleteDC(mem);
+            ImageList_Add(himl_content_thumbs_, bmp, nullptr);
+            DeleteObject(bmp);
+        }
         ReleaseDC(hwnd_content_thumb_, hdc);
-        ImageList_Add(himl_content_thumbs_, bmp, nullptr);
-        DeleteObject(bmp);
         ListView_SetImageList(hwnd_content_thumb_, himl_content_thumbs_, LVSIL_NORMAL);
         if (hwnd_asset_thumb_) ListView_SetImageList(hwnd_asset_thumb_, himl_content_thumbs_, LVSIL_NORMAL);
+        if (hwnd_left_actor_thumb_) ListView_SetImageList(hwnd_left_actor_thumb_, himl_content_thumbs_, LVSIL_NORMAL);
     }
-    ShowWindow(hwnd_content_thumb_, SW_HIDE);
+    ShowWindow(hwnd_content_thumb_, SW_SHOW);
     // Deterministic small icon image list for list mode (solid gold tile).
     himl_content_icons_ = ImageList_Create(16, 16, ILC_COLOR32, 1, 0);
     if (himl_content_icons_) {
@@ -3523,24 +4274,15 @@ void App::CreateChildWindows() {
         ListView_SetImageList(hwnd_content_list_, himl_content_icons_, LVSIL_SMALL);
         if (hwnd_asset_thumb_) ListView_SetImageList(hwnd_asset_thumb_, himl_content_icons_, LVSIL_SMALL);
     }
-
-
-        hwnd_content_3d_ = CreateWindowW(L"LISTBOX", L"",
+    hwnd_content_3d_ = CreateWindowW(L"LISTBOX", L"",
                                      WS_CHILD | WS_BORDER | WS_VSCROLL | LBS_NOTIFY | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS,
-                                     10, 40, client_w_ - 20, 182,
-                                     hwnd_content_, (HMENU)1018, GetModuleHandleW(nullptr), nullptr);
+                                     10 + EW_UI_CONTENT_SOURCES_W_PX + 10, 40,
+                                     client_w_ - (10 + EW_UI_CONTENT_SOURCES_W_PX + 20), 182,
+                                     hwnd_content_, (HMENU)1098, GetModuleHandleW(nullptr), nullptr);
+    if (hwnd_content_3d_) SetWindowTheme(hwnd_content_3d_, L"", nullptr);
     ShowWindow(hwnd_content_3d_, SW_HIDE);
-    ListView_SetExtendedListViewStyle(hwnd_content_list_, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_DOUBLEBUFFER);
-    {
-        LVCOLUMNW col{};
-        col.mask = LVCF_TEXT | LVCF_WIDTH;
-        col.cx = 560;
-        col.pszText = (LPWSTR)L"Path";
-        ListView_InsertColumn(hwnd_content_list_, 0, &col);
-        col.cx = 240;
-        col.pszText = (LPWSTR)L"Label";
-        ListView_InsertColumn(hwnd_content_list_, 1, &col);
-    }
+    ConfigureContentBrowserListView();
+    RebuildContentSourcesPanel();
 
     // Controls in panel
     HWND asset_parent = hwnd_rdock_asset_;
@@ -3573,8 +4315,9 @@ void App::CreateChildWindows() {
     hwnd_asset_label_run_ = CreateWindowW(L"STATIC", L"Run", WS_CHILD | WS_VISIBLE, 10, 70, 28, 18, asset_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
     hwnd_toggle_play_ = CreateWindowW(L"BUTTON", L"",
                                       WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-                                      42, 66, 86, 24,
+                                      42, 66, 40, 40,
                                       asset_parent, (HMENU)2040, GetModuleHandleW(nullptr), nullptr);
+    ew_register_icon_button(hwnd_toggle_play_, EwGlyphIcon::Play);
 
     hwnd_asset_label_ai_ = CreateWindowW(L"STATIC", L"AI", WS_CHILD | WS_VISIBLE, 138, 70, 18, 18, asset_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
     hwnd_toggle_ai_ = CreateWindowW(L"BUTTON", L"",
@@ -3625,6 +4368,15 @@ void App::CreateChildWindows() {
                                                WS_CHILD | WS_VISIBLE,
                                                10, 190, 400, 18,
                                                asset_parent, (HMENU)2065, GetModuleHandleW(nullptr), nullptr);
+    hwnd_asset_preview_title_ = CreateWindowW(L"STATIC", L"Preview Target: (none)",
+                                              WS_CHILD | WS_VISIBLE,
+                                              10, 214, 220, 18,
+                                              asset_parent, (HMENU)2080, GetModuleHandleW(nullptr), nullptr);
+    if (hwnd_asset_preview_title_ && g_font_ui_bold) SendMessageW(hwnd_asset_preview_title_, WM_SETFONT, (WPARAM)g_font_ui_bold, TRUE);
+    hwnd_asset_preview_caption_ = CreateWindowW(L"STATIC", L"Open a Place Actors thumbnail or select linked content to focus this preview lane.",
+                                                WS_CHILD | WS_VISIBLE,
+                                                10, 236, 220, 40,
+                                                asset_parent, (HMENU)2081, GetModuleHandleW(nullptr), nullptr);
     hwnd_asset_review_refs_ = CreateWindowW(L"BUTTON", L"Review Refs",
                                             WS_CHILD | WS_VISIBLE,
                                             10, 214, 104, 24,
@@ -3848,6 +4600,84 @@ void App::CreateChildWindows() {
         if (h_rough) { SendMessageW(h_rough, TBM_SETRANGE, (WPARAM)TRUE, MAKELPARAM(0, 100)); SendMessageW(h_rough, TBM_SETPOS, (WPARAM)TRUE, 50); }
         y += 40;
 
+        hwnd_voxel_lattice_volume_ = CreateWindowW(L"BUTTON", L"3D Volume",
+                                                   WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP,
+                                                   X, y, 116, 24,
+                                                   voxel_parent, (HMENU)EW_VOXEL_LATTICE_VOLUME_ID, GetModuleHandleW(nullptr), nullptr);
+        if (hwnd_voxel_lattice_volume_) {
+            SendMessageW(hwnd_voxel_lattice_volume_, BM_SETCHECK, viewport_lattice_volume_mode_ ? BST_CHECKED : BST_UNCHECKED, 0);
+        }
+        hwnd_voxel_lattice_apply_ = CreateWindowW(L"BUTTON", L"Apply View",
+                                                  WS_CHILD | WS_VISIBLE,
+                                                  X + W - 104, y - 1, 104, 24,
+                                                  voxel_parent, (HMENU)EW_VOXEL_LATTICE_APPLY_ID, GetModuleHandleW(nullptr), nullptr);
+        y += 28;
+        CreateWindowW(L"STATIC", L"Slice Z", WS_CHILD | WS_VISIBLE, X, y + 4, 60, 18, voxel_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+        HWND h_slice = CreateWindowW(TRACKBAR_CLASSW, L"", WS_CHILD | WS_VISIBLE | TBS_AUTOTICKS,
+                                     X + 70, y, W - 80, 30, voxel_parent, (HMENU)EW_VOXEL_LATTICE_SLICE_ID, GetModuleHandleW(nullptr), nullptr);
+        if (h_slice) {
+            SendMessageW(h_slice, TBM_SETRANGE, (WPARAM)TRUE, MAKELPARAM(0, 127));
+            SendMessageW(h_slice, TBM_SETPOS, (WPARAM)TRUE, (LPARAM)std::min<uint32_t>(127u, viewport_lattice_slice_z_u32_));
+        }
+        y += 34;
+        CreateWindowW(L"STATIC", L"Stride", WS_CHILD | WS_VISIBLE, X, y + 4, 60, 18, voxel_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+        HWND h_stride = CreateWindowW(TRACKBAR_CLASSW, L"", WS_CHILD | WS_VISIBLE | TBS_AUTOTICKS,
+                                      X + 70, y, W - 80, 30, voxel_parent, (HMENU)EW_VOXEL_LATTICE_STRIDE_ID, GetModuleHandleW(nullptr), nullptr);
+        if (h_stride) {
+            SendMessageW(h_stride, TBM_SETRANGE, (WPARAM)TRUE, MAKELPARAM(1, 16));
+            SendMessageW(h_stride, TBM_SETPOS, (WPARAM)TRUE, (LPARAM)std::max<uint32_t>(1u, std::min<uint32_t>(16u, viewport_lattice_stride_u32_)));
+        }
+        y += 34;
+        CreateWindowW(L"STATIC", L"MaxPts", WS_CHILD | WS_VISIBLE, X, y + 4, 60, 18, voxel_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+        HWND h_max = CreateWindowW(TRACKBAR_CLASSW, L"", WS_CHILD | WS_VISIBLE | TBS_AUTOTICKS,
+                                   X + 70, y, W - 80, 30, voxel_parent, (HMENU)EW_VOXEL_LATTICE_MAXPTS_ID, GetModuleHandleW(nullptr), nullptr);
+        if (h_max) {
+            SendMessageW(h_max, TBM_SETRANGE, (WPARAM)TRUE, MAKELPARAM(1, 256));
+            SendMessageW(h_max, TBM_SETPOS, (WPARAM)TRUE, (LPARAM)ew_lattice_max_points_to_slider(viewport_lattice_max_points_u32_));
+        }
+        y += 34;
+        CreateWindowW(L"STATIC", L"Intensity", WS_CHILD | WS_VISIBLE, X, y + 4, 60, 18, voxel_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+        HWND h_intensity = CreateWindowW(TRACKBAR_CLASSW, L"", WS_CHILD | WS_VISIBLE | TBS_AUTOTICKS,
+                                         X + 70, y, W - 80, 30, voxel_parent, (HMENU)EW_VOXEL_LATTICE_INTENSITY_ID, GetModuleHandleW(nullptr), nullptr);
+        if (h_intensity) {
+            SendMessageW(h_intensity, TBM_SETRANGE, (WPARAM)TRUE, MAKELPARAM(0, 255));
+            SendMessageW(h_intensity, TBM_SETPOS, (WPARAM)TRUE, (LPARAM)viewport_lattice_intensity_min_u8_);
+        }
+        y += 40;
+
+        hwnd_voxel_vector_visualization_ = CreateWindowW(L"BUTTON", L"Vector Visualization",
+                                                         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP,
+                                                         X, y, 160, 24,
+                                                         voxel_parent, (HMENU)EW_VOXEL_VECTOR_VIS_ID, GetModuleHandleW(nullptr), nullptr);
+        if (hwnd_voxel_vector_visualization_) {
+            SendMessageW(hwnd_voxel_vector_visualization_, BM_SETCHECK, viewport_vector_visualization_enabled_ ? BST_CHECKED : BST_UNCHECKED, 0);
+        }
+        y += 28;
+        CreateWindowW(L"STATIC", L"Vector Gain", WS_CHILD | WS_VISIBLE, X, y + 4, 70, 18, voxel_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+        hwnd_voxel_vector_gain_ = CreateWindowW(TRACKBAR_CLASSW, L"", WS_CHILD | WS_VISIBLE | TBS_AUTOTICKS,
+                                                X + 70, y, W - 80, 30, voxel_parent, (HMENU)EW_VOXEL_VECTOR_GAIN_ID, GetModuleHandleW(nullptr), nullptr);
+        if (hwnd_voxel_vector_gain_) {
+            SendMessageW(hwnd_voxel_vector_gain_, TBM_SETRANGE, (WPARAM)TRUE, MAKELPARAM(0, 100));
+            SendMessageW(hwnd_voxel_vector_gain_, TBM_SETPOS, (WPARAM)TRUE, (LPARAM)viewport_vector_gain_u8_);
+        }
+        y += 34;
+        CreateWindowW(L"STATIC", L"Field Depth", WS_CHILD | WS_VISIBLE, X, y + 4, 70, 18, voxel_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+        hwnd_voxel_field_depth_ = CreateWindowW(TRACKBAR_CLASSW, L"", WS_CHILD | WS_VISIBLE | TBS_AUTOTICKS,
+                                                X + 70, y, W - 80, 30, voxel_parent, (HMENU)EW_VOXEL_FIELD_DEPTH_ID, GetModuleHandleW(nullptr), nullptr);
+        if (hwnd_voxel_field_depth_) {
+            SendMessageW(hwnd_voxel_field_depth_, TBM_SETRANGE, (WPARAM)TRUE, MAKELPARAM(2, 250));
+            SendMessageW(hwnd_voxel_field_depth_, TBM_SETPOS, (WPARAM)TRUE, (LPARAM)(int)std::lround((double)viewport_field_depth_m_f32_));
+        }
+        y += 34;
+        CreateWindowW(L"STATIC", L"Focal mm", WS_CHILD | WS_VISIBLE, X, y + 4, 70, 18, voxel_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+        hwnd_voxel_focal_length_ = CreateWindowW(TRACKBAR_CLASSW, L"", WS_CHILD | WS_VISIBLE | TBS_AUTOTICKS,
+                                                 X + 70, y, W - 80, 30, voxel_parent, (HMENU)EW_VOXEL_FOCAL_MM_ID, GetModuleHandleW(nullptr), nullptr);
+        if (hwnd_voxel_focal_length_) {
+            SendMessageW(hwnd_voxel_focal_length_, TBM_SETRANGE, (WPARAM)TRUE, MAKELPARAM(18, 200));
+            SendMessageW(hwnd_voxel_focal_length_, TBM_SETPOS, (WPARAM)TRUE, (LPARAM)(int)std::lround((double)viewport_focal_length_mm_f32_));
+        }
+        y += 40;
+
         CreateWindowW(L"STATIC", L"Atom Node Editor", WS_CHILD | WS_VISIBLE,
                       X, y, 140, 18, voxel_parent, nullptr, GetModuleHandleW(nullptr), nullptr);
         hwnd_voxel_atom_nodes_ = CreateWindowW(L"LISTBOX", L"",
@@ -3865,8 +4695,14 @@ void App::CreateChildWindows() {
     if (hwnd_topbar_title_ && g_font_ui_bold) SendMessageW(hwnd_topbar_title_, WM_SETFONT, (WPARAM)g_font_ui_bold, TRUE);
     if (hwnd_topbar_project_ && g_font_ui_small) SendMessageW(hwnd_topbar_project_, WM_SETFONT, (WPARAM)g_font_ui_small, TRUE);
     if (hwnd_topbar_status_ && g_font_ui_small) SendMessageW(hwnd_topbar_status_, WM_SETFONT, (WPARAM)g_font_ui_small, TRUE);
+    if (hwnd_primary_tab_) ew_apply_editor_fonts(hwnd_primary_tab_);
+    if (hwnd_left_panel_) ew_apply_editor_fonts(hwnd_left_panel_);
     ew_apply_editor_fonts(hwnd_panel_);
     if (hwnd_content_) ew_apply_editor_fonts(hwnd_content_);
+    ew_apply_editor_dark_controls(hwnd_main_);
+    ApplyPrimaryWorkspaceProfile();
+    RefreshPlaceActorsPanel();
+    ApplyRightDockVisibility();
     LayoutChildren(client_w_, client_h_);
     RefreshTopBarChrome();
     RefreshAssetDesignerPanel();
@@ -3899,7 +4735,7 @@ static void ew_draw_bell_badge(const DRAWITEMSTRUCT* dis, uint32_t badge_u32) {
     HFONT old = (HFONT)SelectObject(hdc, hFont);
 
     // Simple bell glyph. We intentionally keep this ASCII-ish so it renders on
-    // default Win32 fonts without requiring a symbol font.
+    // default Windows desktop fonts without requiring a symbol font.
     const wchar_t* bell = L"!";
     RECT tr = rc;
     DrawTextW(hdc, bell, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
@@ -4244,8 +5080,24 @@ static std::wstring ew_join_lines(const std::vector<std::wstring>& lines) {
     return out;
 }
 
+static void ew_append_trace_file_line_utf8(const std::wstring& path_w, const char* line_utf8) {
+    if (path_w.empty() || !line_utf8 || !line_utf8[0]) return;
+    FILE* f = nullptr;
+    _wfopen_s(&f, path_w.c_str(), L"ab");
+    if (!f) return;
+    const size_t n = std::strlen(line_utf8);
+    if (n > 0u) fwrite(line_utf8, 1, n, f);
+    const char nl = '\n';
+    fwrite(&nl, 1, 1, f);
+    fclose(f);
+}
 
-static void ew_draw_action_text_button(const DRAWITEMSTRUCT* dis) {
+static void ew_trace_renderer_step(const char* line_utf8) {
+    ew_append_trace_file_line_utf8(g_renderer_trace_log_path_w, line_utf8);
+}
+
+
+static void ew_draw_action_text_button_state(const DRAWITEMSTRUCT* dis, bool active) {
     ew_theme_init_once();
     if (!dis) return;
     HDC dc = dis->hDC;
@@ -4254,21 +5106,125 @@ static void ew_draw_action_text_button(const DRAWITEMSTRUCT* dis) {
     const bool disabled = (dis->itemState & ODS_DISABLED) != 0;
     const bool hot = (dis->itemState & ODS_HOTLIGHT) != 0;
     ew_draw_rounded_surface(dc, rc,
-                            ew_theme_button_fill(false, hot, pressed, disabled),
-                            ew_theme_button_border(false, hot, disabled),
+                            ew_theme_button_fill(active, hot, pressed, disabled),
+                            ew_theme_button_border(active, hot, disabled),
                             14, 1);
+    const COLORREF text_color = ew_theme_button_text(active, disabled);
+    RECT draw_rc = rc;
+    if (pressed) OffsetRect(&draw_rc, 1, 1);
+    const EwIconButtonInfo* icon_info = ew_get_icon_button_info(dis->hwndItem);
+    const EwGlyphIcon icon = icon_info ? icon_info->icon : EwGlyphIcon::None;
+    const bool can_draw_icon = (icon != EwGlyphIcon::None) && g_font_icon;
+    RECT text_rc = draw_rc;
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, text_color);
+    const int margin = 8;
+    if (can_draw_icon) {
+        const int button_h = (int)(draw_rc.bottom - draw_rc.top);
+        const int icon_size = std::max(12, std::min(18, button_h - 6));
+        RECT icon_rc;
+        icon_rc.left = draw_rc.left + margin;
+        icon_rc.right = icon_rc.left + icon_size;
+        icon_rc.top = draw_rc.top + ((draw_rc.bottom - draw_rc.top) - icon_size) / 2;
+        icon_rc.bottom = icon_rc.top + icon_size;
+        if (icon_rc.bottom > draw_rc.bottom - 2) icon_rc.bottom = draw_rc.bottom - 2;
+        if (icon_rc.top < draw_rc.top + 2) icon_rc.top = draw_rc.top + 2;
+        if (icon_rc.right > draw_rc.right - margin) icon_rc.right = draw_rc.right - margin;
+        if (icon_rc.right > icon_rc.left) {
+            HFONT old_icon_font = (HFONT)SelectObject(dc, g_font_icon);
+            DrawTextW(dc, ew_glyph_for_icon(icon), -1, &icon_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+            SelectObject(dc, old_icon_font);
+            text_rc.left = icon_rc.right + margin;
+            text_rc.right = draw_rc.right - margin;
+        }
+    } else {
+        text_rc.left = draw_rc.left + 4;
+        text_rc.right = draw_rc.right - 4;
+    }
     wchar_t txt[96]{};
     GetWindowTextW(dis->hwndItem, txt, 95);
-    RECT tr = rc;
-    if (pressed) { tr.left += 1; tr.top += 1; }
-    SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, ew_theme_button_text(false, disabled));
     HFONT oldf = (HFONT)SelectObject(dc, g_font_ui ? g_font_ui : GetStockObject(DEFAULT_GUI_FONT));
-    DrawTextW(dc, txt, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    if (text_rc.right > text_rc.left) {
+        const UINT text_flags = can_draw_icon
+            ? (DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX)
+            : (DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+        DrawTextW(dc, txt, -1, &text_rc, text_flags);
+    }
     SelectObject(dc, oldf);
 }
 
-static void ew_draw_ai_mode_button(const DRAWITEMSTRUCT* dis, const wchar_t* label, bool active) {
+static void ew_draw_action_text_button(const DRAWITEMSTRUCT* dis) {
+    ew_draw_action_text_button_state(dis, false);
+}
+
+static void ew_draw_play_transport_button(const DRAWITEMSTRUCT* dis, bool playing, bool topbar_variant) {
+    ew_theme_init_once();
+    if (!dis || !dis->hDC) return;
+    HDC dc = dis->hDC;
+    RECT rc = dis->rcItem;
+    const bool pressed = (dis->itemState & ODS_SELECTED) != 0;
+    const bool disabled = (dis->itemState & ODS_DISABLED) != 0;
+    const bool hot = (dis->itemState & ODS_HOTLIGHT) != 0;
+    const COLORREF fill = ew_theme_button_fill(playing, hot, pressed, disabled);
+    const COLORREF border = ew_theme_button_border(playing, hot, disabled);
+    ew_draw_rounded_surface(dc, rc, fill, border, topbar_variant ? 16 : 14, playing ? 2 : 1);
+    if (topbar_variant && playing) {
+        RECT accent = rc;
+        accent.left += 8;
+        accent.right -= 8;
+        accent.top = accent.bottom - 4;
+        HBRUSH accent_br = CreateSolidBrush(g_theme.gold);
+        FillRect(dc, &accent, accent_br);
+        DeleteObject(accent_br);
+    }
+    if (pressed) {
+        OffsetRect(&rc, 1, 1);
+    }
+    const int cx = (rc.left + rc.right) / 2;
+    const int cy = (rc.top + rc.bottom) / 2;
+    const COLORREF icon_col = ew_theme_button_text(playing, disabled);
+    HBRUSH icon_br = CreateSolidBrush(icon_col);
+    HPEN icon_pen = CreatePen(PS_SOLID, 1, icon_col);
+    HGDIOBJ old_pen = SelectObject(dc, icon_pen);
+    HGDIOBJ old_br = SelectObject(dc, icon_br);
+    const int rc_w = (int)(rc.right - rc.left);
+    const int rc_h = (int)(rc.bottom - rc.top);
+    if (playing) {
+        const int bar_half_h = std::max(4, rc_h / 5);
+        const int bar_w = std::max(3, rc_w / 12);
+        RECT left_bar{cx - bar_w - 3, cy - bar_half_h, cx - 3, cy + bar_half_h};
+        RECT right_bar{cx + 3, cy - bar_half_h, cx + bar_w + 3, cy + bar_half_h};
+        FillRect(dc, &left_bar, icon_br);
+        FillRect(dc, &right_bar, icon_br);
+    } else {
+        const int tri_w = std::max(7, rc_w / 4);
+        const int tri_h = std::max(8, rc_h / 3);
+        POINT tri[3]{
+            {cx - tri_w / 2, cy - tri_h / 2},
+            {cx - tri_w / 2, cy + tri_h / 2},
+            {cx + tri_w / 2, cy}
+        };
+        Polygon(dc, tri, 3);
+    }
+    SelectObject(dc, old_br);
+    SelectObject(dc, old_pen);
+    DeleteObject(icon_pen);
+    DeleteObject(icon_br);
+}
+
+static const wchar_t* ew_topbar_icon_glyph(EwTopBarIcon icon) {
+    switch (icon) {
+        case EwTopBarIcon::Sim: return L"\u25B6";     // Play triangle
+        case EwTopBarIcon::Ai: return L"\u2699";      // Gear symbol
+        case EwTopBarIcon::Live: return L"\u25CF";    // Filled circle
+        case EwTopBarIcon::Photon: return L"\u26A1";  // Lightning
+        case EwTopBarIcon::Content: return L"\u2630"; // Hamburger icon
+        case EwTopBarIcon::Assistant: return L"\u2709"; // Envelope
+        default: return L"";
+    }
+}
+
+static void ew_draw_ai_mode_button(const DRAWITEMSTRUCT* dis, const wchar_t* label, bool active, EwTopBarIcon icon = EwTopBarIcon::None) {
     if (!dis || !dis->hDC) return;
     ew_theme_init_once();
     HDC dc = dis->hDC;
@@ -4292,7 +5248,8 @@ static void ew_draw_ai_mode_button(const DRAWITEMSTRUCT* dis, const wchar_t* lab
     SetTextColor(dc, ew_theme_button_text(active, disabled));
     HFONT oldf = (HFONT)SelectObject(dc, g_font_ui ? g_font_ui : GetStockObject(DEFAULT_GUI_FONT));
     RECT tr = rc;
-    DrawTextW(dc, label, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    const wchar_t* draw_label = (icon != EwTopBarIcon::None) ? ew_topbar_icon_glyph(icon) : label;
+    DrawTextW(dc, draw_label && draw_label[0] ? draw_label : label, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     SelectObject(dc, oldf);
 }
 
@@ -4540,14 +5497,13 @@ void App::CreateAiPanelWindow() {
         wc.lpszClassName = kAiPanelWindowClass;
         wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
         wc.hIcon = ew_get_genesis_icon(false);
-        wc.hIconSm = ew_get_genesis_icon(true);
         wc.hbrBackground = g_brush_bg ? g_brush_bg : (HBRUSH)(COLOR_WINDOW + 1);
         ai_panel_class_registered = (RegisterClassExW(&wc) != 0);
     }
 
     hwnd_ai_panel_ = CreateWindowW(kAiPanelWindowClass, L"Genesis AI",
                                    WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
-                                   CW_USEDEFAULT, CW_USEDEFAULT, 520, 560,
+                                   CW_USEDEFAULT, CW_USEDEFAULT, 840, 720,
                                    hwnd_main_, nullptr, hinst, this);
     if (hwnd_ai_panel_) {
         SendMessageW(hwnd_ai_panel_, WM_SETICON, ICON_BIG, (LPARAM)ew_get_genesis_icon(false));
@@ -4724,7 +5680,7 @@ void App::CreateAiPanelWindow() {
                                             328, 506, 92, 24,
                                             hwnd_ai_panel_, (HMENU)4886, GetModuleHandleW(nullptr), nullptr);
     hwnd_ai_repo_list_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", L"",
-                                         WS_CHILD | LBS_NOTIFY | WS_VSCROLL | WS_TABSTOP,
+                                         WS_CHILD | LBS_NOTIFY | WS_VSCROLL | WS_TABSTOP | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS,
                                          20, 166, 180, 342,
                                          hwnd_ai_panel_, (HMENU)4867, GetModuleHandleW(nullptr), nullptr);
     hwnd_ai_repo_preview_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
@@ -4753,10 +5709,7 @@ void App::CreateAiPanelWindow() {
                                               WS_CHILD,
                                               20, 160, 160, 18,
                                               hwnd_ai_panel_, nullptr, GetModuleHandleW(nullptr), nullptr);
-    hwnd_ai_coh_old_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
-                                       WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL,
-                                       20, 160, 146, 24,
-                                       hwnd_ai_panel_, (HMENU)4871, GetModuleHandleW(nullptr), nullptr);
+    // Removed deprecated/unused hwnd_ai_coh_old_ creation.
     hwnd_ai_coh_new_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
                                        WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL,
                                        174, 160, 146, 24,
@@ -4778,7 +5731,7 @@ void App::CreateAiPanelWindow() {
                                                20, 220, 100, 18,
                                                hwnd_ai_panel_, nullptr, GetModuleHandleW(nullptr), nullptr);
     hwnd_ai_coh_results_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", L"",
-                                           WS_CHILD | WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT,
+                                           WS_CHILD | WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS,
                                            20, 220, 230, 288,
                                            hwnd_ai_panel_, (HMENU)4879, GetModuleHandleW(nullptr), nullptr);
     hwnd_ai_coh_label_patch_ = CreateWindowW(L"STATIC", L"Patch Preview",
@@ -4817,7 +5770,7 @@ void App::CreateAiPanelWindow() {
     ew_set_edit_margins(hwnd_ai_repo_preview_);
     ew_set_edit_margins(hwnd_ai_repo_coherence_);
     ew_set_edit_margins(hwnd_ai_coh_query_);
-    ew_set_edit_margins(hwnd_ai_coh_old_);
+    // Removed deprecated/unused hwnd_ai_coh_old_ margin setting.
     ew_set_edit_margins(hwnd_ai_coh_new_);
     ew_set_edit_margins(hwnd_ai_coh_patch_);
 
@@ -4855,6 +5808,7 @@ void App::CreateAiPanelWindow() {
     RefreshAiChatTabLabels();
 
     ew_apply_editor_fonts(hwnd_ai_panel_);
+    ew_apply_editor_dark_controls(hwnd_ai_panel_);
     LayoutAiPanelChildren();
     AiPanelSetView(0u);
 
@@ -4924,7 +5878,7 @@ void App::LayoutAiPanelChildren() {
     if (hwnd_ai_coh_label_query_) MoveWindow(hwnd_ai_coh_label_query_, left, content_top + 24, 100, 18, TRUE);
     if (hwnd_ai_coh_query_) MoveWindow(hwnd_ai_coh_query_, left, content_top + 44, w - 212, 24, TRUE);
     if (hwnd_ai_coh_label_rename_) MoveWindow(hwnd_ai_coh_label_rename_, left, content_top + 74, 180, 18, TRUE);
-    if (hwnd_ai_coh_old_) MoveWindow(hwnd_ai_coh_old_, left, content_top + 94, (w - 56) / 2 - 8, 24, TRUE);
+    // Removed deprecated/unused hwnd_ai_coh_old_ MoveWindow call.
     if (hwnd_ai_coh_new_) MoveWindow(hwnd_ai_coh_new_, left + (w - 56) / 2, content_top + 94, (w - 56) / 2 - 8, 24, TRUE);
     const int bx = w - 176;
     for (int i = 4873; i <= 4878; ++i) {
@@ -5145,7 +6099,7 @@ void App::AiPanelSetView(uint32_t view_u32) {
     auto vis = [&](HWND h, bool on) { if (h) ShowWindow(h, on ? SW_SHOW : SW_HIDE); };
     vis(hwnd_ai_tab_, chat); vis(hwnd_ai_chat_cortex_, chat); vis(hwnd_ai_chat_link_project_, chat); vis(hwnd_ai_chat_list_, chat); vis(hwnd_ai_chat_input_, chat); vis(hwnd_ai_chat_send_, chat); vis(hwnd_ai_chat_provider_, chat); vis(hwnd_ai_chat_model_, chat); vis(hwnd_ai_chat_mode_talk_, chat); vis(hwnd_ai_chat_mode_code_, chat); vis(hwnd_ai_chat_mode_sim_, chat);
     vis(hwnd_ai_repo_status_, repo); vis(hwnd_ai_repo_refresh_, repo); vis(hwnd_ai_repo_copy_, repo); vis(hwnd_ai_repo_highlight_, repo); vis(hwnd_ai_repo_label_files_, repo); vis(hwnd_ai_repo_label_preview_, repo); vis(hwnd_ai_repo_label_coherence_, repo); vis(hwnd_ai_repo_list_, repo); vis(hwnd_ai_repo_preview_, repo); vis(hwnd_ai_repo_coherence_, repo); vis(hwnd_ai_repo_selected_, repo); vis(hwnd_ai_repo_copy_path_, repo);
-    vis(hwnd_ai_coh_stats_, coh); vis(hwnd_ai_coh_label_query_, coh); vis(hwnd_ai_coh_label_rename_, coh); vis(hwnd_ai_coh_label_results_, coh); vis(hwnd_ai_coh_label_patch_, coh); vis(hwnd_ai_coh_query_, coh); vis(hwnd_ai_coh_old_, coh); vis(hwnd_ai_coh_new_, coh); vis(hwnd_ai_coh_results_, coh); vis(hwnd_ai_coh_patch_, coh); vis(hwnd_ai_coh_copy_results_, coh); vis(hwnd_ai_coh_copy_patch_, coh); vis(hwnd_ai_coh_highlight_hit_, coh); vis(hwnd_ai_coh_copy_hit_path_, coh); vis(hwnd_ai_coh_selected_, coh); vis(hwnd_ai_coh_open_hit_, coh);
+    vis(hwnd_ai_coh_stats_, coh); vis(hwnd_ai_coh_label_query_, coh); vis(hwnd_ai_coh_label_rename_, coh); vis(hwnd_ai_coh_label_results_, coh); vis(hwnd_ai_coh_label_patch_, coh); vis(hwnd_ai_coh_query_, coh); /* hwnd_ai_coh_old_ removed */ vis(hwnd_ai_coh_new_, coh); vis(hwnd_ai_coh_results_, coh); vis(hwnd_ai_coh_patch_, coh); vis(hwnd_ai_coh_copy_results_, coh); vis(hwnd_ai_coh_copy_patch_, coh); vis(hwnd_ai_coh_highlight_hit_, coh); vis(hwnd_ai_coh_copy_hit_path_, coh); vis(hwnd_ai_coh_selected_, coh); vis(hwnd_ai_coh_open_hit_, coh);
     for (int i = 4873; i <= 4878; ++i) vis(GetDlgItem(hwnd_ai_panel_, i), coh);
     if (hwnd_ai_panel_tool_status_) {
         if (chat) SetWindowTextW(hwnd_ai_panel_tool_status_, L"Chat view ready.");
@@ -7038,13 +7992,255 @@ struct EwAiTextViewDialog {
     }
 };
 
+static float ew_abs_f32_local(float v) {
+    return (v < 0.0f) ? -v : v;
+}
+
+static float ew_saturate_f32_local(float v) {
+    if (v < 0.0f) return 0.0f;
+    if (v > 1.0f) return 1.0f;
+    return v;
+}
+
+static float ew_wrap01_f32_local(float v) {
+    const float f = v - std::floor(v);
+    return (f < 0.0f) ? (f + 1.0f) : f;
+}
+
+static uint8_t ew_pack_unorm8_local(float v) {
+    return (uint8_t)std::lround((double)(ew_saturate_f32_local(v) * 255.0f));
+}
+
+static uint16_t ew_pack_unorm16_local(float v) {
+    return (uint16_t)std::lround((double)(ew_saturate_f32_local(v) * 32767.0f));
+}
+
+static uint32_t ew_pack_rgba8_local(float r, float g, float b, float a) {
+    return (uint32_t)ew_pack_unorm8_local(r) |
+           ((uint32_t)ew_pack_unorm8_local(g) << 8) |
+           ((uint32_t)ew_pack_unorm8_local(b) << 16) |
+           ((uint32_t)ew_pack_unorm8_local(a) << 24);
+}
+
+static uint32_t ew_research_particle_render_kind_local(genesis::GeResearchParticleClass particle_class) {
+    switch (particle_class) {
+        case genesis::GeResearchParticleClass::Photon:   return EW_RENDER_KIND_RESEARCH_PHOTON;
+        case genesis::GeResearchParticleClass::Weighted: return EW_RENDER_KIND_RESEARCH_WEIGHTED;
+        case genesis::GeResearchParticleClass::Flavor:   return EW_RENDER_KIND_RESEARCH_FLAVOR;
+        case genesis::GeResearchParticleClass::Charged:  return EW_RENDER_KIND_RESEARCH_CHARGED;
+        default:                                         return EW_RENDER_KIND_GENERIC;
+    }
+}
+
+static float ew_q32_32_to_f32_local(int64_t v_q32_32) {
+    return (float)((double)v_q32_32 / 4294967296.0);
+}
+
+static float ew_temporal_coupling_from_runtime_local(const SubstrateManager& sm) {
+    const float td_span = std::max(0.0f,
+        ew_q32_32_to_f32_local(sm.td_params.td_max_q32_32 - sm.td_params.td_min_q32_32));
+    const float k_coh = std::max(0.0f, ew_q32_32_to_f32_local(sm.td_params.k_coh_q32_32));
+    const float macro_lock = ew_saturate_f32_local((float)sm.temporal_macro.run041_joint_lock_mean);
+    const float coupling = 0.18f + 0.44f * k_coh + 0.24f * td_span + 0.14f * macro_lock;
+    return ew_saturate_f32_local(coupling);
+}
+
+static void ew_build_lattice_basis_local(float nx, float ny, float nz,
+                                         float& bx, float& by, float& bz) {
+    bx = -ny;
+    by = nx;
+    bz = 0.0f;
+    float blen = std::sqrt(bx * bx + by * by + bz * bz);
+    if (blen <= 1.0e-6f) {
+        bx = 0.0f;
+        by = -nz;
+        bz = ny;
+        blen = std::sqrt(bx * bx + by * by + bz * bz);
+    }
+    if (blen > 1.0e-6f) {
+        bx /= blen;
+        by /= blen;
+        bz /= blen;
+    } else {
+        bx = 1.0f;
+        by = 0.0f;
+        bz = 0.0f;
+    }
+}
+
+static void ew_hsv_to_rgb_local(float h, float s, float v, float& out_r, float& out_g, float& out_b) {
+    h = ew_wrap01_f32_local(h) * 6.0f;
+    s = ew_saturate_f32_local(s);
+    v = ew_saturate_f32_local(v);
+    const int sector = (int)std::floor(h);
+    const float frac = h - (float)sector;
+    const float p = v * (1.0f - s);
+    const float q = v * (1.0f - s * frac);
+    const float t = v * (1.0f - s * (1.0f - frac));
+    switch (sector % 6) {
+        case 0: out_r = v; out_g = t; out_b = p; break;
+        case 1: out_r = q; out_g = v; out_b = p; break;
+        case 2: out_r = p; out_g = v; out_b = t; break;
+        case 3: out_r = p; out_g = q; out_b = v; break;
+        case 4: out_r = t; out_g = p; out_b = v; break;
+        default: out_r = v; out_g = p; out_b = q; break;
+    }
+}
+
+struct EwPhaseMaterialSample {
+    uint32_t albedo_rgba8 = 0xFFFFFFFFu;
+    uint32_t atmosphere_rgba8 = 0x40FF8080u;
+    int32_t emissive_q16_16 = 0;
+    int32_t atmosphere_thickness_q16_16 = 0;
+    uint32_t carrier_x_u32 = 0u;
+    uint32_t carrier_y_u32 = 0u;
+    uint32_t carrier_z_u32 = 0u;
+};
+
+static EwPhaseMaterialSample ew_build_phase_material_sample(const App::Scene::Object& o,
+                                                            float clarity_f32,
+                                                            const EwCarrierTriple* carrier) {
+    EwPhaseMaterialSample out{};
+    const EwObjectDnaDerived dna = ew_object_dna_derive(o.object_dna);
+
+    const float tx = dna.manifold_6dof_hz_f32[0];
+    const float ty = dna.manifold_6dof_hz_f32[1];
+    const float tz = dna.manifold_6dof_hz_f32[2];
+    const float rx = dna.manifold_6dof_hz_f32[3];
+    const float ry = dna.manifold_6dof_hz_f32[4];
+    const float rz = dna.manifold_6dof_hz_f32[5];
+
+    const float translational_l1 = ew_abs_f32_local(tx) + ew_abs_f32_local(ty) + ew_abs_f32_local(tz);
+    const float rotational_l1 = ew_abs_f32_local(rx) + ew_abs_f32_local(ry) + ew_abs_f32_local(rz);
+    const float total_l1 = std::max(0.0001f, translational_l1 + rotational_l1);
+    const float translational_ratio = ew_saturate_f32_local(translational_l1 / total_l1);
+    const float rotational_ratio = ew_saturate_f32_local(rotational_l1 / total_l1);
+
+    const float carrier_density = carrier ? ew_saturate_f32_local((float)(int32_t)carrier->x_u32 / 65536.0f) : 0.0f;
+    const float carrier_phase_bias = carrier ? std::max(-1.0f, std::min(1.0f, (float)(int32_t)carrier->y_u32 / 65536.0f)) : 0.0f;
+    const float carrier_specularity = carrier ? ew_saturate_f32_local((float)(carrier->z_u32 & 0xFFFFu) / 32768.0f) : 0.0f;
+    const float carrier_roughness = carrier ? ew_saturate_f32_local((float)((carrier->z_u32 >> 16) & 0xFFFFu) / 32768.0f) : 0.0f;
+
+    const float phase_density = ew_saturate_f32_local(carrier_density * 0.55f +
+                                                      translational_ratio * 0.30f +
+                                                      (1.0f - rotational_ratio) * 0.15f);
+    const float occlusion = ew_saturate_f32_local(0.10f + rotational_ratio * 0.50f + (1.0f - clarity_f32) * 0.40f);
+    const float roughness = ew_saturate_f32_local(0.12f + rotational_ratio * 0.52f + carrier_roughness * 0.24f + phase_density * 0.12f);
+    const float specularity = ew_saturate_f32_local(0.18f + translational_ratio * 0.46f + carrier_specularity * 0.24f + clarity_f32 * 0.12f);
+
+    const float existence_norm = ew_saturate_f32_local(
+        dna.existence_resonance_hz_f32 /
+        std::max(0.25f, dna.confinement_ceiling_hz_f32 + ew_abs_f32_local(dna.confinement_floor_hz_f32)));
+    const float glow = ew_saturate_f32_local(0.18f + existence_norm * 0.42f + phase_density * 0.18f + specularity * 0.22f);
+    const float opacity = ew_saturate_f32_local(0.24f + phase_density * 0.34f + (1.0f - occlusion) * 0.18f + existence_norm * 0.24f);
+
+    const float hue = ew_wrap01_f32_local((o.object_dna.helix_phase_rad_f32 / 6.28318530718f) +
+                                          dna.confinement_effective_hz_f32 * 0.06125f +
+                                          carrier_phase_bias * 0.125f);
+    const float saturation = ew_saturate_f32_local(0.38f + phase_density * 0.28f + specularity * 0.34f);
+    const float value = ew_saturate_f32_local(0.22f + (1.0f - occlusion) * 0.30f + glow * 0.48f);
+
+    float base_r = 1.0f, base_g = 1.0f, base_b = 1.0f;
+    ew_hsv_to_rgb_local(hue, saturation, value, base_r, base_g, base_b);
+
+    float nx = 0.0f;
+    float ny = 0.0f;
+    float nz = 1.0f;
+    if (translational_l1 > 0.0001f) {
+        nx = tx / translational_l1;
+        ny = ty / translational_l1;
+        nz = tz / translational_l1;
+    }
+    nx = std::max(-1.0f, std::min(1.0f, nx));
+    ny = std::max(-1.0f, std::min(1.0f, ny));
+    nz = std::max(-1.0f, std::min(1.0f, nz));
+
+    out.albedo_rgba8 = ew_pack_rgba8_local(base_r, base_g, base_b, opacity);
+    out.atmosphere_rgba8 = ew_pack_rgba8_local(nx * 0.5f + 0.5f, ny * 0.5f + 0.5f, nz * 0.5f + 0.5f, occlusion);
+    out.emissive_q16_16 = (int32_t)std::llround((double)std::max(o.emissive_f32, 0.35f + glow * 2.65f) * 65536.0);
+    out.atmosphere_thickness_q16_16 = (int32_t)std::llround((double)(roughness * std::max(0.05f, o.radius_m_f32 * 0.25f)) * 65536.0);
+    out.carrier_x_u32 = (uint32_t)(int32_t)std::llround((double)(phase_density * 65536.0f));
+    out.carrier_y_u32 = (uint32_t)(int32_t)std::llround((double)(carrier_phase_bias * 65536.0f));
+    out.carrier_z_u32 = (uint32_t)ew_pack_unorm16_local(specularity) |
+                        ((uint32_t)ew_pack_unorm16_local(roughness) << 16);
+    return out;
+}
+
+void App::ApplyViewportLatticeProjectionFromControls(bool emit_status) {
+    if (!scene_) return;
+
+    if (hwnd_rdock_voxel_) {
+        if (HWND h = GetDlgItem(hwnd_rdock_voxel_, EW_VOXEL_LATTICE_VOLUME_ID)) {
+            viewport_lattice_volume_mode_ = (SendMessageW(h, BM_GETCHECK, 0, 0) == BST_CHECKED);
+        }
+        if (HWND h = GetDlgItem(hwnd_rdock_voxel_, EW_VOXEL_LATTICE_SLICE_ID)) {
+            const int v = (int)SendMessageW(h, TBM_GETPOS, 0, 0);
+            viewport_lattice_slice_z_u32_ = (uint32_t)std::max(0, std::min(127, v));
+        }
+        if (HWND h = GetDlgItem(hwnd_rdock_voxel_, EW_VOXEL_LATTICE_STRIDE_ID)) {
+            const int v = (int)SendMessageW(h, TBM_GETPOS, 0, 0);
+            viewport_lattice_stride_u32_ = (uint32_t)std::max(1, std::min(16, v));
+        }
+        if (HWND h = GetDlgItem(hwnd_rdock_voxel_, EW_VOXEL_LATTICE_MAXPTS_ID)) {
+            const int slider = (int)SendMessageW(h, TBM_GETPOS, 0, 0);
+            viewport_lattice_max_points_u32_ = ew_lattice_max_points_from_slider(slider);
+        }
+        if (HWND h = GetDlgItem(hwnd_rdock_voxel_, EW_VOXEL_LATTICE_INTENSITY_ID)) {
+            const int v = (int)SendMessageW(h, TBM_GETPOS, 0, 0);
+            viewport_lattice_intensity_min_u8_ = (uint8_t)std::max(0, std::min(255, v));
+        }
+    }
+
+    scene_->SetLiveViewportProjection(
+        live_mode_enabled_,
+        spectrum_band_i32_,
+        0u,
+        viewport_lattice_volume_mode_,
+        viewport_lattice_slice_z_u32_,
+        viewport_lattice_stride_u32_,
+        viewport_lattice_max_points_u32_,
+        viewport_lattice_intensity_min_u8_);
+
+    (void)emit_status;
+}
+
+void App::ApplyViewportVisualFxFromControls(bool emit_status) {
+    if (hwnd_rdock_voxel_) {
+        if (hwnd_voxel_vector_visualization_) {
+            viewport_vector_visualization_enabled_ =
+                (SendMessageW(hwnd_voxel_vector_visualization_, BM_GETCHECK, 0, 0) == BST_CHECKED);
+        }
+        if (HWND h = GetDlgItem(hwnd_rdock_voxel_, EW_VOXEL_VECTOR_GAIN_ID)) {
+            const int v = (int)SendMessageW(h, TBM_GETPOS, 0, 0);
+            viewport_vector_gain_u8_ = (uint8_t)std::max(0, std::min(100, v));
+        }
+        if (HWND h = GetDlgItem(hwnd_rdock_voxel_, EW_VOXEL_FIELD_DEPTH_ID)) {
+            const int v = (int)SendMessageW(h, TBM_GETPOS, 0, 0);
+            viewport_field_depth_m_f32_ = (float)std::max(2, std::min(250, v));
+        }
+        if (HWND h = GetDlgItem(hwnd_rdock_voxel_, EW_VOXEL_FOCAL_MM_ID)) {
+            const int v = (int)SendMessageW(h, TBM_GETPOS, 0, 0);
+            viewport_focal_length_mm_f32_ = (float)std::max(18, std::min(200, v));
+        }
+    }
+
+    // Keep camera packet focal/focus fields in sync with viewport visual controls.
+    EmitCameraSetFromRig();
+
+    (void)emit_status;
+}
+
 void App::SyncLiveModeProjection() {
     if (!scene_) return;
-    scene_->SetLiveViewportMode(live_mode_enabled_, spectrum_band_i32_);
+    ApplyViewportLatticeProjectionFromControls(false);
+    ApplyViewportVisualFxFromControls(false);
     if (hwnd_ai_status_) {
         if (live_mode_enabled_) {
             wchar_t msg[256]{};
-            swprintf(msg, 256, L"Live mode enabled: viewport now renders the GPU-resident substrate lattice (band=%d) with sandbox/editor tools still active.", spectrum_band_i32_);
+            swprintf(msg, 256, L"Live mode enabled: substrate lattice projection active (band=%d, stride=%u, max=%u).",
+                     spectrum_band_i32_,
+                     (unsigned)viewport_lattice_stride_u32_,
+                     (unsigned)viewport_lattice_max_points_u32_);
             SetWindowTextW(hwnd_ai_status_, msg);
         } else {
             SetWindowTextW(hwnd_ai_status_, L"Live mode disabled: viewport returned to standard sandbox projection.");
@@ -8150,7 +9346,32 @@ void App::RefreshTopBarChrome() {
     if (hwnd_topbar_photon_) InvalidateRect(hwnd_topbar_photon_, nullptr, TRUE);
     if (hwnd_topbar_content_) InvalidateRect(hwnd_topbar_content_, nullptr, TRUE);
     if (hwnd_topbar_assistant_) InvalidateRect(hwnd_topbar_assistant_, nullptr, TRUE);
+    if (hwnd_topbar_pause_) InvalidateRect(hwnd_topbar_pause_, nullptr, TRUE);
+    if (hwnd_topbar_stop_) InvalidateRect(hwnd_topbar_stop_, nullptr, TRUE);
+    if (hwnd_topbar_replay_) InvalidateRect(hwnd_topbar_replay_, nullptr, TRUE);
+    if (hwnd_topbar_transport_back_) InvalidateRect(hwnd_topbar_transport_back_, nullptr, TRUE);
+    if (hwnd_topbar_transport_start_) InvalidateRect(hwnd_topbar_transport_start_, nullptr, TRUE);
+    if (hwnd_topbar_select_mode_) InvalidateRect(hwnd_topbar_select_mode_, nullptr, TRUE);
+    if (hwnd_topbar_add_actor_) InvalidateRect(hwnd_topbar_add_actor_, nullptr, TRUE);
+    if (hwnd_topbar_tool_translate_) InvalidateRect(hwnd_topbar_tool_translate_, nullptr, TRUE);
+    if (hwnd_topbar_tool_rotate_) InvalidateRect(hwnd_topbar_tool_rotate_, nullptr, TRUE);
+    if (hwnd_topbar_tool_frame_) InvalidateRect(hwnd_topbar_tool_frame_, nullptr, TRUE);
+    if (hwnd_topbar_view_perspective_) InvalidateRect(hwnd_topbar_view_perspective_, nullptr, TRUE);
+    if (hwnd_topbar_view_lit_) InvalidateRect(hwnd_topbar_view_lit_, nullptr, TRUE);
+    if (hwnd_topbar_view_show_) InvalidateRect(hwnd_topbar_view_show_, nullptr, TRUE);
+    if (hwnd_topbar_workspace_level_) InvalidateRect(hwnd_topbar_workspace_level_, nullptr, TRUE);
+    if (hwnd_topbar_workspace_asset_) InvalidateRect(hwnd_topbar_workspace_asset_, nullptr, TRUE);
+    if (hwnd_topbar_workspace_voxel_) InvalidateRect(hwnd_topbar_workspace_voxel_, nullptr, TRUE);
+    if (hwnd_primary_tab_) InvalidateRect(hwnd_primary_tab_, nullptr, TRUE);
     if (hwnd_topbar_menu_) InvalidateRect(hwnd_topbar_menu_, nullptr, TRUE);
+    if (hwnd_topbar_menu_edit_) InvalidateRect(hwnd_topbar_menu_edit_, nullptr, TRUE);
+    if (hwnd_topbar_menu_window_) InvalidateRect(hwnd_topbar_menu_window_, nullptr, TRUE);
+    if (hwnd_topbar_menu_tools_) InvalidateRect(hwnd_topbar_menu_tools_, nullptr, TRUE);
+    if (hwnd_topbar_menu_build_) InvalidateRect(hwnd_topbar_menu_build_, nullptr, TRUE);
+    if (hwnd_topbar_menu_platforms_) InvalidateRect(hwnd_topbar_menu_platforms_, nullptr, TRUE);
+    if (hwnd_topbar_menu_select_) InvalidateRect(hwnd_topbar_menu_select_, nullptr, TRUE);
+    if (hwnd_topbar_menu_actor_) InvalidateRect(hwnd_topbar_menu_actor_, nullptr, TRUE);
+    if (hwnd_topbar_menu_help_) InvalidateRect(hwnd_topbar_menu_help_, nullptr, TRUE);
     if (hwnd_topbar_project_) InvalidateRect(hwnd_topbar_project_, nullptr, TRUE);
     if (hwnd_topbar_minimize_) InvalidateRect(hwnd_topbar_minimize_, nullptr, TRUE);
     if (hwnd_topbar_maximize_) InvalidateRect(hwnd_topbar_maximize_, nullptr, TRUE);
@@ -8167,6 +9388,8 @@ void App::RefreshTopBarChrome() {
                 ? L"  |  photon confinement: on"
                 : L"  |  photon confinement: off";
         }
+        status += L"  |  workspace: ";
+        status += ew_workspace_name(primary_workspace_tab_index_u32_);
         status += (hwnd_ai_panel_ && IsWindowVisible(hwnd_ai_panel_))
             ? L"  |  assistant: visible"
             : L"  |  assistant: hidden";
@@ -8174,27 +9397,113 @@ void App::RefreshTopBarChrome() {
     }
 }
 
+void App::ShowTopBarMenuForButton(uint32_t cmd_id_u32, HWND anchor_hwnd) {
+    HMENU menu = CreatePopupMenu();
+    if (!menu) return;
+    auto add = [&](UINT flags, UINT id, const wchar_t* label) {
+        AppendMenuW(menu, flags, id, label);
+    };
+
+    switch (cmd_id_u32) {
+        case EW_CMD_TOPBAR_MENU_FILE:
+            add(MF_STRING, EW_CMD_CONTENT_SAVE_ALL, L"Save All");
+            add(MF_STRING, 1012, L"Refresh Content");
+            add(MF_STRING, EW_CMD_CONTENT_IMPORT, L"Import...");
+            add(MF_SEPARATOR, 0, nullptr);
+            add(MF_STRING, 9001, L"Exit Genesis");
+            break;
+        case EW_CMD_TOPBAR_MENU_EDIT:
+            add(MF_STRING, 2030, L"Undo");
+            add(MF_STRING, 2031, L"Redo");
+            add(MF_SEPARATOR, 0, nullptr);
+            add(MF_STRING, 9101, L"Copy");
+            add(MF_STRING, 9102, L"Paste");
+            break;
+        case EW_CMD_TOPBAR_MENU_WINDOW:
+            add(MF_STRING | (content_visible_ ? MF_CHECKED : 0), 9201, L"Content Browser");
+            add(MF_STRING | ((hwnd_ai_panel_ && IsWindowVisible(hwnd_ai_panel_)) ? MF_CHECKED : 0), 9202, L"Assistant");
+            add(MF_SEPARATOR, 0, nullptr);
+            add(MF_STRING | (rdock_panel_visible_[0] ? MF_CHECKED : 0), 9203, L"Outliner");
+            add(MF_STRING | (rdock_panel_visible_[1] ? MF_CHECKED : 0), 9204, L"Details");
+            add(MF_STRING | (rdock_panel_visible_[2] ? MF_CHECKED : 0), 9205, L"Asset Builder");
+            add(MF_STRING | (rdock_panel_visible_[3] ? MF_CHECKED : 0), 9206, L"Voxel Builder");
+            add(MF_STRING | (rdock_panel_visible_[4] ? MF_CHECKED : 0), 9207, L"Node");
+            add(MF_STRING | (rdock_panel_visible_[5] ? MF_CHECKED : 0), 9208, L"Sequencer");
+            break;
+        case EW_CMD_TOPBAR_MENU_TOOLS:
+            add(MF_STRING, 9301, L"Reindex Content");
+            add(MF_STRING, 9302, L"Refresh Browser");
+            add(MF_SEPARATOR, 0, nullptr);
+            add(MF_STRING, 2712, L"Open Coherence");
+            add(MF_STRING, 2726, L"Motion Hook");
+            break;
+        case EW_CMD_TOPBAR_MENU_BUILD:
+            add(MF_STRING, 2006, L"Bootstrap Engine");
+            add(MF_STRING, 2060, L"Train Model");
+            break;
+        case EW_CMD_TOPBAR_MENU_PLATFORMS:
+            add(MF_STRING | MF_DISABLED | MF_CHECKED, 0, L"Win64 Vulkan (active)");
+            add(MF_STRING | MF_DISABLED, 0, L"Linux Vulkan (planned)");
+            add(MF_STRING | MF_DISABLED, 0, L"Android Vulkan (planned)");
+            break;
+        case EW_CMD_TOPBAR_MENU_SELECT:
+            add(MF_STRING, 2026, L"Axis None");
+            add(MF_STRING, 2027, L"Axis X");
+            add(MF_STRING, 2028, L"Axis Y");
+            add(MF_STRING, 2029, L"Axis Z");
+            break;
+        case EW_CMD_TOPBAR_MENU_ACTOR:
+            add(MF_STRING, EW_CMD_TOPBAR_ADD_ACTOR, L"Add Actor");
+            add(MF_STRING, 2070, L"Planet Apply");
+            add(MF_STRING, 2077, L"Character Bind");
+            break;
+        case EW_CMD_TOPBAR_MENU_HELP:
+            add(MF_STRING, 4813, L"Workflow Overview");
+            add(MF_STRING, 4811, L"Repository Browser");
+            add(MF_STRING, 4812, L"Coherence Tools");
+            break;
+        default:
+            ShowTopBarWorkbenchMenu();
+            DestroyMenu(menu);
+            return;
+    }
+
+    RECT rc{};
+    GetWindowRect(anchor_hwnd ? anchor_hwnd : hwnd_topbar_, &rc);
+    const UINT cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_LEFTALIGN | TPM_TOPALIGN,
+                                    rc.left, rc.bottom + 2, 0, hwnd_main_, nullptr);
+    DestroyMenu(menu);
+    if (cmd != 0u) SendMessageW(hwnd_main_, WM_COMMAND, MAKEWPARAM((int)cmd, 0), 0);
+}
+
 void App::ShowTopBarWorkbenchMenu() {
     if (!hwnd_main_) return;
     HMENU menu = CreatePopupMenu();
     HMENU panels = CreatePopupMenu();
-    if (!menu || !panels) {
+    HMENU workspace = CreatePopupMenu();
+    if (!menu || !panels || !workspace) {
+        if (workspace) DestroyMenu(workspace);
         if (panels) DestroyMenu(panels);
         if (menu) DestroyMenu(menu);
         return;
     }
 
+    AppendMenuW(workspace, MF_STRING | (primary_workspace_tab_index_u32_ == EW_WORKSPACE_LEVEL_SIM ? MF_CHECKED : 0), EW_CMD_TOPBAR_WORKSPACE_LEVEL, L"Level Simulation");
+    AppendMenuW(workspace, MF_STRING | (primary_workspace_tab_index_u32_ == EW_WORKSPACE_ASSET_BUILDER ? MF_CHECKED : 0), EW_CMD_TOPBAR_WORKSPACE_ASSET, L"Asset Builder");
+    AppendMenuW(workspace, MF_STRING | (primary_workspace_tab_index_u32_ == EW_WORKSPACE_VOXEL_BUILDER ? MF_CHECKED : 0), EW_CMD_TOPBAR_WORKSPACE_VOXEL, L"Voxel Builder");
+
     AppendMenuW(menu, MF_STRING | (content_visible_ ? MF_CHECKED : 0), 9201, L"Content Browser");
     AppendMenuW(menu, MF_STRING | ((hwnd_ai_panel_ && IsWindowVisible(hwnd_ai_panel_)) ? MF_CHECKED : 0), 9202, L"Assistant Panel");
     AppendMenuW(menu, MF_STRING | (live_mode_enabled_ ? MF_CHECKED : 0), 9209, L"Live View");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(panels, MF_STRING | (rdock_panel_visible_[0] ? MF_CHECKED : 0), 9203, L"Outliner");
-    AppendMenuW(panels, MF_STRING | (rdock_panel_visible_[1] ? MF_CHECKED : 0), 9204, L"Details");
-    AppendMenuW(panels, MF_STRING | (rdock_panel_visible_[2] ? MF_CHECKED : 0), 9205, L"Asset");
-    AppendMenuW(panels, MF_STRING | (rdock_panel_visible_[3] ? MF_CHECKED : 0), 9206, L"Voxel");
-    AppendMenuW(panels, MF_STRING | (rdock_panel_visible_[4] ? MF_CHECKED : 0), 9207, L"Node");
-    AppendMenuW(panels, MF_STRING | (rdock_panel_visible_[5] ? MF_CHECKED : 0), 9208, L"Sequencer");
+    for (uint32_t i = 0; i < EW_RIGHT_DOCK_TAB_COUNT; ++i) {
+        UINT flags = MF_STRING;
+        if (rdock_panel_visible_[i] && rdock_panel_workspace_enabled_[i]) flags |= MF_CHECKED;
+        if (!rdock_panel_workspace_enabled_[i]) flags |= MF_GRAYED;
+        AppendMenuW(panels, flags, 9203u + i, ew_workspace_tab_label(primary_workspace_tab_index_u32_, (int)i));
+    }
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)panels, L"Workspace Panels");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)workspace, L"Primary Workspace");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, 9301, L"Reindex Content");
     AppendMenuW(menu, MF_STRING, 9302, L"Refresh Browser");
@@ -8250,6 +9559,133 @@ void App::DisableVisualizationWithReason(const std::string& reason_utf8) {
     SyncWindowMenu();
 }
 
+void App::InitializeRenderer() {
+    g_renderer_trace_log_path_w = output_log_path_w_;
+    auto trace_renderer = [&](const char* line_utf8) {
+        ew_append_trace_file_line_utf8(output_log_path_w_, line_utf8);
+    };
+    trace_renderer("RENDER_INIT step=ctx.create.begin");
+    vk_ = new VkCtx();
+    vk_->enable_validation = env_truthy("EW_VK_VALIDATION");
+    trace_renderer(vk_->enable_validation ? "RENDER_INIT step=ctx.create.done validation=1" : "RENDER_INIT step=ctx.create.done validation=0");
+
+    const bool want_xr = env_truthy("GENESIS_OPENXR") || env_truthy("GENESIS_XR") || env_truthy("OPENXR");
+    bool xr_ok_init = false;
+    if (want_xr) {
+        trace_renderer("RENDER_INIT step=xr.init.begin");
+        xr_ok_init = xr_.Init();
+        trace_renderer(xr_ok_init ? "RENDER_INIT step=xr.init.done ok=1" : "RENDER_INIT step=xr.init.done ok=0");
+    }
+
+    trace_renderer("RENDER_INIT step=instance.begin");
+    vk_->instance = create_instance(vk_->enable_validation, &vk_->dbg,
+                                    xr_ok_init ? xr_.VulkanInstanceExtensions() : "");
+    trace_renderer("RENDER_INIT step=instance.done");
+    trace_renderer("RENDER_INIT step=surface.begin");
+    vk_->surface = create_surface(vk_->instance, hwnd_viewport_);
+    trace_renderer("RENDER_INIT step=surface.done");
+    trace_renderer("RENDER_INIT step=phys.begin");
+    vk_->phys = pick_phys(vk_->instance, vk_->surface);
+    if (!vk_->phys) {
+        throw std::runtime_error("No Vulkan physical device satisfies the canonical renderer contract (graphics+present + Vulkan 1.3 dynamicRendering + synchronization2).");
+    }
+    {
+        VkPhysicalDeviceProperties props{};
+        vkGetPhysicalDeviceProperties(vk_->phys, &props);
+        char phys_line[256]{};
+        std::snprintf(phys_line, sizeof(phys_line),
+                      "RENDER_INIT step=phys.selected name=%s api=%u.%u.%u",
+                      props.deviceName,
+                      VK_VERSION_MAJOR(props.apiVersion),
+                      VK_VERSION_MINOR(props.apiVersion),
+                      VK_VERSION_PATCH(props.apiVersion));
+        trace_renderer(phys_line);
+    }
+    trace_renderer("RENDER_INIT step=phys.done");
+    trace_renderer("RENDER_INIT step=queue.begin");
+    vk_->gfxq_family = find_gfx_queue(vk_->phys, vk_->surface);
+    if (vk_->gfxq_family == UINT32_MAX) {
+        throw std::runtime_error("Selected Vulkan device has no graphics+present queue family.");
+    }
+    trace_renderer("RENDER_INIT step=queue.done");
+    trace_renderer("RENDER_INIT step=device.begin");
+    vk_->dev = create_device(vk_->phys, vk_->gfxq_family, &vk_->gfxq,
+                             xr_ok_init ? xr_.VulkanDeviceExtensions() : "");
+    trace_renderer("RENDER_INIT step=device.done");
+
+    if (xr_ok_init) {
+        trace_renderer("RENDER_INIT step=xr.bind.begin");
+        xr_.BindVulkan(vk_->instance, vk_->phys, vk_->dev, vk_->gfxq_family, 0);
+        trace_renderer("RENDER_INIT step=xr.bind.done");
+    }
+
+    VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+    pci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    pci.queueFamilyIndex = vk_->gfxq_family;
+    trace_renderer("RENDER_INIT step=cmdpool.begin");
+    vk_check(vkCreateCommandPool(vk_->dev, &pci, nullptr, &vk_->cmdpool), "vkCreateCommandPool");
+    trace_renderer("RENDER_INIT step=cmdpool.done");
+
+    VkSemaphoreCreateInfo sci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+    trace_renderer("RENDER_INIT step=sync.begin");
+    vk_check(vkCreateSemaphore(vk_->dev, &sci, nullptr, &vk_->sem_image), "vkCreateSemaphore(image)");
+    vk_check(vkCreateSemaphore(vk_->dev, &sci, nullptr, &vk_->sem_render), "vkCreateSemaphore(render)");
+
+    VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    fci.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+    vk_check(vkCreateFence(vk_->dev, &fci, nullptr, &vk_->fence), "vkCreateFence");
+    trace_renderer("RENDER_INIT step=sync.done");
+
+    RECT vrc{};
+    GetClientRect(hwnd_viewport_, &vrc);
+    trace_renderer("RENDER_INIT step=swap.begin");
+    create_swap(*vk_,
+                (uint32_t)std::max(1L, vrc.right - vrc.left),
+                (uint32_t)std::max(1L, vrc.bottom - vrc.top));
+    trace_renderer("RENDER_INIT step=swap.done");
+    trace_renderer("RENDER_INIT step=pipeline.begin");
+    create_pipeline(vk_);
+    trace_renderer("RENDER_INIT step=pipeline.done");
+}
+
+bool App::InitializeRendererGuarded(unsigned long* out_exception_code) {
+#if defined(_MSC_VER)
+    unsigned long code = 0ul;
+    __try {
+        InitializeRenderer();
+        if (out_exception_code) *out_exception_code = 0ul;
+        return true;
+    } __except (code = GetExceptionCode(), EXCEPTION_EXECUTE_HANDLER) {
+        if (out_exception_code) *out_exception_code = code;
+        return false;
+    }
+#else
+    InitializeRenderer();
+    if (out_exception_code) *out_exception_code = 0ul;
+    return true;
+#endif
+}
+
+bool App::ExecuteFrameGuarded(unsigned long* out_exception_code) {
+#if defined(_MSC_VER)
+    unsigned long code = 0ul;
+    __try {
+        Tick();
+        Render();
+        if (out_exception_code) *out_exception_code = 0ul;
+        return true;
+    } __except (code = GetExceptionCode(), EXCEPTION_EXECUTE_HANDLER) {
+        if (out_exception_code) *out_exception_code = code;
+        return false;
+    }
+#else
+    Tick();
+    Render();
+    if (out_exception_code) *out_exception_code = 0ul;
+    return true;
+#endif
+}
+
 // NOTE: AI progress/experiment lists previously scanned disk directly.
 // Per design: AI learning/crawling artifacts remain substrate-resident unless the
 // user explicitly requests disk apply/export via console/AI interactions. Therefore the
@@ -8278,60 +9714,140 @@ void App::UpdateAiPanel() {
 }
 
 void App::LayoutChildren(int w, int h) {
-    const int panel_w = ew_ui_clamp_right_dock_width_px(right_dock_width_px_, w);
+    const int panel_w = ew_ui_clamp_right_dock_width_px(right_dock_width_px_, w, ew_editor_build_enabled);
     right_dock_width_px_ = panel_w;
     const int content_h = (content_visible_ && ew_editor_build_enabled ? 260 : 0);
     const UINT main_dpi = hwnd_main_ ? GetDpiForWindow(hwnd_main_) : 96u;
-    const int topbar_h = ew_editor_build_enabled ? MulDiv(44, (int)main_dpi, 96) : 0;
+    const int topbar_h = ew_editor_build_enabled ? MulDiv(86, (int)main_dpi, 96) : 0;
+    const int primary_tab_h = ew_editor_build_enabled ? MulDiv(EW_UI_PRIMARY_WORKSPACE_TAB_H_PX, (int)main_dpi, 96) : 0;
     const int workspace_h = std::max(0, h - content_h - topbar_h);
 
     if (!ew_editor_build_enabled) {
+        if (hwnd_primary_tab_) ShowWindow(hwnd_primary_tab_, SW_HIDE);
         if (hwnd_viewport_) MoveWindow(hwnd_viewport_, 0, 0, w, h, TRUE);
         if (hwnd_dock_splitter_) ShowWindow(hwnd_dock_splitter_, SW_HIDE);
+        if (hwnd_left_panel_) ShowWindow(hwnd_left_panel_, SW_HIDE);
         if (hwnd_panel_) ShowWindow(hwnd_panel_, SW_HIDE);
         return;
     }
 
+    const int left_w = ew_ui_left_dock_width_px(w);
     if (hwnd_topbar_) MoveWindow(hwnd_topbar_, 0, 0, w, topbar_h, TRUE);
-    const int top_button_y = 8;
-    const int menu_w = 108;
-    const int title_w = 146;
-    const int project_w = 166;
-    const int control_gap = 4;
-    const int minimize_w = 32;
-    const int maximize_w = 32;
-    const int close_w = 36;
-    const int control_cluster_w = minimize_w + maximize_w + close_w + control_gap * 2;
+    const int row1_y = 6;
+    const int row1_h = 24;
+    const int row2_h = 28;
+    const int row2_y = std::max(row1_y + row1_h + 8, topbar_h - row2_h - 8);
+    const int control_cluster_w = 0;
     const int control_cluster_x = std::max(16, w - 14 - control_cluster_w);
-    if (hwnd_topbar_menu_) MoveWindow(hwnd_topbar_menu_, 16, top_button_y, menu_w, 28, TRUE);
-    if (hwnd_topbar_title_) MoveWindow(hwnd_topbar_title_, 136, 12, title_w, 18, TRUE);
-    if (hwnd_topbar_project_) MoveWindow(hwnd_topbar_project_, 290, top_button_y, project_w, 28, TRUE);
-    if (hwnd_topbar_sim_) MoveWindow(hwnd_topbar_sim_, 470, top_button_y, 62, 28, TRUE);
-    if (hwnd_topbar_ai_) MoveWindow(hwnd_topbar_ai_, 538, top_button_y, 54, 28, TRUE);
-    if (hwnd_topbar_live_) MoveWindow(hwnd_topbar_live_, 598, top_button_y, 58, 28, TRUE);
-    if (hwnd_topbar_photon_) MoveWindow(hwnd_topbar_photon_, 662, top_button_y, 72, 28, TRUE);
-    if (hwnd_topbar_content_) MoveWindow(hwnd_topbar_content_, 740, top_button_y, 78, 28, TRUE);
-    if (hwnd_topbar_assistant_) MoveWindow(hwnd_topbar_assistant_, 824, top_button_y, 90, 28, TRUE);
-    if (hwnd_topbar_minimize_) MoveWindow(hwnd_topbar_minimize_, control_cluster_x, top_button_y, minimize_w, 28, TRUE);
-    if (hwnd_topbar_maximize_) MoveWindow(hwnd_topbar_maximize_, control_cluster_x + minimize_w + control_gap, top_button_y, maximize_w, 28, TRUE);
-    if (hwnd_topbar_close_) MoveWindow(hwnd_topbar_close_, control_cluster_x + minimize_w + maximize_w + control_gap * 2, top_button_y, close_w, 28, TRUE);
+
+    if (hwnd_topbar_title_) MoveWindow(hwnd_topbar_title_, 12, row1_y + 3, 138, 18, TRUE);
+
+    int menu_x = 82;
+    auto place_menu = [&](HWND h, int ww) {
+        if (!h) return;
+        if (menu_x + ww + 4 < control_cluster_x) {
+            ShowWindow(h, SW_SHOW);
+            MoveWindow(h, menu_x, row1_y, ww, row1_h, TRUE);
+            menu_x += ww + 2;
+        } else {
+            ShowWindow(h, SW_HIDE);
+        }
+    };
+    place_menu(hwnd_topbar_menu_, 48);
+    place_menu(hwnd_topbar_menu_edit_, 48);
+    place_menu(hwnd_topbar_menu_window_, 62);
+    place_menu(hwnd_topbar_menu_tools_, 54);
+    place_menu(hwnd_topbar_menu_build_, 54);
+    place_menu(hwnd_topbar_menu_platforms_, 72);
+    place_menu(hwnd_topbar_menu_select_, 56);
+    place_menu(hwnd_topbar_menu_actor_, 54);
+    place_menu(hwnd_topbar_menu_help_, 52);
+
+    const int project_w = 178;
+    if (hwnd_topbar_project_) {
+        const bool show = (menu_x + project_w + 10) < control_cluster_x;
+        ShowWindow(hwnd_topbar_project_, show ? SW_SHOW : SW_HIDE);
+        if (show) MoveWindow(hwnd_topbar_project_, menu_x + 8, row1_y, project_w, row1_h, TRUE);
+    }
     if (hwnd_topbar_status_) {
-        const int status_x = 922;
+        const int status_x = menu_x + project_w + 18;
         const int status_w = control_cluster_x - status_x - 10;
         ShowWindow(hwnd_topbar_status_, status_w >= 140 ? SW_SHOW : SW_HIDE);
         if (status_w >= 140) {
-            MoveWindow(hwnd_topbar_status_, status_x, 12, status_w, 18, TRUE);
+            MoveWindow(hwnd_topbar_status_, status_x, row1_y + 3, status_w, 18, TRUE);
         }
     }
 
-    const int viewport_w = std::max(0, w - panel_w);
-    if (hwnd_viewport_) MoveWindow(hwnd_viewport_, 0, topbar_h, viewport_w, workspace_h, TRUE);
+    int row2_x = 14;
+    const int row2_limit = control_cluster_x - 8;
+    auto place_row2 = [&](HWND h, int ww) {
+        if (!h) return;
+        if (row2_x + ww < row2_limit) {
+            ShowWindow(h, SW_SHOW);
+            MoveWindow(h, row2_x, row2_y, ww, row2_h, TRUE);
+            row2_x += ww + 4;
+        } else {
+            ShowWindow(h, SW_HIDE);
+        }
+    };
+    place_row2(hwnd_topbar_select_mode_, 132);
+    place_row2(hwnd_topbar_add_actor_, 68);
+    place_row2(hwnd_topbar_tool_translate_, 30);
+    place_row2(hwnd_topbar_tool_rotate_, 30);
+    place_row2(hwnd_topbar_tool_frame_, 30);
+    place_row2(hwnd_topbar_transport_back_, 30);
+    place_row2(hwnd_topbar_transport_start_, 30);
+    place_row2(hwnd_topbar_sim_, 42);
+    place_row2(hwnd_topbar_pause_, 30);
+    place_row2(hwnd_topbar_stop_, 30);
+    place_row2(hwnd_topbar_replay_, 30);
+    place_row2(hwnd_topbar_workspace_level_, 92);
+    place_row2(hwnd_topbar_workspace_asset_, 106);
+    place_row2(hwnd_topbar_workspace_voxel_, 104);
+    place_row2(hwnd_topbar_view_perspective_, 96);
+    place_row2(hwnd_topbar_view_lit_, 52);
+    place_row2(hwnd_topbar_view_show_, 58);
+    place_row2(hwnd_topbar_ai_, 46);
+    place_row2(hwnd_topbar_live_, 54);
+    place_row2(hwnd_topbar_photon_, 62);
+    place_row2(hwnd_topbar_content_, 66);
+    place_row2(hwnd_topbar_assistant_, 72);
+
+    if (hwnd_left_panel_) {
+        ShowWindow(hwnd_left_panel_, SW_SHOW);
+        MoveWindow(hwnd_left_panel_, 0, topbar_h, left_w, workspace_h, TRUE);
+        if (hwnd_left_title_) MoveWindow(hwnd_left_title_, 10, 10, left_w - 20, 22, TRUE);
+        if (hwnd_left_search_) MoveWindow(hwnd_left_search_, 10, 36, left_w - 20, 24, TRUE);
+        if (hwnd_left_category_) MoveWindow(hwnd_left_category_, 10, 66, left_w - 20, 320, TRUE);
+        const int thumb_h = std::max(132, std::min(220, workspace_h / 3));
+        const int thumb_y = 96;
+        const int list_y = thumb_y + thumb_h + 8;
+        if (hwnd_left_actor_thumb_) {
+            MoveWindow(hwnd_left_actor_thumb_, 10, thumb_y, left_w - 20, thumb_h, TRUE);
+            const int spacing = ew_content_thumbnail_spacing_px(content_thumbnail_size_u32_);
+            const UINT dpi_thumb = GetDpiForWindow(hwnd_left_actor_thumb_);
+            const int sx_thumb = MulDiv(spacing, (int)dpi_thumb, 96);
+            const int sy_thumb = MulDiv(spacing + 18, (int)dpi_thumb, 96);
+            ListView_SetIconSpacing(hwnd_left_actor_thumb_, sx_thumb, sy_thumb);
+        }
+        if (hwnd_left_actor_list_) MoveWindow(hwnd_left_actor_list_, 10, list_y, left_w - 20, std::max(120, workspace_h - (list_y + 10)), TRUE);
+    }
+
+    const int viewport_w = std::max(0, w - panel_w - left_w);
+    const int viewport_y = topbar_h + primary_tab_h;
+    const int viewport_h = std::max(0, workspace_h - primary_tab_h);
+    if (hwnd_primary_tab_) {
+        const bool show_primary_tab = viewport_w >= 180 && primary_tab_h > 0;
+        ShowWindow(hwnd_primary_tab_, show_primary_tab ? SW_SHOW : SW_HIDE);
+        if (show_primary_tab) MoveWindow(hwnd_primary_tab_, left_w, topbar_h, viewport_w, primary_tab_h, TRUE);
+    }
+    if (hwnd_viewport_) MoveWindow(hwnd_viewport_, left_w, viewport_y, viewport_w, viewport_h, TRUE);
     if (hwnd_panel_) {
         ShowWindow(hwnd_panel_, SW_SHOW);
-        MoveWindow(hwnd_panel_, viewport_w, topbar_h, panel_w, workspace_h, TRUE);
+        MoveWindow(hwnd_panel_, left_w + viewport_w, topbar_h, panel_w, workspace_h, TRUE);
     }
     if (hwnd_dock_splitter_) {
-        const int splitter_x = std::max(0, viewport_w - (EW_UI_RIGHT_DOCK_SPLITTER_W_PX / 2));
+        const int splitter_x = std::max(0, left_w + viewport_w - (EW_UI_RIGHT_DOCK_SPLITTER_W_PX / 2));
         ShowWindow(hwnd_dock_splitter_, SW_SHOW);
         MoveWindow(hwnd_dock_splitter_, splitter_x, topbar_h, EW_UI_RIGHT_DOCK_SPLITTER_W_PX, workspace_h, TRUE);
     }
@@ -8339,32 +9855,55 @@ void App::LayoutChildren(int w, int h) {
         const int view_w = viewport_w;
         const int overlay_w = std::min(360, std::max(220, view_w / 3));
         const int overlay_x = std::max(12, view_w - overlay_w - 12);
-        const int overlay_h = std::min(186, std::max(136, workspace_h / 3));
+        const int overlay_h = std::min(186, std::max(136, viewport_h / 3));
         MoveWindow(hwnd_viewport_resonance_overlay_, overlay_x, 12, overlay_w, overlay_h, TRUE);
     }
 
     // Bottom content browser.
     if (hwnd_content_) {
         MoveWindow(hwnd_content_, 0, topbar_h + workspace_h, w, content_h, TRUE);
-        if (hwnd_content_search_) MoveWindow(hwnd_content_search_, 10, 10, 260, 24, TRUE);
-        if (hwnd_content_refresh_) MoveWindow(hwnd_content_refresh_, 278, 10, 80, 24, TRUE);
-        if (hwnd_content_view_list_) MoveWindow(hwnd_content_view_list_, 366, 10, 60, 24, TRUE);
-        if (hwnd_content_view_thumb_) MoveWindow(hwnd_content_view_thumb_, 430, 10, 70, 24, TRUE);
-        if (hwnd_content_view_3d_) MoveWindow(hwnd_content_view_3d_, 504, 10, 46, 24, TRUE);
+        int x = 10;
+        if (hwnd_content_search_) { MoveWindow(hwnd_content_search_, x, 10, 200, 24, TRUE); x += 206; }
+        if (hwnd_content_refresh_) { MoveWindow(hwnd_content_refresh_, x, 10, 84, 24, TRUE); x += 88; }
+        if (hwnd_content_add_) { MoveWindow(hwnd_content_add_, x, 10, 56, 24, TRUE); x += 60; }
+        if (hwnd_content_import_toolbar_) { MoveWindow(hwnd_content_import_toolbar_, x, 10, 70, 24, TRUE); x += 74; }
+        if (hwnd_content_save_all_) { MoveWindow(hwnd_content_save_all_, x, 10, 84, 24, TRUE); x += 88; }
+        if (hwnd_content_fab_) { MoveWindow(hwnd_content_fab_, x, 10, 52, 24, TRUE); x += 56; }
+        if (hwnd_content_settings_) { MoveWindow(hwnd_content_settings_, x, 10, 80, 24, TRUE); x += 84; }
+        if (hwnd_content_tab_primary_) { MoveWindow(hwnd_content_tab_primary_, x, 10, 128, 24, TRUE); x += 132; }
+        if (hwnd_content_tab_secondary_) { MoveWindow(hwnd_content_tab_secondary_, x, 10, 128, 24, TRUE); x += 132; }
+        const int right_cluster_w = 30 + 30 + 56 + 56 + 70 + 60;
+        const int crumb_w = std::max(120, w - x - right_cluster_w - 24);
+        if (hwnd_content_breadcrumb_) MoveWindow(hwnd_content_breadcrumb_, x, 10, crumb_w, 24, TRUE);
+        x += crumb_w + 4;
+        if (hwnd_content_back_) { MoveWindow(hwnd_content_back_, x, 10, 30, 24, TRUE); x += 34; }
+        if (hwnd_content_forward_) { MoveWindow(hwnd_content_forward_, x, 10, 30, 24, TRUE); x += 34; }
+        if (hwnd_content_view_list_) { MoveWindow(hwnd_content_view_list_, x, 10, 56, 24, TRUE); x += 60; }
+        if (hwnd_content_view_thumb_) { MoveWindow(hwnd_content_view_thumb_, x, 10, 56, 24, TRUE); x += 60; }
+        if (hwnd_content_view_3d_) { MoveWindow(hwnd_content_view_3d_, x, 10, 70, 24, TRUE); x += 74; }
+        if (hwnd_content_refcheck_) { MoveWindow(hwnd_content_refcheck_, x, 10, 60, 24, TRUE); x += 64; }
+        if (hwnd_content_status_) MoveWindow(hwnd_content_status_, 10, 42, std::max(120, w - 20), 18, TRUE);
+        const int browser_h = std::max(0, content_h - 76);
+        const int sources_w = content_sources_panel_visible_
+            ? std::max(EW_UI_CONTENT_SOURCES_MIN_W_PX,
+                       std::min(EW_UI_CONTENT_SOURCES_W_PX, (w - 40) / 3))
+            : 0;
+        const int browser_x = 10 + (content_sources_panel_visible_ ? (sources_w + 10) : 0);
+        const int browser_w = std::max(120, w - browser_x - 10);
+        ew_set_visible_enabled(hwnd_content_sources_, content_sources_panel_visible_);
+        if (hwnd_content_sources_ && content_sources_panel_visible_) MoveWindow(hwnd_content_sources_, 10, 40, sources_w, browser_h, TRUE);
+        if (hwnd_content_list_) MoveWindow(hwnd_content_list_, browser_x, 40, browser_w, browser_h, TRUE);
+        if (hwnd_content_thumb_) MoveWindow(hwnd_content_thumb_, browser_x, 40, browser_w, browser_h, TRUE);
+        if (hwnd_content_3d_) MoveWindow(hwnd_content_3d_, browser_x, 40, browser_w, browser_h, TRUE);
+        if (hwnd_content_selected_) MoveWindow(hwnd_content_selected_, 10, 44 + browser_h, w - 20, 18, TRUE);
+
         if (hwnd_content_thumb_) {
+            const int spacing = ew_content_thumbnail_spacing_px(content_thumbnail_size_u32_);
             const UINT dpi = GetDpiForWindow(hwnd_content_thumb_);
-            const int sx = MulDiv(92, (int)dpi, 96);
-            const int sy = MulDiv(92, (int)dpi, 96);
+            const int sx = MulDiv(spacing, (int)dpi, 96);
+            const int sy = MulDiv(spacing, (int)dpi, 96);
             ListView_SetIconSpacing(hwnd_content_thumb_, sx, sy);
         }
-
-        if (hwnd_content_refcheck_) MoveWindow(hwnd_content_refcheck_, 556, 10, 54, 24, TRUE);
-        if (hwnd_content_status_) MoveWindow(hwnd_content_status_, 620, 12, std::max(120, w - 630), 18, TRUE);
-        const int browser_h = std::max(0, content_h - 76);
-        if (hwnd_content_list_) MoveWindow(hwnd_content_list_, 10, 40, w - 20, browser_h, TRUE);
-        if (hwnd_content_thumb_) MoveWindow(hwnd_content_thumb_, 10, 40, w - 20, browser_h, TRUE);
-        if (hwnd_content_3d_) MoveWindow(hwnd_content_3d_, 10, 40, w - 20, browser_h, TRUE);
-        if (hwnd_content_selected_) MoveWindow(hwnd_content_selected_, 10, 44 + browser_h, w - 20, 18, TRUE);
     }
 
     // Right dock layout (tab strip + panel roots).
@@ -8412,13 +9951,16 @@ void App::LayoutChildren(int w, int h) {
         const int ROW = ROW_H;
         const int GAP = PAD_SM - 2;
         const int W = panel_w_in - 2 * PAD_SM;
+        const int preview_w = hwnd_asset_thumb_ ? std::min(220, std::max(180, W / 3)) : 0;
+        const int main_w = std::max(240, W - (preview_w > 0 ? (preview_w + PAD_SM) : 0));
+        const int preview_x = X + main_w + (preview_w > 0 ? PAD_SM : 0);
         const int BTN_W = 108;
 
-        if (hwnd_input_) MoveWindow(hwnd_input_, X, y, W, ROW, TRUE);
+        if (hwnd_input_) MoveWindow(hwnd_input_, X, y, main_w, ROW, TRUE);
         y += ROW + GAP;
         if (hwnd_send_) MoveWindow(hwnd_send_, X, y, 80, ROW, TRUE);
         if (hwnd_import_) MoveWindow(hwnd_import_, X + 88, y, 110, ROW, TRUE);
-        if (hwnd_bootstrap_) MoveWindow(hwnd_bootstrap_, X + 206, y, W - 206, ROW, TRUE);
+        if (hwnd_bootstrap_) MoveWindow(hwnd_bootstrap_, X + 206, y, std::max(120, main_w - 206), ROW, TRUE);
         y += ROW + GAP;
 
         if (hwnd_asset_label_run_) MoveWindow(hwnd_asset_label_run_, X, y + 4, 28, 18, TRUE);
@@ -8430,24 +9972,26 @@ void App::LayoutChildren(int w, int h) {
         if (hwnd_toggle_learning_) MoveWindow(hwnd_toggle_learning_, X + 42, y, 86, 24, TRUE);
         if (hwnd_asset_label_crawling_) MoveWindow(hwnd_asset_label_crawling_, X + 136, y + 4, 34, 18, TRUE);
         if (hwnd_toggle_crawling_) MoveWindow(hwnd_toggle_crawling_, X + 176, y, 86, 24, TRUE);
-        if (hwnd_vault_) MoveWindow(hwnd_vault_, X + W - 136, y, 56, 24, TRUE);
-        if (hwnd_asset_ai_panel_button_) MoveWindow(hwnd_asset_ai_panel_button_, X + W - 72, y, 72, ROW, TRUE);
+        if (hwnd_vault_) MoveWindow(hwnd_vault_, X + main_w - 136, y, 56, 24, TRUE);
+        if (hwnd_asset_ai_panel_button_) MoveWindow(hwnd_asset_ai_panel_button_, X + main_w - 72, y, 72, ROW, TRUE);
         y += 28;
-        if (hwnd_ai_status_) MoveWindow(hwnd_ai_status_, X, y, W, 18, TRUE);
+        if (hwnd_ai_status_) MoveWindow(hwnd_ai_status_, X, y, main_w, 18, TRUE);
         y += 22;
-        if (hwnd_asset_selected_) MoveWindow(hwnd_asset_selected_, X, y, W, 18, TRUE);
+        if (hwnd_asset_selected_) MoveWindow(hwnd_asset_selected_, X, y, main_w, 18, TRUE);
         y += 22;
-        if (hwnd_asset_gate_) MoveWindow(hwnd_asset_gate_, X, y, W, 18, TRUE);
+        if (hwnd_asset_gate_) MoveWindow(hwnd_asset_gate_, X, y, main_w, 18, TRUE);
         y += 22;
-        if (hwnd_asset_builder_status_) MoveWindow(hwnd_asset_builder_status_, X, y, W, 18, TRUE);
+        if (hwnd_asset_builder_status_) MoveWindow(hwnd_asset_builder_status_, X, y, main_w, 18, TRUE);
         y += 24;
+        if (hwnd_asset_preview_title_) MoveWindow(hwnd_asset_preview_title_, preview_x, TOOLBAR_H + PAD_SM, preview_w, 18, TRUE);
+        if (hwnd_asset_preview_caption_) MoveWindow(hwnd_asset_preview_caption_, preview_x, TOOLBAR_H + PAD_SM + 22, preview_w, 42, TRUE);
         if (hwnd_asset_review_refs_) MoveWindow(hwnd_asset_review_refs_, X, y, 104, ROW, TRUE);
         if (hwnd_asset_label_tool_mode_) MoveWindow(hwnd_asset_label_tool_mode_, X + 112, y + 4, 62, 18, TRUE);
-        if (hwnd_asset_tool_mode_) MoveWindow(hwnd_asset_tool_mode_, X + 180, y, std::max(120, W - 180), ROW, TRUE);
+        if (hwnd_asset_tool_mode_) MoveWindow(hwnd_asset_tool_mode_, X + 180, y, std::max(120, main_w - 180), ROW, TRUE);
         y += ROW + 4;
         const int LABEL_W = 88;
         const int TRACK_X = X + LABEL_W + 6;
-        const int TRACK_LAYOUT_W = std::max(120, W - (TRACK_X - X) - BTN_W - PAD_SM);
+        const int TRACK_LAYOUT_W = std::max(120, main_w - (TRACK_X - X) - BTN_W - PAD_SM);
         if (hwnd_asset_label_planet_atmo_) MoveWindow(hwnd_asset_label_planet_atmo_, X, y + 4, LABEL_W, 18, TRUE);
         if (hwnd_asset_planet_atmo_) MoveWindow(hwnd_asset_planet_atmo_, TRACK_X, y, TRACK_LAYOUT_W, 28, TRUE);
         if (hwnd_asset_planet_apply_) MoveWindow(hwnd_asset_planet_apply_, TRACK_X + TRACK_LAYOUT_W + PAD_SM, y, BTN_W, ROW, TRUE);
@@ -8474,19 +10018,20 @@ void App::LayoutChildren(int w, int h) {
         if (hwnd_asset_label_character_gait_) MoveWindow(hwnd_asset_label_character_gait_, X, y + 4, LABEL_W, 18, TRUE);
         if (hwnd_asset_character_gait_) MoveWindow(hwnd_asset_character_gait_, TRACK_X, y, TRACK_LAYOUT_W, 28, TRUE);
         y += 34;
-        if (hwnd_asset_tool_summary_) MoveWindow(hwnd_asset_tool_summary_, X, y, W, 118, TRUE);
+        if (hwnd_asset_tool_summary_) MoveWindow(hwnd_asset_tool_summary_, X, y, main_w, 118, TRUE);
         y += 122;
         if (hwnd_asset_thumb_) {
-            MoveWindow(hwnd_asset_thumb_, X + W - 220, TOOLBAR_H + PAD_SM, 200, panel_h_in - (TOOLBAR_H + 2 * PAD_SM), TRUE);
+            const int thumb_y = TOOLBAR_H + PAD_SM + 68;
+            MoveWindow(hwnd_asset_thumb_, preview_x, thumb_y, preview_w, std::max(120, panel_h_in - thumb_y - PAD_SM), TRUE);
             const UINT dpi_thumb = GetDpiForWindow(hwnd_asset_thumb_);
             const int sx_thumb = MulDiv(92, (int)dpi_thumb, 96);
-            const int sy_thumb = MulDiv(92, (int)dpi_thumb, 96);
+            const int sy_thumb = MulDiv(110, (int)dpi_thumb, 96);
             ListView_SetIconSpacing(hwnd_asset_thumb_, sx_thumb, sy_thumb);
         }
         if (hwnd_output_) {
             int out_h = panel_h_in - y - PAD_SM;
             if (out_h < 64) out_h = 64;
-            MoveWindow(hwnd_output_, X, y, W, out_h, TRUE);
+            MoveWindow(hwnd_output_, X, y, main_w, out_h, TRUE);
         }
     }
 
@@ -8524,6 +10069,25 @@ void App::LayoutChildren(int w, int h) {
         if (HWND h = GetDlgItem(hwnd_rdock_voxel_, 2602)) MoveWindow(h, PAD_SM + 70, y, panel_w_in - (2 * PAD_SM) - 80, 30, TRUE);
         y += 34;
         if (HWND h = GetDlgItem(hwnd_rdock_voxel_, 2603)) MoveWindow(h, PAD_SM + 70, y, panel_w_in - (2 * PAD_SM) - 80, 30, TRUE);
+        y += 40;
+        if (hwnd_voxel_lattice_volume_) MoveWindow(hwnd_voxel_lattice_volume_, PAD_SM, y, 116, 24, TRUE);
+        if (hwnd_voxel_lattice_apply_) MoveWindow(hwnd_voxel_lattice_apply_, panel_w_in - PAD_SM - 104, y - 1, 104, 24, TRUE);
+        y += 28;
+        if (HWND h = GetDlgItem(hwnd_rdock_voxel_, EW_VOXEL_LATTICE_SLICE_ID)) MoveWindow(h, PAD_SM + 70, y, panel_w_in - (2 * PAD_SM) - 80, 30, TRUE);
+        y += 34;
+        if (HWND h = GetDlgItem(hwnd_rdock_voxel_, EW_VOXEL_LATTICE_STRIDE_ID)) MoveWindow(h, PAD_SM + 70, y, panel_w_in - (2 * PAD_SM) - 80, 30, TRUE);
+        y += 34;
+        if (HWND h = GetDlgItem(hwnd_rdock_voxel_, EW_VOXEL_LATTICE_MAXPTS_ID)) MoveWindow(h, PAD_SM + 70, y, panel_w_in - (2 * PAD_SM) - 80, 30, TRUE);
+        y += 34;
+        if (HWND h = GetDlgItem(hwnd_rdock_voxel_, EW_VOXEL_LATTICE_INTENSITY_ID)) MoveWindow(h, PAD_SM + 70, y, panel_w_in - (2 * PAD_SM) - 80, 30, TRUE);
+        y += 40;
+        if (hwnd_voxel_vector_visualization_) MoveWindow(hwnd_voxel_vector_visualization_, PAD_SM, y, 160, 24, TRUE);
+        y += 28;
+        if (hwnd_voxel_vector_gain_) MoveWindow(hwnd_voxel_vector_gain_, PAD_SM + 70, y, panel_w_in - (2 * PAD_SM) - 80, 30, TRUE);
+        y += 34;
+        if (hwnd_voxel_field_depth_) MoveWindow(hwnd_voxel_field_depth_, PAD_SM + 70, y, panel_w_in - (2 * PAD_SM) - 80, 30, TRUE);
+        y += 34;
+        if (hwnd_voxel_focal_length_) MoveWindow(hwnd_voxel_focal_length_, PAD_SM + 70, y, panel_w_in - (2 * PAD_SM) - 80, 30, TRUE);
         y += 40;
         if (hwnd_voxel_atom_nodes_) MoveWindow(hwnd_voxel_atom_nodes_, PAD_SM, y + 22, panel_w_in - 2 * PAD_SM, 86, TRUE);
         y += 116;
@@ -8563,9 +10127,15 @@ void App::LayoutChildren(int w, int h) {
         if (hwnd_tb_sequencer_) MoveWindow(hwnd_tb_sequencer_, 0, 0, panel_w_in, TOOLBAR_H, TRUE);
         if (HWND h = GetDlgItem(hwnd_tb_sequencer_, 1545)) MoveWindow(h, panel_w_in - 286, PAD_SM / 2, 52, ROW_H, TRUE);
         if (HWND h = GetDlgItem(hwnd_tb_sequencer_, 1535)) MoveWindow(h, panel_w_in - 230, PAD_SM / 2, 52, ROW_H, TRUE);
-        if (hwnd_seq_play_) MoveWindow(hwnd_seq_play_, 10, PAD_SM / 2, 64, ROW_H, TRUE);
-        if (hwnd_seq_loop_) MoveWindow(hwnd_seq_loop_, 80, PAD_SM / 2, 82, ROW_H, TRUE);
-        if (hwnd_seq_stress_overlay_) MoveWindow(hwnd_seq_stress_overlay_, 168, PAD_SM / 2, 108, ROW_H, TRUE);
+        int tx = 10;
+        if (hwnd_seq_back_) MoveWindow(hwnd_seq_back_, tx, PAD_SM / 2, 30, ROW_H, TRUE), tx += 34;
+        if (hwnd_seq_start_) MoveWindow(hwnd_seq_start_, tx, PAD_SM / 2, 30, ROW_H, TRUE), tx += 34;
+        if (hwnd_seq_play_) MoveWindow(hwnd_seq_play_, tx, PAD_SM / 2, 30, ROW_H, TRUE), tx += 34;
+        if (hwnd_seq_pause_) MoveWindow(hwnd_seq_pause_, tx, PAD_SM / 2, 30, ROW_H, TRUE), tx += 34;
+        if (hwnd_seq_stop_) MoveWindow(hwnd_seq_stop_, tx, PAD_SM / 2, 30, ROW_H, TRUE), tx += 34;
+        if (hwnd_seq_replay_) MoveWindow(hwnd_seq_replay_, tx, PAD_SM / 2, 30, ROW_H, TRUE), tx += 38;
+        if (hwnd_seq_loop_) MoveWindow(hwnd_seq_loop_, tx, PAD_SM / 2, 90, ROW_H, TRUE), tx += 94;
+        if (hwnd_seq_stress_overlay_) MoveWindow(hwnd_seq_stress_overlay_, tx, PAD_SM / 2, 108, ROW_H, TRUE);
         if (hwnd_seq_timeline_) MoveWindow(hwnd_seq_timeline_, PAD_SM, TOOLBAR_H + PAD_SM, panel_w_in - 2 * PAD_SM, 188, TRUE);
         if (hwnd_seq_add_key_) MoveWindow(hwnd_seq_add_key_, PAD_SM, TOOLBAR_H + PAD_SM + 196, 84, ROW_H, TRUE);
         if (hwnd_seq_motion_match_) MoveWindow(hwnd_seq_motion_match_, PAD_SM + 92, TOOLBAR_H + PAD_SM + 196, 110, ROW_H, TRUE);
@@ -8574,45 +10144,18 @@ void App::LayoutChildren(int w, int h) {
 
     RefreshViewportResonanceOverlay();
     SyncWindowMenu();
-    // Content browser children already handled in their own WM_SIZE path.
-}
-
-
-static std::string ew_format_object_dna_status_utf8_local(const EwObjectDna& dna) {
-    const EwObjectDnaDerived derived = ew_object_dna_derive(dna);
-    char buf[512];
-    std::snprintf(buf, sizeof(buf),
-                  " dna_eff_hz=%.3f dna_exist_hz=%.3f dna_6dof_l1_hz=%.3f dna_axes=[%.3f,%.3f,%.3f,%.3f,%.3f,%.3f]",
-                  (double)derived.confinement_effective_hz_f32,
-                  (double)derived.existence_resonance_hz_f32,
-                  (double)derived.manifold_6dof_l1_hz_f32,
-                  (double)derived.manifold_6dof_hz_f32[0],
-                  (double)derived.manifold_6dof_hz_f32[1],
-                  (double)derived.manifold_6dof_hz_f32[2],
-                  (double)derived.manifold_6dof_hz_f32[3],
-                  (double)derived.manifold_6dof_hz_f32[4],
-                  (double)derived.manifold_6dof_hz_f32[5]);
-    return std::string(buf);
-}
-
-std::string App::BuildPhotonConfinementStatusUtf8() const {
-    std::string out = std::string("REMOTE_VIEWPORT_PHOTON confinement=") + (confinement_particles_enabled_ ? "1" : "0");
-    out += " projected_points=" + std::to_string((unsigned long long)viewport_projected_points_u32_);
-    out += " anchor_visible=" + std::to_string((unsigned long long)viewport_anchor_points_visible_u32_);
-    out += " anchor_hidden=" + std::to_string((unsigned long long)viewport_anchor_points_hidden_u32_);
-    out += " resonance=" + std::string(resonance_view_ ? "1" : "0");
-    if (scene_ && scene_->selected >= 0 && scene_->selected < (int)scene_->objects.size()) {
-        const auto& o = scene_->objects[(size_t)scene_->selected];
-        out += " selected_oid=" + std::to_string((unsigned long long)o.object_id_u64);
-        out += ew_format_object_dna_status_utf8_local(o.object_dna);
+    if (ui_layer_) {
+        ui_layer_->UpdateLayout(w, h, content_visible_ && ew_editor_build_enabled, topbar_h + primary_tab_h, panel_w, hwnd_panel_ != nullptr);
     }
-    return out;
+    // Content browser children already handled in their own WM_SIZE path.
 }
 
 void App::RefreshViewportResonanceOverlay() {
     if (!hwnd_viewport_resonance_overlay_) return;
+    ShowWindow(hwnd_viewport_resonance_overlay_, resonance_view_ ? SW_SHOW : SW_HIDE);
+    if (!resonance_view_) return;
     std::wstring out;
-    out += resonance_view_ ? L"Viewport Resonance Overlay [derived-only]\r\n" : L"Viewport Resonance Overlay [standby]\r\n";
+    out += L"Viewport Resonance Overlay [derived-only]\r\n";
     out += L"Nodes represent Fourier carrier anchors that group AI-write anchor sets by operator path.\r\n\r\n";
     wchar_t line[256]{};
     swprintf(line, 256, L"Band=%d  Phase=%.2f\r\n", spectrum_band_i32_, (double)spectrum_phase_f32_);
@@ -8651,13 +10194,10 @@ void App::RefreshViewportResonanceOverlay() {
     }
     out += node_play_excitation_ ? L"Carrier pulse overlay: active\r\n" : L"Carrier pulse overlay: idle\r\n";
     out += confinement_particles_enabled_ ? L"Photon confinement particles: ON\r\n" : L"Photon confinement particles: OFF\r\n";
-    swprintf(line, 256, L"Projected points=%u  anchor-visible=%u  anchor-hidden=%u\r\n",
-             (unsigned)viewport_projected_points_u32_,
-             (unsigned)viewport_anchor_points_visible_u32_,
-             (unsigned)viewport_anchor_points_hidden_u32_);
-    out += line;
+    out += live_mode_enabled_ ? L"Live substrate lattice: active\r\n" : L"Live substrate lattice: standby\r\n";
     if (seq_stress_overlay_enabled_) {
-        const int stress_pct = std::max(0, std::min(100, (int)std::lround(std::fabs((double)spectrum_phase_f32_) * 18.0) + (seq_play_enabled_ ? 24 : 9)));
+        const bool sim_play_enabled = IsSimPlayEnabledCanonical();
+        const int stress_pct = std::max(0, std::min(100, (int)std::lround(std::fabs((double)spectrum_phase_f32_) * 18.0) + (sim_play_enabled ? 24 : 9)));
         const int pain_pct = std::max(0, std::min(100, stress_pct / 2 + (node_play_excitation_ ? 12 : 0)));
         swprintf(line, 256, L"Stress advisory=%d%%  pain advisory=%d%%\r\n", stress_pct, pain_pct);
         out += line;
@@ -8677,57 +10217,152 @@ void App::SyncWindowMenu() {
     };
     check(9201u, content_visible_);
     check(9202u, hwnd_ai_panel_ && IsWindowVisible(hwnd_ai_panel_));
-    for (uint32_t i = 0; i < 6u; ++i) check(9203u + i, rdock_panel_visible_[i]);
+    for (uint32_t i = 0; i < EW_RIGHT_DOCK_TAB_COUNT; ++i) {
+        check(9203u + i, rdock_panel_visible_[i] && rdock_panel_workspace_enabled_[i]);
+    }
     check(9209u, live_mode_enabled_);
     DrawMenuBar(hwnd_main_);
 }
 
+void App::ApplyPrimaryWorkspaceProfile() {
+    if (primary_workspace_tab_index_u32_ >= EW_PRIMARY_WORKSPACE_COUNT) {
+        primary_workspace_tab_index_u32_ = EW_WORKSPACE_LEVEL_SIM;
+    }
+    for (uint32_t i = 0; i < EW_RIGHT_DOCK_TAB_COUNT; ++i) {
+        rdock_panel_workspace_enabled_[i] = ew_workspace_allows_panel(primary_workspace_tab_index_u32_, i);
+    }
+    for (uint32_t i = EW_RIGHT_DOCK_TAB_COUNT; i < RDockPanelCount; ++i) {
+        rdock_panel_workspace_enabled_[i] = true;
+    }
+    for (uint32_t i = 0; i < EW_RIGHT_DOCK_TAB_COUNT; ++i) {
+        bool visible = rdock_panel_workspace_enabled_[i] &&
+                       ew_workspace_default_panel_visible(primary_workspace_tab_index_u32_, i);
+        if (rdock_panel_locked_[i] && rdock_panel_workspace_enabled_[i]) visible = true;
+        rdock_panel_visible_[i] = visible;
+    }
+    bool has_visible_workspace_panel = false;
+    for (uint32_t i = 0; i < EW_RIGHT_DOCK_TAB_COUNT; ++i) {
+        if (rdock_panel_visible_[i] && rdock_panel_workspace_enabled_[i]) {
+            has_visible_workspace_panel = true;
+            break;
+        }
+    }
+    if (!has_visible_workspace_panel) {
+        for (uint32_t i = 0; i < EW_RIGHT_DOCK_TAB_COUNT; ++i) {
+            if (rdock_panel_workspace_enabled_[i]) {
+                rdock_panel_visible_[i] = true;
+                break;
+            }
+        }
+    }
+    const int preferred = ew_workspace_default_active_panel(primary_workspace_tab_index_u32_);
+    const int resolved = ResolveNextVisibleDockTab(preferred);
+    if (resolved >= 0) {
+        rdock_tab_index_u32_ = (uint32_t)resolved;
+    }
+    if (hwnd_left_search_) {
+        SendMessageW(hwnd_left_search_, EM_SETCUEBANNER, 0, (LPARAM)ew_workspace_left_search_cue(primary_workspace_tab_index_u32_));
+    }
+    RefreshPrimaryWorkspaceTabs();
+}
+
+void App::RefreshPrimaryWorkspaceTabs() {
+    if (!hwnd_primary_tab_) return;
+    for (int i = 0; i < (int)EW_PRIMARY_WORKSPACE_COUNT; ++i) {
+        TCITEMW ti{};
+        ti.mask = TCIF_TEXT;
+        ti.pszText = (LPWSTR)ew_workspace_primary_tab_label((uint32_t)i);
+        TabCtrl_SetItem(hwnd_primary_tab_, i, &ti);
+    }
+    TabCtrl_SetCurSel(hwnd_primary_tab_, (int)primary_workspace_tab_index_u32_);
+    InvalidateRect(hwnd_primary_tab_, nullptr, TRUE);
+}
+
+void App::SetPrimaryWorkspaceTab(uint32_t idx_u32) {
+    if (idx_u32 >= EW_PRIMARY_WORKSPACE_COUNT) return;
+    if (primary_workspace_tab_index_u32_ == idx_u32) {
+        RefreshPrimaryWorkspaceTabs();
+        RefreshTopBarChrome();
+        return;
+    }
+    primary_workspace_tab_index_u32_ = idx_u32;
+    ApplyPrimaryWorkspaceProfile();
+    ApplyRightDockVisibility();
+    RefreshPlaceActorsPanel();
+    LayoutChildren(client_w_, client_h_);
+    RefreshTopBarChrome();
+}
+
 int App::ResolveNextVisibleDockTab(int preferred_i32) const {
-    const int count = 6;
-    if (preferred_i32 >= 0 && preferred_i32 < count && rdock_panel_visible_[preferred_i32]) return preferred_i32;
-    for (int i = 0; i < count; ++i) if (rdock_panel_visible_[i]) return i;
+    const int count = (int)EW_RIGHT_DOCK_TAB_COUNT;
+    if (preferred_i32 >= 0 && preferred_i32 < count &&
+        rdock_panel_visible_[preferred_i32] && rdock_panel_workspace_enabled_[preferred_i32]) {
+        return preferred_i32;
+    }
+    for (int i = 0; i < count; ++i) {
+        if (rdock_panel_visible_[i] && rdock_panel_workspace_enabled_[i]) return i;
+    }
     return -1;
 }
 
 void App::ApplyRightDockVisibility() {
     const int active = ResolveNextVisibleDockTab((int)rdock_tab_index_u32_);
-    if (active < 0) return;
+    if (active < 0) {
+        if (hwnd_rdock_tab_) ShowWindow(hwnd_rdock_tab_, SW_HIDE);
+        if (hwnd_rdock_outliner_) ShowWindow(hwnd_rdock_outliner_, SW_HIDE);
+        if (hwnd_rdock_details_) ShowWindow(hwnd_rdock_details_, SW_HIDE);
+        if (hwnd_rdock_asset_) ShowWindow(hwnd_rdock_asset_, SW_HIDE);
+        if (hwnd_rdock_voxel_) ShowWindow(hwnd_rdock_voxel_, SW_HIDE);
+        if (hwnd_rdock_node_) ShowWindow(hwnd_rdock_node_, SW_HIDE);
+        if (hwnd_rdock_sequencer_) ShowWindow(hwnd_rdock_sequencer_, SW_HIDE);
+        SyncWindowMenu();
+        return;
+    }
     rdock_tab_index_u32_ = (uint32_t)active;
     if (hwnd_rdock_tab_) {
+        ShowWindow(hwnd_rdock_tab_, SW_SHOW);
         TabCtrl_SetCurSel(hwnd_rdock_tab_, active);
-        for (int i = 0; i < 6; ++i) {
+        for (int i = 0; i < (int)EW_RIGHT_DOCK_TAB_COUNT; ++i) {
             TCITEMW tie{};
-            tie.mask = TCIF_STATE;
+            tie.mask = TCIF_STATE | TCIF_TEXT;
             tie.dwStateMask = TCIS_HIGHLIGHTED;
-            tie.dwState = rdock_panel_visible_[i] ? 0u : TCIS_HIGHLIGHTED;
+            tie.dwState = (rdock_panel_visible_[i] && rdock_panel_workspace_enabled_[i]) ? 0u : TCIS_HIGHLIGHTED;
+            tie.pszText = (LPWSTR)ew_workspace_tab_label(primary_workspace_tab_index_u32_, i);
             TabCtrl_SetItem(hwnd_rdock_tab_, i, &tie);
         }
     }
-    if (hwnd_rdock_outliner_) ShowWindow(hwnd_rdock_outliner_, (active == 0 && rdock_panel_visible_[0]) ? SW_SHOW : SW_HIDE);
-    if (hwnd_rdock_details_)  ShowWindow(hwnd_rdock_details_,  (active == 1 && rdock_panel_visible_[1]) ? SW_SHOW : SW_HIDE);
-    if (hwnd_rdock_asset_)    ShowWindow(hwnd_rdock_asset_,    (active == 2 && rdock_panel_visible_[2]) ? SW_SHOW : SW_HIDE);
-    if (hwnd_rdock_voxel_)    ShowWindow(hwnd_rdock_voxel_,    (active == 3 && rdock_panel_visible_[3]) ? SW_SHOW : SW_HIDE);
-    if (hwnd_rdock_node_)     ShowWindow(hwnd_rdock_node_,     (active == 4 && rdock_panel_visible_[4]) ? SW_SHOW : SW_HIDE);
-    if (hwnd_rdock_sequencer_)ShowWindow(hwnd_rdock_sequencer_,(active == 5 && rdock_panel_visible_[5]) ? SW_SHOW : SW_HIDE);
+    if (hwnd_rdock_outliner_) ShowWindow(hwnd_rdock_outliner_, (active == 0 && rdock_panel_visible_[0] && rdock_panel_workspace_enabled_[0]) ? SW_SHOW : SW_HIDE);
+    if (hwnd_rdock_details_)  ShowWindow(hwnd_rdock_details_,  (active == 1 && rdock_panel_visible_[1] && rdock_panel_workspace_enabled_[1]) ? SW_SHOW : SW_HIDE);
+    if (hwnd_rdock_asset_)    ShowWindow(hwnd_rdock_asset_,    (active == 2 && rdock_panel_visible_[2] && rdock_panel_workspace_enabled_[2]) ? SW_SHOW : SW_HIDE);
+    if (hwnd_rdock_voxel_)    ShowWindow(hwnd_rdock_voxel_,    (active == 3 && rdock_panel_visible_[3] && rdock_panel_workspace_enabled_[3]) ? SW_SHOW : SW_HIDE);
+    if (hwnd_rdock_node_)     ShowWindow(hwnd_rdock_node_,     (active == 4 && rdock_panel_visible_[4] && rdock_panel_workspace_enabled_[4]) ? SW_SHOW : SW_HIDE);
+    if (hwnd_rdock_sequencer_)ShowWindow(hwnd_rdock_sequencer_,(active == 5 && rdock_panel_visible_[5] && rdock_panel_workspace_enabled_[5]) ? SW_SHOW : SW_HIDE);
     SyncWindowMenu();
 }
 
 void App::SetRightDockActiveTab(uint32_t idx_u32) {
-    if (idx_u32 >= 6u || !rdock_panel_visible_[idx_u32]) return;
+    if (idx_u32 >= EW_RIGHT_DOCK_TAB_COUNT) return;
+    if (!rdock_panel_visible_[idx_u32] || !rdock_panel_workspace_enabled_[idx_u32]) return;
     rdock_tab_index_u32_ = idx_u32;
     ApplyRightDockVisibility();
     LayoutChildren(client_w_, client_h_);
 }
 
 void App::SetRightDockPanelVisible(uint32_t idx_u32, bool visible) {
-    if (idx_u32 >= 6u) return;
+    if (idx_u32 >= EW_RIGHT_DOCK_TAB_COUNT) return;
+    if (visible && !rdock_panel_workspace_enabled_[idx_u32]) {
+        MessageBoxW(hwnd_main_, L"This panel is not available in the active workspace.", L"Genesis Engine", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
     if (rdock_panel_locked_[idx_u32] && !visible) {
         MessageBoxW(hwnd_main_, L"This panel is locked. Unlock it before closing.", L"Genesis Engine", MB_OK | MB_ICONINFORMATION);
         return;
     }
     if (!visible) {
         uint32_t remaining = 0u;
-        for (uint32_t i = 0; i < 6u; ++i) if (i != idx_u32 && rdock_panel_visible_[i]) remaining++;
+        for (uint32_t i = 0; i < EW_RIGHT_DOCK_TAB_COUNT; ++i) {
+            if (i != idx_u32 && rdock_panel_visible_[i] && rdock_panel_workspace_enabled_[i]) remaining++;
+        }
         if (remaining == 0u) {
             MessageBoxW(hwnd_main_, L"At least one right-dock panel must remain visible.", L"Genesis Engine", MB_OK | MB_ICONINFORMATION);
             return;
@@ -8737,6 +10372,342 @@ void App::SetRightDockPanelVisible(uint32_t idx_u32, bool visible) {
     if (visible) rdock_tab_index_u32_ = idx_u32;
     ApplyRightDockVisibility();
     LayoutChildren(client_w_, client_h_);
+}
+
+std::wstring App::BuildPlaceActorsStatusLine(const std::wstring& label_w) const {
+    if (label_w.empty()) return std::wstring();
+
+    if (primary_workspace_tab_index_u32_ == EW_WORKSPACE_LEVEL_SIM) {
+        return L"Place Actors: click the thumbnail to open Asset Builder for \"" + label_w + L"\" with Material Mixer and Voxelizer lanes. Press Enter or double-click the list entry to place it into the level.";
+    }
+
+    if (primary_workspace_tab_index_u32_ == EW_WORKSPACE_ASSET_BUILDER) {
+        if (ew_contains_case_insensitive_w(label_w, L"Mesh")) {
+            return L"Asset Builder: click the thumbnail to focus the builder stack for \"" + label_w + L"\". Press Enter or double-click the list entry to import a mesh into the selected asset lane.";
+        }
+        if (ew_contains_case_insensitive_w(label_w, L"Planet")) {
+            return L"Asset Builder: click the thumbnail to focus Asset Builder with Material Mixer and Voxelizer lanes. Press Enter or double-click the list entry to arm Planet Builder tools.";
+        }
+        if (ew_contains_case_insensitive_w(label_w, L"Character") || ew_contains_case_insensitive_w(label_w, L"Skeletal")) {
+            return L"Asset Builder: click the thumbnail to focus the builder stack for \"" + label_w + L"\". Press Enter or double-click the list entry to arm Character Tools.";
+        }
+        if (ew_contains_case_insensitive_w(label_w, L"Coherence")) {
+            return L"Asset Builder: click the thumbnail to focus the builder stack for \"" + label_w + L"\". Press Enter or double-click the list entry to open coherence/reference review for the current asset context.";
+        }
+        return L"Asset Builder: click the thumbnail to focus Asset Builder with Material Mixer and Voxelizer lanes. Press Enter or double-click the list entry to route this template into the asset tooling lane.";
+    }
+
+    return L"Voxel Builder: click the thumbnail to open the builder stack for \"" + label_w + L"\". Press Enter or double-click the list entry to arm it in the current voxel workspace.";
+}
+
+bool App::OpenPlaceActorsBuilderByLabel(const std::wstring& label_w) {
+    if (label_w.empty()) return false;
+
+    SetPrimaryWorkspaceTab(EW_WORKSPACE_ASSET_BUILDER);
+
+    const bool prefers_voxel =
+        ew_contains_case_insensitive_w(label_w, L"Material") ||
+        ew_contains_case_insensitive_w(label_w, L"Texture") ||
+        ew_contains_case_insensitive_w(label_w, L"Voxel") ||
+        ew_contains_case_insensitive_w(label_w, L"Lattice") ||
+        ew_contains_case_insensitive_w(label_w, L"Photon") ||
+        ew_contains_case_insensitive_w(label_w, L"Resonance") ||
+        ew_contains_case_insensitive_w(label_w, L"Field") ||
+        ew_contains_case_insensitive_w(label_w, L"Brush") ||
+        ew_contains_case_insensitive_w(label_w, L"Opacity") ||
+        ew_contains_case_insensitive_w(label_w, L"Emission") ||
+        ew_contains_case_insensitive_w(label_w, L"Specular") ||
+        ew_contains_case_insensitive_w(label_w, L"Density") ||
+        ew_contains_case_insensitive_w(label_w, L"Normal");
+
+    if (rdock_panel_workspace_enabled_[2]) rdock_panel_visible_[2] = true;
+    if (rdock_panel_workspace_enabled_[3]) rdock_panel_visible_[3] = true;
+
+    int tool_mode = 0;
+    if (ew_contains_case_insensitive_w(label_w, L"Planet")) tool_mode = 1;
+    else if (ew_contains_case_insensitive_w(label_w, L"Character") || ew_contains_case_insensitive_w(label_w, L"Skeletal")) tool_mode = 2;
+    if (hwnd_asset_tool_mode_) SendMessageW(hwnd_asset_tool_mode_, CB_SETCURSEL, (WPARAM)tool_mode, 0);
+
+    int preset_index = 0;
+    if (ew_contains_case_insensitive_w(label_w, L"Material") || ew_contains_case_insensitive_w(label_w, L"Specular")) preset_index = 1;
+    else if (ew_contains_case_insensitive_w(label_w, L"Density")) preset_index = 9;
+    else if (ew_contains_case_insensitive_w(label_w, L"Opacity")) preset_index = 20;
+    else if (ew_contains_case_insensitive_w(label_w, L"Emission")) preset_index = 7;
+    if (hwnd_voxel_preset_) SendMessageW(hwnd_voxel_preset_, CB_SETCURSEL, (WPARAM)preset_index, 0);
+
+    auto label_to_tokens = [&](const std::wstring& source_w)->std::vector<std::string> {
+        std::vector<std::string> out_tokens;
+        const std::wstring lower_w = ew_to_lower_w(source_w);
+        auto push = [&](const char* token_utf8) {
+            out_tokens.emplace_back(token_utf8);
+        };
+        if (lower_w.find(L"static mesh") != std::wstring::npos) { push("mesh"); push("obj"); push("fbx"); push("gltf"); }
+        if (lower_w.find(L"skeletal") != std::wstring::npos || lower_w.find(L"character") != std::wstring::npos) { push("character"); push("skeletal"); push("rig"); push("anim"); }
+        if (lower_w.find(L"material") != std::wstring::npos) { push("material"); push("surface"); push("layer"); }
+        if (lower_w.find(L"texture") != std::wstring::npos || lower_w.find(L"atlas") != std::wstring::npos) { push("texture"); push("atlas"); push("albedo"); push("normal"); }
+        if (lower_w.find(L"planet") != std::wstring::npos || lower_w.find(L"surface") != std::wstring::npos) { push("planet"); push("surface"); push("terrain"); }
+        if (lower_w.find(L"voxel") != std::wstring::npos) { push("voxel"); push("volume"); }
+        if (lower_w.find(L"material mixer") != std::wstring::npos) { push("material"); push("mixer"); }
+        if (lower_w.find(L"density") != std::wstring::npos) push("density");
+        if (lower_w.find(L"normal") != std::wstring::npos) push("normal");
+        if (lower_w.find(L"specular") != std::wstring::npos) push("specular");
+        if (lower_w.find(L"opacity") != std::wstring::npos) push("opacity");
+        if (lower_w.find(L"emission") != std::wstring::npos) push("emission");
+        if (out_tokens.empty()) {
+            std::wstring token_w;
+            for (wchar_t ch : lower_w) {
+                if (iswalnum(ch)) {
+                    token_w.push_back(ch);
+                } else if (!token_w.empty()) {
+                    out_tokens.push_back(wide_to_utf8(token_w));
+                    token_w.clear();
+                }
+            }
+            if (!token_w.empty()) out_tokens.push_back(wide_to_utf8(token_w));
+        }
+        return out_tokens;
+    };
+
+    auto class_hint = [&](const std::wstring& source_w)->std::string {
+        const std::wstring lower_w = ew_to_lower_w(source_w);
+        if (lower_w.find(L"mesh") != std::wstring::npos) return "static mesh";
+        if (lower_w.find(L"material") != std::wstring::npos || lower_w.find(L"surface") != std::wstring::npos) return "material";
+        if (lower_w.find(L"texture") != std::wstring::npos || lower_w.find(L"atlas") != std::wstring::npos) return "texture";
+        return std::string();
+    };
+
+    if (content_items_.empty()) RefreshContentBrowserFromRuntime(200u);
+    const std::vector<std::string> content_tokens = label_to_tokens(label_w);
+    const std::string preferred_class_utf8 = class_hint(label_w);
+    const std::string actor_l = ew_lower_ascii_copy(wide_to_utf8(label_w));
+    int best_score = -1;
+    std::string best_rel_utf8;
+    for (const ContentItem& item : content_items_) {
+        const std::string rel_l = ew_lower_ascii_copy(item.rel_utf8);
+        const std::string label_l = ew_lower_ascii_copy(item.label_utf8.empty() ? ew_content_leaf_name_utf8(item.rel_utf8) : item.label_utf8);
+        const std::string class_l = ew_lower_ascii_copy(ew_content_class_guess_utf8(item.rel_utf8));
+        const std::string collection_l = ew_lower_ascii_copy(ew_content_top_folder_utf8(item.rel_utf8));
+        int score = 0;
+        if (!preferred_class_utf8.empty() && class_l.find(preferred_class_utf8) != std::string::npos) score += 80;
+        if (!actor_l.empty() && (label_l.find(actor_l) != std::string::npos || rel_l.find(actor_l) != std::string::npos)) score += 64;
+        for (const std::string& token_utf8 : content_tokens) {
+            if (token_utf8.empty()) continue;
+            if (label_l.find(token_utf8) != std::string::npos) score += 18;
+            if (rel_l.find(token_utf8) != std::string::npos) score += 14;
+            if (class_l.find(token_utf8) != std::string::npos) score += 12;
+            if (collection_l.find(token_utf8) != std::string::npos) score += 8;
+        }
+        if (score > best_score) {
+            best_score = score;
+            best_rel_utf8 = item.rel_utf8;
+        }
+    }
+    if (best_score <= 0 && content_selected_rel_utf8_.empty()) {
+        (void)SelectContentForSelectedObject();
+    } else if (!best_rel_utf8.empty()) {
+        if (!ew_content_path_matches_prefix_utf8(best_rel_utf8, content_source_prefix_utf8_)) {
+            content_source_prefix_utf8_.clear();
+            RebuildContentBrowserViews();
+            RefreshContentBrowserChrome();
+        }
+        (void)SelectContentRelativePath(best_rel_utf8, false);
+    }
+
+    const uint32_t target_tab_u32 = (prefers_voxel && rdock_panel_workspace_enabled_[3]) ? 3u : 2u;
+    if (rdock_panel_workspace_enabled_[target_tab_u32]) {
+        rdock_tab_index_u32_ = target_tab_u32;
+        if (hwnd_rdock_tab_) TabCtrl_SetCurSel(hwnd_rdock_tab_, (int)target_tab_u32);
+    }
+    ApplyRightDockVisibility();
+    LayoutChildren(client_w_, client_h_);
+    RefreshAssetDesignerPanel();
+    RefreshVoxelDesignerPanel();
+    if (hwnd_asset_thumb_) SetFocus(hwnd_asset_thumb_);
+
+    if (hwnd_ai_status_) {
+        std::wstring status_w = L"Asset Builder opened for \"" + label_w + L"\". ";
+        if (target_tab_u32 == 3u) {
+            status_w += L"Voxelizer focused; Material Mixer and voxel synthesis controls are live in this dock tab.";
+        } else {
+            status_w += L"Asset Builder focused; Material Mixer and Voxelizer remain available in the adjacent dock tab.";
+        }
+        if (!content_selected_rel_utf8_.empty()) {
+            status_w += L" Preview target: " + utf8_to_wide(ew_content_leaf_name_utf8(content_selected_rel_utf8_)) + L".";
+        }
+        SetWindowTextW(hwnd_ai_status_, status_w.c_str());
+    }
+    return true;
+}
+
+void App::RefreshPlaceActorsPanel() {
+    if (!hwnd_left_panel_) return;
+    if (hwnd_left_title_) SetWindowTextW(hwnd_left_title_, ew_workspace_left_title(primary_workspace_tab_index_u32_));
+    if (hwnd_left_search_) {
+        SendMessageW(hwnd_left_search_, EM_SETCUEBANNER, 0, (LPARAM)ew_workspace_left_search_cue(primary_workspace_tab_index_u32_));
+    }
+    if (!hwnd_left_category_ || !hwnd_left_actor_list_) return;
+
+    const int prev_cat = (int)SendMessageW(hwnd_left_category_, CB_GETCURSEL, 0, 0);
+    SendMessageW(hwnd_left_category_, CB_RESETCONTENT, 0, 0);
+    const wchar_t* categories_level[] = {L"All", L"Actors", L"Lighting", L"Simulation", L"Utilities"};
+    const wchar_t* categories_asset[] = {L"All", L"Assets", L"Materials", L"Characters", L"AI"};
+    const wchar_t* categories_voxel[] = {L"All", L"Voxel Builder", L"Material Mixer", L"Field Maps", L"Lattice"};
+    const wchar_t* const* categories = categories_level;
+    if (primary_workspace_tab_index_u32_ == EW_WORKSPACE_ASSET_BUILDER) categories = categories_asset;
+    if (primary_workspace_tab_index_u32_ == EW_WORKSPACE_VOXEL_BUILDER) categories = categories_voxel;
+    for (int i = 0; i < 5; ++i) {
+        SendMessageW(hwnd_left_category_, CB_ADDSTRING, 0, (LPARAM)categories[i]);
+    }
+    const int cat_idx = (prev_cat >= 0 && prev_cat < 5) ? prev_cat : 0;
+    SendMessageW(hwnd_left_category_, CB_SETCURSEL, (WPARAM)cat_idx, 0);
+
+    std::wstring query_w;
+    const int qlen = hwnd_left_search_ ? GetWindowTextLengthW(hwnd_left_search_) : 0;
+    if (qlen > 0 && hwnd_left_search_) {
+        std::vector<wchar_t> qbuf((size_t)qlen + 1u, 0);
+        GetWindowTextW(hwnd_left_search_, qbuf.data(), qlen + 1);
+        query_w.assign(qbuf.data());
+    }
+
+    std::vector<std::wstring> entries;
+    if (primary_workspace_tab_index_u32_ == EW_WORKSPACE_LEVEL_SIM) {
+        entries = {
+            L"Actor", L"Camera Rig", L"Directional Light", L"Point Light", L"Sky Atmosphere",
+            L"Photon Lattice Emitter", L"Resonance Volume", L"Collision Proxy", L"Simulation Controller"
+        };
+    } else if (primary_workspace_tab_index_u32_ == EW_WORKSPACE_ASSET_BUILDER) {
+        entries = {
+            L"Static Mesh", L"Skeletal Mesh", L"Material Instance", L"Texture Atlas",
+            L"Character Archetype", L"Planet Surface Layer", L"AI Asset Template", L"Coherence Reference"
+        };
+    } else {
+        entries = {
+            L"Voxel Builder Layer", L"Material Mixer Channel", L"Lattice Slice Probe", L"Lattice Volume Probe",
+            L"Density Field Brush", L"Normal Field Brush", L"Specular Field Brush", L"Opacity Field Brush", L"Emission Field Brush"
+        };
+    }
+
+    auto category_match = [&](const std::wstring& label_w)->bool {
+        if (cat_idx <= 0) return true;
+        if (primary_workspace_tab_index_u32_ == EW_WORKSPACE_LEVEL_SIM) {
+            if (cat_idx == 1) return ew_contains_case_insensitive_w(label_w, L"Actor") || ew_contains_case_insensitive_w(label_w, L"Camera");
+            if (cat_idx == 2) return ew_contains_case_insensitive_w(label_w, L"Light") || ew_contains_case_insensitive_w(label_w, L"Sky");
+            if (cat_idx == 3) return ew_contains_case_insensitive_w(label_w, L"Simulation") || ew_contains_case_insensitive_w(label_w, L"Lattice") || ew_contains_case_insensitive_w(label_w, L"Resonance");
+            return !(cat_idx == 4) ? true : (!ew_contains_case_insensitive_w(label_w, L"Light") && !ew_contains_case_insensitive_w(label_w, L"Actor"));
+        }
+        if (primary_workspace_tab_index_u32_ == EW_WORKSPACE_ASSET_BUILDER) {
+            if (cat_idx == 1) return ew_contains_case_insensitive_w(label_w, L"Mesh") || ew_contains_case_insensitive_w(label_w, L"Texture");
+            if (cat_idx == 2) return ew_contains_case_insensitive_w(label_w, L"Material") || ew_contains_case_insensitive_w(label_w, L"Layer");
+            if (cat_idx == 3) return ew_contains_case_insensitive_w(label_w, L"Character") || ew_contains_case_insensitive_w(label_w, L"Skeletal");
+            return ew_contains_case_insensitive_w(label_w, L"AI") || ew_contains_case_insensitive_w(label_w, L"Coherence");
+        }
+        if (cat_idx == 1) return ew_contains_case_insensitive_w(label_w, L"Voxel") || ew_contains_case_insensitive_w(label_w, L"Lattice");
+        if (cat_idx == 2) return ew_contains_case_insensitive_w(label_w, L"Material") || ew_contains_case_insensitive_w(label_w, L"Specular") || ew_contains_case_insensitive_w(label_w, L"Opacity") || ew_contains_case_insensitive_w(label_w, L"Emission");
+        if (cat_idx == 3) return ew_contains_case_insensitive_w(label_w, L"Field") || ew_contains_case_insensitive_w(label_w, L"Brush");
+        return ew_contains_case_insensitive_w(label_w, L"Lattice") || ew_contains_case_insensitive_w(label_w, L"Probe");
+    };
+
+    SendMessageW(hwnd_left_actor_list_, WM_SETREDRAW, FALSE, 0);
+    SendMessageW(hwnd_left_actor_list_, LB_RESETCONTENT, 0, 0);
+    if (hwnd_left_actor_thumb_) {
+        SendMessageW(hwnd_left_actor_thumb_, WM_SETREDRAW, FALSE, 0);
+        ListView_DeleteAllItems(hwnd_left_actor_thumb_);
+    }
+    left_vault_visible_paths_utf8_.clear();
+    for (const std::wstring& label_w : entries) {
+        if (!category_match(label_w)) continue;
+        if (!ew_contains_case_insensitive_w(label_w, query_w)) continue;
+        SendMessageW(hwnd_left_actor_list_, LB_ADDSTRING, 0, (LPARAM)label_w.c_str());
+        const LPARAM visible_idx_lp = (LPARAM)left_vault_visible_paths_utf8_.size();
+        left_vault_visible_paths_utf8_.push_back(wide_to_utf8(label_w));
+        if (hwnd_left_actor_thumb_) {
+            LVITEMW lv{};
+            lv.mask = LVIF_TEXT | LVIF_IMAGE | LVIF_PARAM;
+            lv.iItem = ListView_GetItemCount(hwnd_left_actor_thumb_);
+            lv.pszText = const_cast<LPWSTR>(label_w.c_str());
+            lv.iImage = ew_semantic_thumb_image_index(label_w, L"");
+            lv.lParam = visible_idx_lp;
+            (void)ListView_InsertItem(hwnd_left_actor_thumb_, &lv);
+        }
+    }
+    SendMessageW(hwnd_left_actor_list_, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(hwnd_left_actor_list_, nullptr, TRUE);
+    if (hwnd_left_actor_thumb_) {
+        SendMessageW(hwnd_left_actor_thumb_, WM_SETREDRAW, TRUE, 0);
+        ListView_Arrange(hwnd_left_actor_thumb_, LVA_DEFAULT);
+        InvalidateRect(hwnd_left_actor_thumb_, nullptr, TRUE);
+    }
+}
+
+bool App::ActivatePlaceActorsEntryByLabel(const std::wstring& label_w) {
+    if (label_w.empty()) return false;
+
+    if (primary_workspace_tab_index_u32_ == EW_WORKSPACE_LEVEL_SIM) {
+        if (scene_ && scene_->SpawnProceduralEditorTemplate(label_w)) {
+            if (scene_->selected >= 0 && scene_->selected < (int)scene_->objects.size()) {
+                editor_selected_object_id_u64_ = scene_->objects[(size_t)scene_->selected].object_id_u64;
+                EmitEditorSelection(editor_selected_object_id_u64_);
+            }
+            RebuildOutlinerList();
+            RebuildPropertyGrid();
+            RefreshAssetDesignerPanel();
+            RefreshVoxelDesignerPanel();
+            RefreshNodePanel();
+            RefreshSequencerPanel();
+            if (hwnd_objlist_ && scene_->selected >= 0) {
+                SendMessageW(hwnd_objlist_, LB_SETCURSEL, (WPARAM)scene_->selected, 0);
+            }
+            if (hwnd_ai_status_) {
+                SetWindowTextW(hwnd_ai_status_, (std::wstring(L"Placed actor template: ") + label_w).c_str());
+            }
+            return true;
+        }
+        return false;
+    }
+
+    if (primary_workspace_tab_index_u32_ == EW_WORKSPACE_ASSET_BUILDER) {
+        SetPrimaryWorkspaceTab(EW_WORKSPACE_ASSET_BUILDER);
+        rdock_tab_index_u32_ = 2u;
+        if (hwnd_rdock_tab_) TabCtrl_SetCurSel(hwnd_rdock_tab_, 2);
+        ApplyRightDockVisibility();
+
+        int tool_mode = 0;
+        if (ew_contains_case_insensitive_w(label_w, L"Planet")) tool_mode = 1;
+        else if (ew_contains_case_insensitive_w(label_w, L"Character")) tool_mode = 2;
+        if (hwnd_asset_tool_mode_) SendMessageW(hwnd_asset_tool_mode_, CB_SETCURSEL, (WPARAM)tool_mode, 0);
+
+        if (ew_contains_case_insensitive_w(label_w, L"Mesh")) {
+            OnImportObj();
+        } else if (ew_contains_case_insensitive_w(label_w, L"Coherence") && hwnd_asset_review_refs_) {
+            SendMessageW(hwnd_main_, WM_COMMAND, MAKEWPARAM(2061, BN_CLICKED), 0);
+        } else if (ew_contains_case_insensitive_w(label_w, L"AI") && hwnd_ai_status_) {
+            SetWindowTextW(hwnd_ai_status_, L"Asset Builder: AI asset template lane armed. Import content or select a substrate-backed asset to continue.");
+        }
+
+        RefreshAssetDesignerPanel();
+        return true;
+    }
+
+    if (primary_workspace_tab_index_u32_ == EW_WORKSPACE_VOXEL_BUILDER) {
+        SetPrimaryWorkspaceTab(EW_WORKSPACE_VOXEL_BUILDER);
+        rdock_tab_index_u32_ = 3u;
+        if (hwnd_rdock_tab_) TabCtrl_SetCurSel(hwnd_rdock_tab_, 3);
+        ApplyRightDockVisibility();
+
+        int preset_index = 0;
+        if (ew_contains_case_insensitive_w(label_w, L"Material") || ew_contains_case_insensitive_w(label_w, L"Specular")) preset_index = 1;
+        else if (ew_contains_case_insensitive_w(label_w, L"Density")) preset_index = 9;
+        else if (ew_contains_case_insensitive_w(label_w, L"Opacity")) preset_index = 20;
+        else if (ew_contains_case_insensitive_w(label_w, L"Emission")) preset_index = 7;
+        if (hwnd_voxel_preset_) SendMessageW(hwnd_voxel_preset_, CB_SETCURSEL, (WPARAM)preset_index, 0);
+        RefreshVoxelDesignerPanel();
+        if (hwnd_ai_status_) {
+            SetWindowTextW(hwnd_ai_status_, (std::wstring(L"Voxel Builder: armed tool lane for ") + label_w + L".").c_str());
+        }
+        return true;
+    }
+
+    return false;
 }
 
 std::wstring App::GetNodeSearchQuery() const {
@@ -9495,6 +11466,21 @@ static int ew_read_trackbar_pos_safe(HWND h, int fallback_i32) {
     return (int)SendMessageW(h, TBM_GETPOS, 0, 0);
 }
 
+static uint32_t ew_lattice_max_points_from_slider(int slider_i32) {
+    int clamped = slider_i32;
+    if (clamped < 1) clamped = 1;
+    if (clamped > 256) clamped = 256;
+    return (uint32_t)clamped * 1024u;
+}
+
+static int ew_lattice_max_points_to_slider(uint32_t max_points_u32) {
+    uint32_t clamped = max_points_u32;
+    if (clamped < 1024u) clamped = 1024u;
+    if (clamped > 256u * 1024u) clamped = 256u * 1024u;
+    const uint32_t rounded = (clamped + 512u) / 1024u;
+    return (int)rounded;
+}
+
 static std::wstring ew_combo_selected_text_safe(HWND h, const wchar_t* fallback_w) {
     if (!h) return fallback_w ? std::wstring(fallback_w) : std::wstring();
     const int sel = (int)SendMessageW(h, CB_GETCURSEL, 0, 0);
@@ -9573,6 +11559,24 @@ void App::RefreshAssetDesignerPanel() {
     status_w += L"  |  ";
     status_w += review_current ? L"reference review current" : L"reference review needed";
     if (hwnd_asset_builder_status_) SetWindowTextW(hwnd_asset_builder_status_, status_w.c_str());
+
+    if (hwnd_asset_preview_title_) {
+        std::wstring preview_title = L"Preview Target: ";
+        preview_title += has_content_link ? utf8_to_wide(ew_content_leaf_name_utf8(content_selected_rel_utf8_)) : L"(none)";
+        SetWindowTextW(hwnd_asset_preview_title_, preview_title.c_str());
+    }
+    if (hwnd_asset_preview_caption_) {
+        std::wstring preview_caption;
+        if (has_content_link) {
+            preview_caption = L"Class: " + utf8_to_wide(ew_content_class_guess_utf8(content_selected_rel_utf8_));
+            preview_caption += L"  |  Review: ";
+            preview_caption += review_current ? L"current" : L"needed";
+            preview_caption += L"\r\nPath: " + utf8_to_wide(content_selected_rel_utf8_);
+        } else {
+            preview_caption = L"Select linked content or click a Place Actors thumbnail to retarget this preview lane.\r\nMaterial Mixer and Voxelizer stay available beside the preview surface.";
+        }
+        SetWindowTextW(hwnd_asset_preview_caption_, preview_caption.c_str());
+    }
 
     std::wstring summary;
     summary += L"Canonical authoring lane: " + mode_w + L"\r\n";
@@ -9695,6 +11699,25 @@ void App::RefreshVoxelDesignerPanel() {
     int dens = read_pos(2601);
     int hard = read_pos(2602);
     int rough = read_pos(2603);
+    const bool lattice_volume_mode = (hwnd_voxel_lattice_volume_ && SendMessageW(hwnd_voxel_lattice_volume_, BM_GETCHECK, 0, 0) == BST_CHECKED);
+    const int lattice_slice = read_pos(EW_VOXEL_LATTICE_SLICE_ID);
+    const int lattice_stride = read_pos(EW_VOXEL_LATTICE_STRIDE_ID);
+    const int lattice_max_slider = read_pos(EW_VOXEL_LATTICE_MAXPTS_ID);
+    const int lattice_intensity = read_pos(EW_VOXEL_LATTICE_INTENSITY_ID);
+    const bool vector_visualization = (hwnd_voxel_vector_visualization_ && SendMessageW(hwnd_voxel_vector_visualization_, BM_GETCHECK, 0, 0) == BST_CHECKED);
+    const int vector_gain = read_pos(EW_VOXEL_VECTOR_GAIN_ID);
+    const int field_depth_m = read_pos(EW_VOXEL_FIELD_DEPTH_ID);
+    const int focal_mm = read_pos(EW_VOXEL_FOCAL_MM_ID);
+    viewport_lattice_volume_mode_ = lattice_volume_mode;
+    viewport_lattice_slice_z_u32_ = (uint32_t)std::max(0, std::min(127, lattice_slice));
+    viewport_lattice_stride_u32_ = (uint32_t)std::max(1, std::min(16, lattice_stride));
+    viewport_lattice_max_points_u32_ = ew_lattice_max_points_from_slider(lattice_max_slider);
+    viewport_lattice_intensity_min_u8_ = (uint8_t)std::max(0, std::min(255, lattice_intensity));
+    viewport_vector_visualization_enabled_ = vector_visualization;
+    viewport_vector_gain_u8_ = (uint8_t)std::max(0, std::min(100, vector_gain));
+    viewport_field_depth_m_f32_ = (float)std::max(2, std::min(250, field_depth_m));
+    viewport_focal_length_mm_f32_ = (float)std::max(18, std::min(200, focal_mm));
+    if (HWND h = GetDlgItem(hwnd_rdock_voxel_, EW_VOXEL_LATTICE_SLICE_ID)) EnableWindow(h, lattice_volume_mode ? FALSE : TRUE);
     wchar_t preset[256]{};
     if (hwnd_voxel_preset_) {
         int sel = (int)SendMessageW(hwnd_voxel_preset_, CB_GETCURSEL, 0, 0);
@@ -9717,6 +11740,17 @@ void App::RefreshVoxelDesignerPanel() {
     const int node_sel = voxel_atom_node_selected_i32_;
     summary += L"\r\nNode Focus=" + std::to_wstring((long long)(node_sel + 1)) + L"  SimEnergy=" + std::to_wstring((long long)energy);
     summary += L"  Leakage=" + std::to_wstring((long long)leakage);
+    summary += L"\r\nLattice Projection: ";
+    summary += lattice_volume_mode ? L"3D volume" : L"single slice";
+    summary += L"  slice_z=" + std::to_wstring((unsigned long long)viewport_lattice_slice_z_u32_);
+    summary += L"  stride=" + std::to_wstring((unsigned long long)viewport_lattice_stride_u32_);
+    summary += L"  max_points=" + std::to_wstring((unsigned long long)viewport_lattice_max_points_u32_);
+    summary += L"  min_intensity=" + std::to_wstring((unsigned long long)viewport_lattice_intensity_min_u8_);
+    summary += L"\r\nVector View: ";
+    summary += viewport_vector_visualization_enabled_ ? L"enabled" : L"disabled";
+    summary += L"  gain=" + std::to_wstring((unsigned long long)viewport_vector_gain_u8_) + L"%";
+    summary += L"  field_depth_m=" + std::to_wstring((double)viewport_field_depth_m_f32_);
+    summary += L"  focal_mm=" + std::to_wstring((double)viewport_focal_length_mm_f32_);
 
     if (scene_ && scene_->selected >= 0 && scene_->selected < (int)scene_->objects.size()) {
         const auto& o = scene_->objects[(size_t)scene_->selected];
@@ -9778,6 +11812,7 @@ bool App::ReviewReferencesForPath(const std::string& rel_utf8, const wchar_t* or
 
 
 void App::RefreshSequencerPanel() {
+    seq_play_enabled_ = IsSimPlayEnabledCanonical();
     if (hwnd_seq_timeline_) {
         SendMessageW(hwnd_seq_timeline_, WM_SETREDRAW, FALSE, 0);
         SendMessageW(hwnd_seq_timeline_, LB_RESETCONTENT, 0, 0);
@@ -9795,7 +11830,12 @@ void App::RefreshSequencerPanel() {
         SendMessageW(hwnd_seq_timeline_, WM_SETREDRAW, TRUE, 0);
         InvalidateRect(hwnd_seq_timeline_, nullptr, TRUE);
     }
-    if (hwnd_seq_play_) SetWindowTextW(hwnd_seq_play_, seq_play_enabled_ ? L"Pause" : L"Play");
+    if (hwnd_seq_back_) InvalidateRect(hwnd_seq_back_, nullptr, TRUE);
+    if (hwnd_seq_start_) InvalidateRect(hwnd_seq_start_, nullptr, TRUE);
+    if (hwnd_seq_play_) InvalidateRect(hwnd_seq_play_, nullptr, TRUE);
+    if (hwnd_seq_pause_) InvalidateRect(hwnd_seq_pause_, nullptr, TRUE);
+    if (hwnd_seq_stop_) InvalidateRect(hwnd_seq_stop_, nullptr, TRUE);
+    if (hwnd_seq_replay_) InvalidateRect(hwnd_seq_replay_, nullptr, TRUE);
     if (hwnd_seq_loop_) SetWindowTextW(hwnd_seq_loop_, seq_loop_builder_enabled_ ? L"Loop Armed" : L"Loop Build");
     if (hwnd_seq_stress_overlay_) SetWindowTextW(hwnd_seq_stress_overlay_, seq_stress_overlay_enabled_ ? L"Stress On" : L"Stress Off");
 
@@ -9853,15 +11893,277 @@ void App::RefreshSequencerPanel() {
     if (hwnd_seq_summary_) SetWindowTextW(hwnd_seq_summary_, summary.c_str());
 }
 
+static int ew_content_thumbnail_spacing_px(uint32_t size_u32) {
+    switch (size_u32) {
+        case 0u: return 52;
+        case 1u: return 72;
+        case 2u: return 92;
+        case 3u: return 124;
+        default: return 156;
+    }
+}
+
+static std::string ew_content_leaf_name_utf8(const std::string& rel_utf8) {
+    const size_t slash = rel_utf8.find_last_of("/\\");
+    return (slash == std::string::npos) ? rel_utf8 : rel_utf8.substr(slash + 1u);
+}
+
+static std::string ew_content_parent_path_utf8(const std::string& rel_utf8) {
+    const size_t slash = rel_utf8.find_last_of('/');
+    return (slash == std::string::npos) ? std::string() : rel_utf8.substr(0u, slash);
+}
+
+static std::string ew_content_top_folder_utf8(const std::string& rel_utf8) {
+    const size_t slash = rel_utf8.find('/');
+    return (slash == std::string::npos) ? rel_utf8 : rel_utf8.substr(0u, slash);
+}
+
+static std::string ew_content_class_guess_utf8(const std::string& rel_utf8) {
+    const std::string lower = ew_lower_ascii_copy(rel_utf8);
+    if (lower.find("aivault/") == 0u) return "Vault Artifact";
+    auto ends_with = [&](const char* suffix) -> bool {
+        const size_t n = std::strlen(suffix);
+        return lower.size() >= n && lower.compare(lower.size() - n, n, suffix) == 0;
+    };
+    if (ends_with(".png") || ends_with(".jpg") || ends_with(".jpeg") || ends_with(".tga") || ends_with(".bmp") || ends_with(".dds")) return "Texture";
+    if (ends_with(".obj") || ends_with(".fbx") || ends_with(".gltf") || ends_with(".glb")) return "Static Mesh";
+    if (ends_with(".wav") || ends_with(".ogg") || ends_with(".mp3")) return "Sound";
+    if (ends_with(".mat") || ends_with(".material")) return "Material";
+    if (ends_with(".bp") || ends_with(".uasset")) return "Blueprint";
+    if (lower.find("characters/") != std::string::npos) return "Character";
+    if (lower.find("input/") != std::string::npos) return "Input";
+    if (lower.find("level") != std::string::npos || lower.find("world") != std::string::npos) return "Level";
+    return "Asset";
+}
+
+static bool ew_content_path_matches_prefix_utf8(const std::string& rel_utf8, const std::string& prefix_utf8) {
+    if (prefix_utf8.empty()) return true;
+    if (prefix_utf8 == "__mount_project__") return rel_utf8.find("AIVault/") != 0u;
+    if (prefix_utf8 == "__mount_internal_vault__") return rel_utf8.find("AIVault/") == 0u;
+    if (prefix_utf8 == "__mount_cache__") return rel_utf8.find("AssetLibraryCache/") == 0u;
+    if (prefix_utf8 == "__cpp__") return rel_utf8.find("C++") != std::string::npos || rel_utf8.find("Source/") == 0;
+    if (prefix_utf8 == "__developers__") return rel_utf8.find("Developers/") == 0;
+    if (prefix_utf8 == "__engine__") return rel_utf8.find("Engine/") == 0;
+    if (prefix_utf8 == "__plugins__") return rel_utf8.find("Plugins/") == 0;
+    if (prefix_utf8 == "__localized__") return rel_utf8.find("Localized/") == 0;
+    if (prefix_utf8.find("__specf:") == 0u) {
+        const std::string id_s = prefix_utf8.substr(8u);
+        const int target_f = std::atoi(id_s.c_str());
+        const int32_t f = ew_text_utf8_to_frequency_code(rel_utf8, (uint8_t)EW_PROFILE_LANGUAGE_INJECTION);
+        return (int)f == target_f;
+    }
+    if (rel_utf8 == prefix_utf8) return true;
+    const std::string with_sep = prefix_utf8 + "/";
+    return rel_utf8.compare(0u, with_sep.size(), with_sep) == 0;
+}
+
+void App::ConfigureContentBrowserListView() {
+    if (!hwnd_content_list_) return;
+    HWND header = ListView_GetHeader(hwnd_content_list_);
+    while (header && Header_GetItemCount(header) > 0) ListView_DeleteColumn(hwnd_content_list_, 0);
+
+    auto add_col = [&](int width_px, const wchar_t* label_w) {
+        LVCOLUMNW col{};
+        col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
+        col.cx = width_px;
+        col.pszText = const_cast<LPWSTR>(label_w);
+        col.iSubItem = Header_GetItemCount(header);
+        ListView_InsertColumn(hwnd_content_list_, col.iSubItem, &col);
+    };
+
+    if (content_view_mode_u32_ == 2u) {
+        add_col(230, L"Name");
+        add_col(120, L"Type");
+        add_col(420, L"Path");
+        add_col(130, L"Collection");
+    } else {
+        add_col(260, L"Name");
+        add_col(520, L"Path");
+    }
+
+    const DWORD infotip = content_always_expand_tooltips_ ? LVS_EX_INFOTIP : 0u;
+    ListView_SetExtendedListViewStyleEx(hwnd_content_list_, LVS_EX_INFOTIP, infotip);
+}
+
+void App::PushContentNavigationPrefix(const std::string& prefix_utf8) {
+    if (content_nav_suppress_push_) return;
+    const std::string canonical = prefix_utf8;
+    if (content_nav_index_i32_ >= 0 &&
+        content_nav_index_i32_ < (int32_t)content_nav_history_utf8_.size() &&
+        content_nav_history_utf8_[(size_t)content_nav_index_i32_] == canonical) {
+        return;
+    }
+    if (content_nav_index_i32_ + 1 < (int32_t)content_nav_history_utf8_.size()) {
+        content_nav_history_utf8_.erase(content_nav_history_utf8_.begin() + content_nav_index_i32_ + 1,
+                                        content_nav_history_utf8_.end());
+    }
+    content_nav_history_utf8_.push_back(canonical);
+    if (content_nav_history_utf8_.size() > 256u) {
+        content_nav_history_utf8_.erase(content_nav_history_utf8_.begin());
+    }
+    content_nav_index_i32_ = (int32_t)content_nav_history_utf8_.size() - 1;
+}
+
+void App::NavigateContentHistory(int direction_i32) {
+    if (content_nav_history_utf8_.empty()) return;
+    int32_t next = content_nav_index_i32_ + direction_i32;
+    if (next < 0 || next >= (int32_t)content_nav_history_utf8_.size()) return;
+    content_nav_index_i32_ = next;
+    content_source_prefix_utf8_ = content_nav_history_utf8_[(size_t)content_nav_index_i32_];
+    content_nav_suppress_push_ = true;
+    RebuildContentSourcesPanel();
+    content_nav_suppress_push_ = false;
+    RebuildContentBrowserViews();
+    RefreshContentBrowserChrome();
+}
+
+void App::RebuildContentSourcesPanel() {
+    if (!hwnd_content_sources_) return;
+    content_source_sync_guard_ = true;
+    content_source_paths_by_item_.clear();
+    TreeView_DeleteAllItems(hwnd_content_sources_);
+
+    auto insert_item = [&](const std::wstring& label_w, const std::string& path_utf8, HTREEITEM parent_item) -> HTREEITEM {
+        TVINSERTSTRUCTW ins{};
+        ins.hParent = parent_item ? parent_item : TVI_ROOT;
+        ins.hInsertAfter = TVI_LAST;
+        ins.item.mask = TVIF_TEXT;
+        ins.item.pszText = const_cast<LPWSTR>(label_w.c_str());
+        HTREEITEM item = TreeView_InsertItem(hwnd_content_sources_, &ins);
+        if (item) content_source_paths_by_item_[item] = path_utf8;
+        return item;
+    };
+
+    std::vector<std::string> folder_prefixes;
+    std::vector<std::string> top_level;
+    folder_prefixes.reserve(content_items_.size() * 2u);
+    top_level.reserve(content_items_.size());
+    for (const auto& item : content_items_) {
+        std::string parent = ew_content_parent_path_utf8(item.rel_utf8);
+        while (!parent.empty()) {
+            folder_prefixes.push_back(parent);
+            parent = ew_content_parent_path_utf8(parent);
+        }
+        const std::string top = ew_content_top_folder_utf8(item.rel_utf8);
+        if (!top.empty()) top_level.push_back(top);
+    }
+    std::sort(folder_prefixes.begin(), folder_prefixes.end());
+    folder_prefixes.erase(std::unique(folder_prefixes.begin(), folder_prefixes.end()), folder_prefixes.end());
+    std::sort(folder_prefixes.begin(), folder_prefixes.end(), [](const std::string& a, const std::string& b) {
+        const size_t da = std::count(a.begin(), a.end(), '/');
+        const size_t db = std::count(b.begin(), b.end(), '/');
+        return da == db ? a < b : da < db;
+    });
+    std::sort(top_level.begin(), top_level.end());
+    top_level.erase(std::unique(top_level.begin(), top_level.end()), top_level.end());
+
+    content_source_favorites_utf8_.clear();
+    for (const auto& top : top_level) {
+        if (content_source_favorites_utf8_.size() >= 4u) break;
+        content_source_favorites_utf8_.push_back(top);
+    }
+
+    HTREEITEM root_all = nullptr;
+    if (content_show_all_folder_) root_all = insert_item(L"All", std::string(), nullptr);
+
+    const std::string project_root_utf8 = (scene_ && !scene_->sm.project_settings.assets.project_asset_substrate_root_utf8.empty())
+        ? scene_->sm.project_settings.assets.project_asset_substrate_root_utf8
+        : std::string("AssetSubstrate");
+    const std::string cache_root_utf8 = (scene_ && !scene_->sm.project_settings.assets.global_asset_cache_root_utf8.empty())
+        ? scene_->sm.project_settings.assets.global_asset_cache_root_utf8
+        : std::string("AssetLibraryCache");
+    const int32_t project_f = ew_text_utf8_to_frequency_code(project_root_utf8, (uint8_t)EW_PROFILE_LANGUAGE_INJECTION);
+    const int32_t cache_f = ew_text_utf8_to_frequency_code(cache_root_utf8, (uint8_t)EW_PROFILE_LANGUAGE_INJECTION);
+    std::vector<std::string> vault_entries_utf8;
+    std::string vault_err_utf8;
+    if (scene_) (void)scene_->SnapshotVaultEntries(64u, vault_entries_utf8, &vault_err_utf8);
+
+    HTREEITEM mount_root = insert_item(L"Mounted Directories", std::string(), root_all);
+    std::wstring mount_project_label = L"Project Content Vault [f=" + std::to_wstring((long long)project_f) + L"]  " + utf8_to_wide(project_root_utf8);
+    std::wstring mount_cache_label = L"Global Asset Vault [f=" + std::to_wstring((long long)cache_f) + L"]  " + utf8_to_wide(cache_root_utf8);
+    const int32_t internal_f = ew_text_utf8_to_frequency_code(std::string("AIVault"), (uint8_t)EW_PROFILE_LANGUAGE_INJECTION);
+    std::wstring mount_internal_label = L"Substrate Internal Vault [f=" + std::to_wstring((long long)internal_f) + L"]  entries=" + std::to_wstring((unsigned long long)vault_entries_utf8.size());
+    insert_item(mount_project_label, "__mount_project__", mount_root);
+    insert_item(mount_cache_label, "__mount_cache__", mount_root);
+    insert_item(mount_internal_label, "__mount_internal_vault__", mount_root);
+
+    std::vector<std::string> spectrum_lines_utf8;
+    if (scene_) (void)scene_->SnapshotAiProjectSpectrumLines(ai_tab_index_u32_, 8u, spectrum_lines_utf8);
+    for (const auto& line_utf8 : spectrum_lines_utf8) {
+        const size_t fpos = line_utf8.find("f=");
+        if (fpos == std::string::npos) continue;
+        size_t fend = line_utf8.find(':', fpos + 2u);
+        if (fend == std::string::npos) fend = line_utf8.size();
+        const std::string f_text = line_utf8.substr(fpos + 2u, fend - (fpos + 2u));
+        const int f_id = std::atoi(f_text.c_str());
+        std::wstring label = L"Vector Context f=" + std::to_wstring((long long)f_id) + L" :: " + utf8_to_wide(line_utf8);
+        insert_item(label, std::string("__specf:") + f_text, mount_root);
+    }
+    if (mount_root) TreeView_Expand(hwnd_content_sources_, mount_root, TVE_EXPAND);
+
+    if (content_show_favorites_ && !content_source_favorites_utf8_.empty()) {
+        HTREEITEM fav_root = insert_item(L"Favorites", std::string(), root_all);
+        for (const auto& fav : content_source_favorites_utf8_) {
+            insert_item(utf8_to_wide(fav), fav, fav_root);
+        }
+        TreeView_Expand(hwnd_content_sources_, fav_root, TVE_EXPAND);
+    }
+
+    std::unordered_map<std::string, HTREEITEM> folder_items;
+    if (content_show_folders_) {
+        HTREEITEM content_root = content_show_all_folder_ ? insert_item(L"Content", std::string(), root_all) : nullptr;
+        for (const auto& prefix : folder_prefixes) {
+            HTREEITEM parent_item = nullptr;
+            const std::string parent_prefix = ew_content_parent_path_utf8(prefix);
+            if (!parent_prefix.empty()) {
+                auto it_parent = folder_items.find(parent_prefix);
+                if (it_parent != folder_items.end()) parent_item = it_parent->second;
+            } else if (content_root) {
+                parent_item = content_root;
+            }
+            folder_items[prefix] = insert_item(utf8_to_wide(ew_content_leaf_name_utf8(prefix)), prefix, parent_item);
+        }
+        if (content_root) TreeView_Expand(hwnd_content_sources_, content_root, TVE_EXPAND);
+    }
+
+    auto add_virtual_root = [&](bool enabled, const wchar_t* label_w, const char* path_utf8) {
+        if (enabled) insert_item(label_w, path_utf8, root_all);
+    };
+    add_virtual_root(content_show_cpp_classes_, L"C++ Classes", "__cpp__");
+    add_virtual_root(content_show_developers_content_, L"Developers Content", "__developers__");
+    add_virtual_root(content_show_engine_content_, L"Engine Content", "__engine__");
+    add_virtual_root(content_show_plugin_content_, L"Plugin Content", "__plugins__");
+    add_virtual_root(content_show_localized_content_, L"Localized Content", "__localized__");
+
+    HTREEITEM selected_item = nullptr;
+    for (const auto& kv : content_source_paths_by_item_) {
+        if (kv.second == content_source_prefix_utf8_) {
+            selected_item = kv.first;
+            break;
+        }
+    }
+    if (!selected_item && root_all) {
+        content_source_prefix_utf8_.clear();
+        selected_item = root_all;
+    }
+    if (root_all) TreeView_Expand(hwnd_content_sources_, root_all, TVE_EXPAND);
+    if (selected_item) TreeView_SelectItem(hwnd_content_sources_, selected_item);
+    content_source_sync_guard_ = false;
+    PushContentNavigationPrefix(content_source_prefix_utf8_);
+}
+
 void App::RefreshContentBrowserChrome() {
     if (hwnd_content_status_) {
-        std::wstring mode = L"List";
-        if (content_view_mode_u32_ == 1u) mode = L"Thumb";
-        else if (content_view_mode_u32_ == 2u) mode = L"3D";
-        std::wstring status = mode + L" mode. Visible items: " + std::to_wstring((unsigned long long)content_visible_indices_.size());
-        if (!coh_highlight_set_w_.empty()) status += L". Coherence highlights active.";
+        std::wstring mode = L"Grid";
+        if (content_view_mode_u32_ == 1u) mode = L"List";
+        else if (content_view_mode_u32_ == 2u) mode = L"Columns";
+        std::wstring status = mode + L" view | Visible items: " + std::to_wstring((unsigned long long)content_visible_indices_.size());
+        status += L" | Source: ";
+        status += content_source_prefix_utf8_.empty() ? L"All" : utf8_to_wide(content_source_prefix_utf8_);
+        if (content_locked_) status += L" | Locked";
+        if (!coh_highlight_set_w_.empty()) status += L" | Coherence highlights active";
         if (!content_selected_rel_utf8_.empty() && canonical_reference_summary_.subject_rel_utf8 == content_selected_rel_utf8_) {
-            status += L". Canonical refs=" + std::to_wstring((unsigned long long)canonical_reference_summary_.hit_count_u32);
+            status += L" | Canonical refs=" + std::to_wstring((unsigned long long)canonical_reference_summary_.hit_count_u32);
         }
         SetWindowTextW(hwnd_content_status_, status.c_str());
     }
@@ -9879,9 +12181,35 @@ void App::RefreshContentBrowserChrome() {
         }
         SetWindowTextW(hwnd_content_selected_, sel.c_str());
     }
-    if (hwnd_content_view_list_) SetWindowTextW(hwnd_content_view_list_, content_view_mode_u32_ == 0u ? L"[List]" : L"List");
-    if (hwnd_content_view_thumb_) SetWindowTextW(hwnd_content_view_thumb_, content_view_mode_u32_ == 1u ? L"[Thumb]" : L"Thumb");
-    if (hwnd_content_view_3d_) SetWindowTextW(hwnd_content_view_3d_, content_view_mode_u32_ == 2u ? L"[3D]" : L"3D");
+    if (hwnd_content_settings_) SetWindowTextW(hwnd_content_settings_, content_locked_ ? L"Settings *" : L"Settings");
+    if (hwnd_content_view_list_) SetWindowTextW(hwnd_content_view_list_, content_view_mode_u32_ == 0u ? L"[Grid]" : L"Grid");
+    if (hwnd_content_view_thumb_) SetWindowTextW(hwnd_content_view_thumb_, content_view_mode_u32_ == 1u ? L"[List]" : L"List");
+    if (hwnd_content_view_3d_) SetWindowTextW(hwnd_content_view_3d_, content_view_mode_u32_ == 2u ? L"[Column]" : L"Column");
+    if (hwnd_content_tab_primary_) SetWindowTextW(hwnd_content_tab_primary_, content_secondary_tab_active_ ? L"Content Browser 1" : L"[Content Browser 1]");
+    if (hwnd_content_tab_secondary_) SetWindowTextW(hwnd_content_tab_secondary_, content_secondary_tab_active_ ? L"[Content Browser 2]" : L"Content Browser 2");
+    if (hwnd_content_breadcrumb_) {
+        std::wstring crumb = L"All";
+        if (!content_source_prefix_utf8_.empty()) {
+            crumb += L" > ";
+            crumb += utf8_to_wide(content_source_prefix_utf8_);
+        } else {
+            crumb += L" > Content";
+        }
+        SetWindowTextW(hwnd_content_breadcrumb_, crumb.c_str());
+    }
+    const bool can_back = content_nav_index_i32_ > 0;
+    const bool can_forward = (content_nav_index_i32_ >= 0) &&
+                             ((size_t)(content_nav_index_i32_ + 1) < content_nav_history_utf8_.size());
+    if (hwnd_content_back_) EnableWindow(hwnd_content_back_, can_back ? TRUE : FALSE);
+    if (hwnd_content_forward_) EnableWindow(hwnd_content_forward_, can_forward ? TRUE : FALSE);
+    if (hwnd_content_save_all_) SetWindowTextW(hwnd_content_save_all_, L"Save All");
+    if (hwnd_content_add_) SetWindowTextW(hwnd_content_add_, L"Add");
+    if (hwnd_content_import_toolbar_) SetWindowTextW(hwnd_content_import_toolbar_, L"Import");
+    if (hwnd_content_fab_) SetWindowTextW(hwnd_content_fab_, L"Fab/Vault");
+
+    const int spacing_px = ew_content_thumbnail_spacing_px(content_thumbnail_size_u32_);
+    if (hwnd_content_thumb_) ListView_SetIconSpacing(hwnd_content_thumb_, spacing_px, spacing_px);
+    if (hwnd_asset_thumb_) ListView_SetIconSpacing(hwnd_asset_thumb_, spacing_px, spacing_px);
 }
 
 void App::RefreshContent3DBrowserSurface() {
@@ -9898,19 +12226,76 @@ void App::RefreshContent3DBrowserSurface() {
         const LRESULT row = SendMessageW(hwnd_content_3d_, LB_ADDSTRING, 0, (LPARAM)line.c_str());
         if (row >= 0) SendMessageW(hwnd_content_3d_, LB_SETITEMDATA, (WPARAM)row, (LPARAM)src_index);
     }
-    if (!content_selected_rel_utf8_.empty()) (void)SelectContentRelativePath(content_selected_rel_utf8_);
+    if (!content_selected_rel_utf8_.empty()) (void)SelectContentRelativePath(content_selected_rel_utf8_, false);
+}
+
+void App::ShowContentBrowserSettingsMenu(HWND anchor_hwnd) {
+    HWND anchor = anchor_hwnd ? anchor_hwnd : hwnd_content_settings_;
+    if (!anchor) return;
+
+    HMENU menu = CreatePopupMenu();
+    HMENU view_menu = CreatePopupMenu();
+    HMENU path_menu = CreatePopupMenu();
+    HMENU thumb_menu = CreatePopupMenu();
+
+    auto checked = [](bool on) -> UINT { return MF_STRING | (on ? MF_CHECKED : 0u); };
+
+    AppendMenuW(view_menu, checked(content_view_mode_u32_ == 0u), EW_CMD_CONTENT_OPT_VIEW_GRID, L"Grid");
+    AppendMenuW(view_menu, checked(content_view_mode_u32_ == 1u), EW_CMD_CONTENT_OPT_VIEW_LIST, L"List");
+    AppendMenuW(view_menu, checked(content_view_mode_u32_ == 2u), EW_CMD_CONTENT_OPT_VIEW_COLUMNS, L"Column");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)view_menu, L"View Type");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, checked(content_sources_panel_visible_), EW_CMD_CONTENT_OPT_SOURCES_PANEL, L"Show Sources Panel");
+    AppendMenuW(menu, checked(content_show_favorites_), EW_CMD_CONTENT_OPT_SHOW_FAVORITES, L"Favorites");
+    AppendMenuW(menu, checked(content_show_folders_), EW_CMD_CONTENT_OPT_SHOW_FOLDERS, L"Folders");
+    AppendMenuW(menu, checked(content_show_empty_folders_), EW_CMD_CONTENT_OPT_SHOW_EMPTY_FOLDERS, L"Empty Folders");
+    AppendMenuW(menu, checked(content_organize_folders_), EW_CMD_CONTENT_OPT_ORGANIZE_FOLDERS, L"Organize Folders");
+    AppendMenuW(path_menu, checked(content_show_all_folder_), EW_CMD_CONTENT_OPT_SHOW_ALL_FOLDER, L"All Folder");
+    AppendMenuW(path_menu, checked(content_show_cpp_classes_), EW_CMD_CONTENT_OPT_SHOW_CPP, L"C++ Classes");
+    AppendMenuW(path_menu, checked(content_show_developers_content_), EW_CMD_CONTENT_OPT_SHOW_DEVELOPERS, L"Developers Content");
+    AppendMenuW(path_menu, checked(content_show_engine_content_), EW_CMD_CONTENT_OPT_SHOW_ENGINE, L"Engine Content");
+    AppendMenuW(path_menu, checked(content_show_plugin_content_), EW_CMD_CONTENT_OPT_SHOW_PLUGIN, L"Plugin Content");
+    AppendMenuW(path_menu, checked(content_show_localized_content_), EW_CMD_CONTENT_OPT_SHOW_LOCALIZED, L"Localized Content");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)path_menu, L"Path View Filters");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, checked(content_search_asset_class_names_), EW_CMD_CONTENT_OPT_SEARCH_CLASS, L"Search Asset Class Names");
+    AppendMenuW(menu, checked(content_search_asset_path_), EW_CMD_CONTENT_OPT_SEARCH_PATH, L"Search Asset Path");
+    AppendMenuW(menu, checked(content_search_collection_names_), EW_CMD_CONTENT_OPT_SEARCH_COLLECTION, L"Search Collection Names");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(thumb_menu, checked(content_thumbnail_size_u32_ == 0u), EW_CMD_CONTENT_OPT_THUMB_TINY, L"Thumbnail Size: Tiny");
+    AppendMenuW(thumb_menu, checked(content_thumbnail_size_u32_ == 1u), EW_CMD_CONTENT_OPT_THUMB_SMALL, L"Thumbnail Size: Small");
+    AppendMenuW(thumb_menu, checked(content_thumbnail_size_u32_ == 2u), EW_CMD_CONTENT_OPT_THUMB_MEDIUM, L"Thumbnail Size: Medium");
+    AppendMenuW(thumb_menu, checked(content_thumbnail_size_u32_ == 3u), EW_CMD_CONTENT_OPT_THUMB_LARGE, L"Thumbnail Size: Large");
+    AppendMenuW(thumb_menu, checked(content_thumbnail_size_u32_ == 4u), EW_CMD_CONTENT_OPT_THUMB_HUGE, L"Thumbnail Size: Huge");
+    AppendMenuW(thumb_menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(thumb_menu, checked(content_thumbnail_edit_mode_), EW_CMD_CONTENT_OPT_THUMB_EDIT, L"Thumbnail Edit Mode");
+    AppendMenuW(thumb_menu, checked(content_realtime_thumbnails_), EW_CMD_CONTENT_OPT_THUMB_REALTIME, L"Real-Time Thumbnails");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)thumb_menu, L"Thumbnails");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, checked(content_always_expand_tooltips_), EW_CMD_CONTENT_OPT_EXPAND_TOOLTIPS, L"Always Expand Tooltips");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, checked(content_locked_), EW_CMD_CONTENT_OPT_LOCK_BROWSER, L"Lock Content Browser");
+
+    RECT rc{};
+    GetWindowRect(anchor, &rc);
+    const UINT flags = TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD | TPM_RIGHTBUTTON;
+    const UINT cmd = TrackPopupMenu(menu, flags, rc.left, rc.bottom + 2, 0, hwnd_main_, nullptr);
+    DestroyMenu(menu);
+    if (cmd != 0u) SendMessageW(hwnd_main_, WM_COMMAND, MAKEWPARAM(cmd, 0), 0);
 }
 
 void App::SetContentBrowserViewMode(uint32_t mode_u32) {
     content_view_mode_u32_ = (mode_u32 <= 2u) ? mode_u32 : 0u;
-    if (hwnd_content_list_) ShowWindow(hwnd_content_list_, content_view_mode_u32_ == 0u ? SW_SHOW : SW_HIDE);
-    if (hwnd_content_thumb_) ShowWindow(hwnd_content_thumb_, content_view_mode_u32_ == 1u ? SW_SHOW : SW_HIDE);
-    if (hwnd_content_3d_) ShowWindow(hwnd_content_3d_, content_view_mode_u32_ == 2u ? SW_SHOW : SW_HIDE);
+    ConfigureContentBrowserListView();
+    if (hwnd_content_list_) ShowWindow(hwnd_content_list_, content_view_mode_u32_ == 0u ? SW_HIDE : SW_SHOW);
+    if (hwnd_content_thumb_) ShowWindow(hwnd_content_thumb_, content_view_mode_u32_ == 0u ? SW_SHOW : SW_HIDE);
+    if (hwnd_content_3d_) ShowWindow(hwnd_content_3d_, SW_HIDE);
     RefreshContentBrowserChrome();
 }
 
-bool App::SelectContentRelativePath(const std::string& rel_utf8) {
+bool App::SelectContentRelativePath(const std::string& rel_utf8, bool honor_lock) {
     if (rel_utf8.empty()) return false;
+    if (honor_lock && content_locked_) return false;
     content_selection_sync_guard_ = true;
     auto clear_list = [&](HWND h)->void {
         if (!h) return;
@@ -9927,9 +12312,11 @@ bool App::SelectContentRelativePath(const std::string& rel_utf8) {
         if (!h) return false;
         const int n = ListView_GetItemCount(h);
         for (int i = 0; i < n; ++i) {
-            wchar_t w2[512]; w2[0] = 0;
-            ew_listview_get_item_text_w(h, i, 0, w2, 512);
-            if (wide_to_utf8(std::wstring(w2)) == rel_utf8) {
+            LVITEMW item{};
+            item.mask = LVIF_PARAM;
+            item.iItem = i;
+            if (!ListView_GetItem(h, &item)) continue;
+            if (item.lParam >= 0 && (size_t)item.lParam < content_items_.size() && content_items_[(size_t)item.lParam].rel_utf8 == rel_utf8) {
                 ListView_SetItemState(h, i, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
                 ListView_EnsureVisible(h, i, FALSE);
                 return true;
@@ -9968,6 +12355,7 @@ void App::RefreshContentBrowserFromRuntime(uint32_t limit_u32) {
     content_items_.clear();
     content_selected_rel_utf8_.clear();
     if (!scene_) {
+        RebuildContentSourcesPanel();
         RebuildContentBrowserViews();
         return;
     }
@@ -9982,12 +12370,25 @@ void App::RefreshContentBrowserFromRuntime(uint32_t limit_u32) {
     for (const auto& e : entries) {
         content_items_.push_back({e.relpath_utf8, e.label_utf8.empty() ? e.relpath_utf8 : e.label_utf8});
     }
+
+    // Surface internal substrate vault handles as a mounted library lane.
+    std::vector<std::string> vault_entries_utf8;
+    std::string vault_err_utf8;
+    if (scene_->SnapshotVaultEntries(std::min<uint32_t>(limit_u32, 128u), vault_entries_utf8, &vault_err_utf8)) {
+        for (const auto& rel : vault_entries_utf8) {
+            const std::string prefixed = std::string("AIVault/") + rel;
+            content_items_.push_back({prefixed, ew_content_leaf_name_utf8(rel)});
+        }
+    }
+
+    RebuildContentSourcesPanel();
     RebuildContentBrowserViews();
     RefreshContentBrowserChrome();
 }
 
 void App::RebuildContentBrowserViews() {
     content_visible_indices_.clear();
+    ConfigureContentBrowserListView();
 
     std::string query_utf8;
     if (hwnd_content_search_) {
@@ -10002,11 +12403,18 @@ void App::RebuildContentBrowserViews() {
     auto matches_query = [&](const ContentItem& item) -> bool {
         if (query_utf8.empty()) return true;
         const std::string rel = ew_lower_ascii_copy(item.rel_utf8);
-        const std::string label = ew_lower_ascii_copy(item.label_utf8.empty() ? item.rel_utf8 : item.label_utf8);
-        return rel.find(query_utf8) != std::string::npos || label.find(query_utf8) != std::string::npos;
+        const std::string label = ew_lower_ascii_copy(item.label_utf8.empty() ? ew_content_leaf_name_utf8(item.rel_utf8) : item.label_utf8);
+        const std::string klass = ew_lower_ascii_copy(ew_content_class_guess_utf8(item.rel_utf8));
+        const std::string collection = ew_lower_ascii_copy(ew_content_top_folder_utf8(item.rel_utf8));
+        bool matched = label.find(query_utf8) != std::string::npos;
+        if (content_search_asset_path_ && rel.find(query_utf8) != std::string::npos) matched = true;
+        if (content_search_asset_class_names_ && klass.find(query_utf8) != std::string::npos) matched = true;
+        if (content_search_collection_names_ && collection.find(query_utf8) != std::string::npos) matched = true;
+        return matched;
     };
 
     for (size_t i = 0; i < content_items_.size(); ++i) {
+        if (!ew_content_path_matches_prefix_utf8(content_items_[i].rel_utf8, content_source_prefix_utf8_)) continue;
         if (matches_query(content_items_[i])) content_visible_indices_.push_back(i);
     }
 
@@ -10019,18 +12427,28 @@ void App::RebuildContentBrowserViews() {
         if (src >= content_items_.size()) continue;
         const ContentItem& item = content_items_[src];
         const std::wstring rel_w = utf8_to_wide(item.rel_utf8);
-        const std::wstring label_w = utf8_to_wide(item.label_utf8.empty() ? item.rel_utf8 : item.label_utf8);
+        const std::wstring label_w = utf8_to_wide(item.label_utf8.empty() ? ew_content_leaf_name_utf8(item.rel_utf8) : item.label_utf8);
+        const std::wstring type_w = utf8_to_wide(ew_content_class_guess_utf8(item.rel_utf8));
+        const std::wstring collection_w = utf8_to_wide(ew_content_top_folder_utf8(item.rel_utf8));
 
         if (hwnd_content_list_) {
             LVITEMW lv{};
             lv.mask = LVIF_TEXT | LVIF_IMAGE | LVIF_PARAM;
             lv.iItem = ListView_GetItemCount(hwnd_content_list_);
             lv.iSubItem = 0;
-            lv.pszText = const_cast<LPWSTR>(rel_w.c_str());
+            lv.pszText = const_cast<LPWSTR>(label_w.c_str());
             lv.iImage = 0;
             lv.lParam = (LPARAM)src;
             const int idx = ListView_InsertItem(hwnd_content_list_, &lv);
-            if (idx >= 0) ew_listview_set_item_text_w(hwnd_content_list_, idx, 1, label_w);
+            if (idx >= 0) {
+                if (content_view_mode_u32_ == 2u) {
+                    ew_listview_set_item_text_w(hwnd_content_list_, idx, 1, type_w);
+                    ew_listview_set_item_text_w(hwnd_content_list_, idx, 2, rel_w);
+                    ew_listview_set_item_text_w(hwnd_content_list_, idx, 3, collection_w);
+                } else {
+                    ew_listview_set_item_text_w(hwnd_content_list_, idx, 1, rel_w);
+                }
+            }
         }
 
         if (hwnd_content_thumb_) {
@@ -10039,7 +12457,7 @@ void App::RebuildContentBrowserViews() {
             lv.iItem = ListView_GetItemCount(hwnd_content_thumb_);
             lv.iSubItem = 0;
             lv.pszText = const_cast<LPWSTR>(label_w.c_str());
-            lv.iImage = 0;
+            lv.iImage = ew_semantic_thumb_image_index(label_w, type_w);
             lv.lParam = (LPARAM)src;
             (void)ListView_InsertItem(hwnd_content_thumb_, &lv);
         }
@@ -10049,18 +12467,21 @@ void App::RebuildContentBrowserViews() {
             lv.iItem = ListView_GetItemCount(hwnd_asset_thumb_);
             lv.iSubItem = 0;
             lv.pszText = const_cast<LPWSTR>(label_w.c_str());
-            lv.iImage = 0;
+            lv.iImage = ew_semantic_thumb_image_index(label_w, type_w);
             lv.lParam = (LPARAM)src;
             (void)ListView_InsertItem(hwnd_asset_thumb_, &lv);
         }
     }
 
     RefreshContent3DBrowserSurface();
+    if (!content_selected_rel_utf8_.empty()) (void)SelectContentRelativePath(content_selected_rel_utf8_, false);
 }
 
 int App::Run(HINSTANCE hInst) {
     // Win64 enforcement at runtime too (belt + suspenders)
     static_assert(sizeof(void*) == 8, "Win64 required");
+    exit_requested_ = false;
+    bool viewport_bootstrap_failed = false;
 
     std::wstring app_id_w = utf8_to_wide(cfg_.app_user_model_id_utf8.empty()
         ? std::string(ew_editor_build_enabled ? "GenesisEngine.Editor" : "GenesisEngine.Runtime")
@@ -10082,24 +12503,6 @@ int App::Run(HINSTANCE hInst) {
         if (use_startup_splash) ew_startup_splash_destroy(&splash);
     };
 
-    splash_set_subtitle(L"Creating editor shell...");
-    CreateMainWindow(hInst);
-    if (!hwnd_main_) {
-        splash_destroy();
-        MessageBoxA(nullptr, "Failed to create the Genesis Engine main window.", "Genesis Engine", MB_ICONERROR | MB_OK);
-        return 1;
-    }
-    CreateChildWindows();
-    if (!hwnd_viewport_) {
-        splash_destroy();
-        MessageBoxA(hwnd_main_, "Failed to create the Genesis Engine viewport window.", "Genesis Engine", MB_ICONERROR | MB_OK);
-        DestroyWindow(hwnd_main_);
-        return 1;
-    }
-
-    splash_set_subtitle(L"Initializing simulation, AI, and repository surfaces...");
-    scene_ = new Scene();
-
     {
         std::filesystem::path log_path = cfg_.output_log_path_utf8.empty()
             ? (std::filesystem::current_path() / "GenesisEngineState" / "Logs" / (ew_editor_build_enabled ? "genesis_engine.log" : "genesis_runtime.log"))
@@ -10115,6 +12518,49 @@ int App::Run(HINSTANCE hInst) {
             fclose(f);
         }
     }
+    AppendOutputUtf8(std::string("APP_LOG path=") + wide_to_utf8(output_log_path_w_));
+    AppendOutputUtf8("RUN step=log.ready");
+
+    splash_set_subtitle(L"Creating editor shell...");
+    AppendOutputUtf8("RUN step=main_window.begin");
+    CreateMainWindow(hInst);
+    AppendOutputUtf8("RUN step=main_window.done");
+    if (!hwnd_main_) {
+        splash_destroy();
+        MessageBoxA(nullptr, "Failed to create the Genesis Engine main window.", "Genesis Engine", MB_ICONERROR | MB_OK);
+        return 1;
+    }
+    AppendOutputUtf8("RUN step=child_windows.begin");
+    CreateChildWindows();
+    AppendOutputUtf8("RUN step=child_windows.done");
+    if (!hwnd_main_) {
+        splash_destroy();
+        MessageBoxA(nullptr, "Failed to create the Genesis Engine main window.", "Genesis Engine", MB_ICONERROR | MB_OK);
+        return 1;
+    }
+    if (!hwnd_viewport_) {
+        viewport_bootstrap_failed = true;
+        AppendOutputUtf8("RUN_WARN viewport control creation failed; entering fallback editor shell mode.");
+        hwnd_viewport_ = CreateWindowW(L"STATIC",
+                                       L"Genesis viewport unavailable.\r\n\r\nSimulation shell remains active.",
+                                       WS_CHILD | WS_VISIBLE | SS_CENTER | SS_CENTERIMAGE,
+                                       0, 0, 64, 64,
+                                       hwnd_main_,
+                                       nullptr,
+                                       GetModuleHandleW(nullptr),
+                                       nullptr);
+        if (!hwnd_viewport_) {
+            splash_destroy();
+            MessageBoxA(hwnd_main_, "Failed to create both primary and fallback viewport controls.", "Genesis Engine", MB_ICONERROR | MB_OK);
+            DestroyWindow(hwnd_main_);
+            return 1;
+        }
+    }
+
+    splash_set_subtitle(L"Initializing simulation, AI, and repository surfaces...");
+    AppendOutputUtf8("RUN step=scene.begin");
+    scene_ = new Scene();
+    AppendOutputUtf8("RUN step=scene.done");
 
     if (ew_editor_build_enabled) {
         SetContentBrowserViewMode(0u);
@@ -10124,11 +12570,14 @@ int App::Run(HINSTANCE hInst) {
         RefreshContentBrowserFromRuntime(200u);
     }
 
-    // Ensure AI learning/crawling boot OFF through the runtime's canonical state.
+    // Ensure simulation play + AI learning/crawling boot OFF through the runtime's canonical state.
     {
         EwControlPacket cp{};
         cp.source_u16 = 1;
         cp.tick_u64 = 0;
+        cp.kind = EwControlPacketKind::SimSetPlay;
+        cp.payload.sim_set_play.enabled_u8 = 0;
+        (void)ew_runtime_submit_control_packet(&scene_->sm, &cp);
         cp.kind = EwControlPacketKind::AiSetLearning;
         cp.payload.ai_set_learning.enabled_u8 = 0;
         (void)ew_runtime_submit_control_packet(&scene_->sm, &cp);
@@ -10142,19 +12591,26 @@ int App::Run(HINSTANCE hInst) {
 
 
     // Headless visualization mode: keep simulation running but skip continuous presentation.
-    visualize_enabled_ = cfg_.start_visualization && !(env_truthy("GENESIS_HEADLESS") || env_truthy("HEADLESS"));
+    visualize_enabled_ = !viewport_bootstrap_failed &&
+                         cfg_.start_visualization &&
+                         !(env_truthy("GENESIS_HEADLESS") || env_truthy("HEADLESS"));
     scene_->sm.visualization_headless = !visualize_enabled_;
     visualization_fault_utf8_.clear();
+    if (viewport_bootstrap_failed) {
+        visualization_fault_utf8_ = "startup: viewport control unavailable";
+    }
     confinement_particles_enabled_ = cfg_.start_confinement_particles;
     resonance_view_ = cfg_.start_resonance_view;
     live_mode_enabled_ = cfg_.start_live_mode;
     if (hwnd_viewport_) SetWindowTextW(hwnd_viewport_, L"");
     SyncLiveModeProjection();
     RefreshTopBarChrome();
-    if (!output_log_path_w_.empty()) {
-        AppendOutputUtf8(std::string("APP_LOG path=") + wide_to_utf8(output_log_path_w_));
+    if (ui_layer_) {
+        ui_layer_->BindToggle("Live Mode", &live_mode_enabled_);
+        ui_layer_->BindToggle("Resonance View", &resonance_view_);
+        ui_layer_->BindToggle("Confinement Particles", &confinement_particles_enabled_);
+        ui_layer_->BindToggle("Visualization", &visualize_enabled_);
     }
-    AppendOutputUtf8(BuildPhotonConfinementStatusUtf8());
     AppendOutputUtf8("PHOTON_CONTROLS key=F8 cmds=\"viewport photon on|off|toggle|status\"");
     {
         std::wstring key_file_w;
@@ -10166,58 +12622,22 @@ int App::Run(HINSTANCE hInst) {
         }
     }
     for (const std::string& cmd : cfg_.startup_commands_utf8) {
-        ExecuteExternalCommandUtf8(cmd);
+        try {
+            ExecuteExternalCommandUtf8(cmd);
+        } catch (const std::exception& ex) {
+            AppendOutputUtf8(std::string("STARTUP_CMD_FAIL cmd=") + cmd + " reason=" + ex.what());
+        } catch (...) {
+            AppendOutputUtf8(std::string("STARTUP_CMD_FAIL cmd=") + cmd + " reason=unknown_exception");
+        }
     }
 
     if (visualize_enabled_) {
         splash_set_subtitle(L"Initializing Vulkan device and shader pipeline...");
         try {
-            vk_ = new VkCtx();
-            vk_->enable_validation = env_truthy("EW_VK_VALIDATION");
-
-            // Optional OpenXR init (Vulkan path). If OpenXR is present, we pull the
-            // required Vulkan instance/device extension lists and include them in the
-            // Vulkan creation path. This keeps the build production-grade without
-            // requiring display firmware changes.
-            const bool want_xr = env_truthy("GENESIS_OPENXR") || env_truthy("GENESIS_XR") || env_truthy("OPENXR");
-            bool xr_ok_init = false;
-            if (want_xr) {
-                xr_ok_init = xr_.Init();
+            unsigned long seh_code = 0ul;
+            if (!InitializeRendererGuarded(&seh_code)) {
+                throw std::runtime_error(ew_format_windows_exception_utf8("startup renderer", seh_code));
             }
-
-            vk_->instance = create_instance(vk_->enable_validation, &vk_->dbg,
-                                            xr_ok_init ? xr_.VulkanInstanceExtensions() : "");
-            vk_->surface = create_surface(vk_->instance, hwnd_viewport_);
-            vk_->phys = pick_phys(vk_->instance);
-            if (!vk_->phys) {
-                throw std::runtime_error("No Vulkan physical device found.");
-            }
-            vk_->gfxq_family = find_gfx_queue(vk_->phys, vk_->surface);
-            vk_->dev = create_device(vk_->phys, vk_->gfxq_family, &vk_->gfxq,
-                                     xr_ok_init ? xr_.VulkanDeviceExtensions() : "");
-
-            // Bind Vulkan to OpenXR and create session. This is required for eye-gaze.
-            if (xr_ok_init) {
-                xr_.BindVulkan(vk_->instance, vk_->phys, vk_->dev, vk_->gfxq_family, 0);
-            }
-
-            VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
-            pci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-            pci.queueFamilyIndex = vk_->gfxq_family;
-            vk_check(vkCreateCommandPool(vk_->dev, &pci, nullptr, &vk_->cmdpool), "vkCreateCommandPool");
-
-            VkSemaphoreCreateInfo sci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-            vk_check(vkCreateSemaphore(vk_->dev, &sci, nullptr, &vk_->sem_image), "vkCreateSemaphore(image)");
-            vk_check(vkCreateSemaphore(vk_->dev, &sci, nullptr, &vk_->sem_render), "vkCreateSemaphore(render)");
-
-            VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-            fci.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-            vk_check(vkCreateFence(vk_->dev, &fci, nullptr, &vk_->fence), "vkCreateFence");
-
-            // Initial swap.
-            RECT vrc{}; GetClientRect(hwnd_viewport_, &vrc);
-            create_swap(*vk_, (uint32_t)(vrc.right - vrc.left), (uint32_t)(vrc.bottom - vrc.top));
-            create_pipeline(*vk_);
         } catch (const std::exception& ex) {
             splash_set_subtitle(L"Renderer disabled. Continuing with editor shell...");
             DisableVisualizationWithReason(std::string("startup: ") + ex.what());
@@ -10234,13 +12654,25 @@ int App::Run(HINSTANCE hInst) {
     MSG msg{};
     while (running_) {
         while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
-            if (msg.message == WM_QUIT) { running_ = false; break; }
+            if (msg.message == WM_QUIT) {
+                if (hwnd_main_ && IsWindow(hwnd_main_)) {
+                    AppendOutputUtf8("APP_LOOP: ignored stray WM_QUIT while main window is still alive");
+                    continue;
+                }
+                AppendOutputUtf8(std::string("APP_LOOP: accepted WM_QUIT main_valid=") +
+                                 ((hwnd_main_ && IsWindow(hwnd_main_)) ? "1" : "0") +
+                                 " exit_requested=" + (exit_requested_ ? "1" : "0"));
+                running_ = false;
+                break;
+            }
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
         try {
-            Tick();
-            Render();
+            unsigned long seh_code = 0ul;
+            if (!ExecuteFrameGuarded(&seh_code)) {
+                DisableVisualizationWithReason(ew_format_windows_exception_utf8("frame loop", seh_code));
+            }
         } catch (const std::exception& ex) {
             DisableVisualizationWithReason(std::string("frame loop: ") + ex.what());
         } catch (...) {
@@ -10257,10 +12689,26 @@ int App::Run(HINSTANCE hInst) {
     scene_ = nullptr;
     splash_destroy();
 
+    if (!output_log_path_w_.empty()) {
+        const std::filesystem::path notebook_repo_root = ew_resolve_notebook_repo_root_local();
+        ew_dispatch_notebook_log_capture_local(notebook_repo_root,
+                                               ew_editor_build_enabled ? L"genesis_editor_session" : L"genesis_runtime_session",
+                                               L"success",
+                                               output_log_path_w_);
+    }
+    AppendOutputUtf8("RUN step=shutdown.done");
+
     return 0;
 }
 
 static inline float ew_clampf(float v, float lo, float hi) { return (v < lo) ? lo : (v > hi) ? hi : v; }
+
+static std::string ew_format_windows_exception_utf8(const char* stage_utf8, unsigned long code) {
+    char buf[128]{};
+    const unsigned long normalized = code;
+    std::snprintf(buf, sizeof(buf), "%s: structured exception 0x%08lX", stage_utf8 ? stage_utf8 : "fault", normalized);
+    return std::string(buf);
+}
 
 static void ew_draw_toggle_switch(const DRAWITEMSTRUCT* dis, bool on) {
     if (!dis) return;
@@ -10399,18 +12847,90 @@ static LRESULT ew_tab_custom_draw(const NMHDR* nh, LRESULT* out_res) {
     return 1;
 }
 
+static LRESULT ew_header_custom_draw(const NMHDR* nh, LRESULT* out_res) {
+    if (!nh || !out_res) return 0;
+    const NMCUSTOMDRAW* cd = (const NMCUSTOMDRAW*)nh;
+    ew_theme_init_once();
+    switch (cd->dwDrawStage) {
+        case CDDS_PREPAINT: {
+            *out_res = CDRF_NOTIFYITEMDRAW;
+            return 1;
+        }
+        case CDDS_ITEMPREPAINT: {
+            RECT rc = cd->rc;
+            const bool hot = (cd->uItemState & CDIS_HOT) != 0;
+            const bool selected = (cd->uItemState & CDIS_SELECTED) != 0;
+            HBRUSH br = CreateSolidBrush(selected ? g_theme.highlight_bg_strong : g_theme.bg_elevated);
+            FillRect(cd->hdc, &rc, br);
+            DeleteObject(br);
+
+            HPEN pen = CreatePen(PS_SOLID, 1, hot || selected ? g_theme.gold : g_theme.border_soft);
+            HGDIOBJ old_pen = SelectObject(cd->hdc, pen);
+            MoveToEx(cd->hdc, rc.left, rc.bottom - 1, nullptr);
+            LineTo(cd->hdc, rc.right, rc.bottom - 1);
+            MoveToEx(cd->hdc, rc.right - 1, rc.top, nullptr);
+            LineTo(cd->hdc, rc.right - 1, rc.bottom);
+            SelectObject(cd->hdc, old_pen);
+            DeleteObject(pen);
+
+            wchar_t buf[128]{};
+            HDITEMW item{};
+            item.mask = HDI_TEXT | HDI_FORMAT;
+            item.pszText = buf;
+            item.cchTextMax = (int)_countof(buf) - 1;
+            Header_GetItem(nh->hwndFrom, (int)cd->dwItemSpec, &item);
+
+            RECT tr = rc;
+            tr.left += 10;
+            tr.right -= 8;
+            SetBkMode(cd->hdc, TRANSPARENT);
+            SetTextColor(cd->hdc, g_theme.text);
+            HFONT oldf = nullptr;
+            if (g_font_ui_bold) oldf = (HFONT)SelectObject(cd->hdc, g_font_ui_bold);
+            DrawTextW(cd->hdc, buf, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+            if (oldf) SelectObject(cd->hdc, oldf);
+
+            *out_res = CDRF_SKIPDEFAULT;
+            return 1;
+        }
+        default: break;
+    }
+    *out_res = CDRF_DODEFAULT;
+    return 1;
+}
+
 void App::Tick() {
     static auto last = std::chrono::high_resolution_clock::now();
     static float acc = 0.0f;
+    static constexpr float kFrameDtMax = 1.0f / 60.0f;
+    static constexpr float kFrameDtMin = 1.0f / 360.0f;
     auto now = std::chrono::high_resolution_clock::now();
     float dt = std::chrono::duration<float>(now - last).count();
     // Use a fixed-step substrate tick at 360 Hz. Render cadence may differ.
     const float tick_dt = 1.0f / 360.0f;
+    if (dt < kFrameDtMin) {
+        const float sleep_dt = kFrameDtMin - std::max(dt, 0.0f);
+        if (sleep_dt > 0.00025f) {
+            std::this_thread::sleep_for(std::chrono::duration<float>(sleep_dt));
+            now = std::chrono::high_resolution_clock::now();
+            dt = std::chrono::duration<float>(now - last).count();
+        }
+    }
     if (dt <= 0.f) dt = tick_dt;
-    if (dt > 0.1f) dt = 0.1f;
+    if (dt > kFrameDtMax) dt = kFrameDtMax;
     last = now;
 
     if (!scene_) return;
+
+    if (live_mode_enabled_) {
+        const uint64_t frame_dt_ns_u64 = (uint64_t)std::llround((double)dt * 1.0e9);
+        const uint32_t viewport_w_u32 = (uint32_t)std::max(1, client_w_);
+        const uint32_t viewport_h_u32 = (uint32_t)std::max(1, client_h_);
+        scene_->sm.temporal_dynamics_submit_live_gpu_calibration(
+            frame_dt_ns_u64,
+            viewport_w_u32,
+            viewport_h_u32);
+    }
 
     // OpenXR event pump + frame begin (for predicted display time).
     // If XR is not enabled/bound, these are no-ops.
@@ -10456,6 +12976,22 @@ void App::Tick() {
     }
     // If we fell behind, drop excess accumulated time deterministically.
     if (acc > tick_dt * (float)kMaxTicksPerFrame) acc = 0.0f;
+    const float temporal_coupling_01 = ew_temporal_coupling_from_runtime_local(scene_->sm);
+    const float tick_interp_01 = ew_saturate_f32_local(acc / tick_dt);
+    static float live_temporal_phase_01 = 0.0f;
+    const float phase_rate_hz = live_mode_enabled_
+        ? (24.0f + 156.0f * temporal_coupling_01)
+        : 18.0f;
+    live_temporal_phase_01 += dt * phase_rate_hz;
+    live_temporal_phase_01 -= std::floor(live_temporal_phase_01);
+    float frame_phase_01 = tick_interp_01;
+    if (live_mode_enabled_) {
+        frame_phase_01 = std::fmod(
+            live_temporal_phase_01 + tick_interp_01 * (0.18f + 0.42f * temporal_coupling_01),
+            1.0f);
+        if (frame_phase_01 < 0.0f) frame_phase_01 += 1.0f;
+    }
+    viewport_temporal_phase_f32_ = frame_phase_01;
 
     // AI status line (deterministic telemetry from substrate).
     if (hwnd_ai_status_ && scene_) {
@@ -10522,6 +13058,10 @@ void App::Tick() {
             ai_learning != prev_ai_learning ||
             ai_crawling != prev_ai_crawling) {
             RefreshAiToggleWidgets();
+            if (!toggle_state_inited || sim_play != prev_sim_play) {
+                seq_play_enabled_ = sim_play;
+                RefreshSequencerPanel();
+            }
             toggle_state_inited = true;
             prev_sim_play = sim_play;
             prev_ai_enabled = ai_enabled;
@@ -10537,11 +13077,18 @@ void App::Tick() {
     // - Translate/Rotate gizmo drag emitting ObjectSetTransform packets
     // All authoritative state remains in anchors; UI only emits control packets.
     // ------------------------------------------------------------------
-    const int panel_w = ew_editor_build_enabled ? ew_ui_clamp_right_dock_width_px(right_dock_width_px_, client_w_) : 0;
-    const int viewport_w = (client_w_ > panel_w) ? (client_w_ - panel_w) : client_w_;
-    const int viewport_h = client_h_;
-    const bool mouse_in_view = (input_.mouse_x >= 0 && input_.mouse_y >= 0 &&
-                               input_.mouse_x < viewport_w && input_.mouse_y < viewport_h);
+    RECT viewport_rc{};
+    if (hwnd_viewport_) GetClientRect(hwnd_viewport_, &viewport_rc);
+    const int viewport_w = std::max(0, (int)(viewport_rc.right - viewport_rc.left));
+    const int viewport_h = std::max(0, (int)(viewport_rc.bottom - viewport_rc.top));
+    POINT mouse_screen{};
+    GetCursorPos(&mouse_screen);
+    POINT mouse_view = mouse_screen;
+    if (hwnd_viewport_) ScreenToClient(hwnd_viewport_, &mouse_view);
+    const int mouse_view_x = mouse_view.x;
+    const int mouse_view_y = mouse_view.y;
+    const bool mouse_in_view = (mouse_view_x >= 0 && mouse_view_y >= 0 &&
+                                mouse_view_x < viewport_w && mouse_view_y < viewport_h);
 
     // Hotkeys: W/E for gizmo mode, F to frame.
     static bool prev_w = false, prev_e = false, prev_f = false;
@@ -10553,28 +13100,28 @@ void App::Tick() {
     prev_w = w_now;
     prev_e = e_now;
 
-// Axis constraint hotkeys: X/Y/Z toggles axis constraint (no Alt). Press again to clear.
-static bool prev_x = false, prev_yk = false, prev_zk = false;
-const bool x_now = (input_.key_down['X'] || input_.key_down['x']);
-const bool y_now2 = (input_.key_down['Y'] || input_.key_down['y']);
-const bool z_now2 = (input_.key_down['Z'] || input_.key_down['z']);
-if (mouse_in_view && !input_.alt) {
-    if (x_now && !prev_x) { editor_axis_constraint_u8_ = (editor_axis_constraint_u8_ == 1) ? 0 : 1; EmitEditorAxisConstraint(); }
-    if (y_now2 && !prev_yk) { editor_axis_constraint_u8_ = (editor_axis_constraint_u8_ == 2) ? 0 : 2; EmitEditorAxisConstraint(); }
-    if (z_now2 && !prev_zk) { editor_axis_constraint_u8_ = (editor_axis_constraint_u8_ == 3) ? 0 : 3; EmitEditorAxisConstraint(); }
-}
-prev_x = x_now;
-prev_yk = y_now2;
-prev_zk = z_now2;
+    // Axis constraint hotkeys: X/Y/Z toggles axis constraint (no Alt). Press again to clear.
+    static bool prev_x = false, prev_yk = false, prev_zk = false;
+    const bool x_now = (input_.key_down['X'] || input_.key_down['x']);
+    const bool y_now2 = (input_.key_down['Y'] || input_.key_down['y']);
+    const bool z_now2 = (input_.key_down['Z'] || input_.key_down['z']);
+    if (mouse_in_view && !input_.alt) {
+        if (x_now && !prev_x) { editor_axis_constraint_u8_ = (editor_axis_constraint_u8_ == 1) ? 0 : 1; EmitEditorAxisConstraint(); }
+        if (y_now2 && !prev_yk) { editor_axis_constraint_u8_ = (editor_axis_constraint_u8_ == 2) ? 0 : 2; EmitEditorAxisConstraint(); }
+        if (z_now2 && !prev_zk) { editor_axis_constraint_u8_ = (editor_axis_constraint_u8_ == 3) ? 0 : 3; EmitEditorAxisConstraint(); }
+    }
+    prev_x = x_now;
+    prev_yk = y_now2;
+    prev_zk = z_now2;
 
-// Undo/redo hotkeys: Ctrl+Z / Ctrl+Y.
-static bool prev_uz = false, prev_uy = false;
-const bool uz_now = (input_.ctrl && (input_.key_down['Z'] || input_.key_down['z']));
-const bool uy_now = (input_.ctrl && (input_.key_down['Y'] || input_.key_down['y']));
-if (uz_now && !prev_uz) { EmitEditorUndo(); RefreshEditorHistoryUi(); }
-if (uy_now && !prev_uy) { EmitEditorRedo(); RefreshEditorHistoryUi(); }
-prev_uz = uz_now;
-prev_uy = uy_now;
+    // Undo/redo hotkeys: Ctrl+Z / Ctrl+Y.
+    static bool prev_uz = false, prev_uy = false;
+    const bool uz_now = (input_.ctrl && (input_.key_down['Z'] || input_.key_down['z']));
+    const bool uy_now = (input_.ctrl && (input_.key_down['Y'] || input_.key_down['y']));
+    if (uz_now && !prev_uz) { EmitEditorUndo(); RefreshEditorHistoryUi(); }
+    if (uy_now && !prev_uy) { EmitEditorRedo(); RefreshEditorHistoryUi(); }
+    prev_uz = uz_now;
+    prev_uy = uy_now;
 
     // Camera rig controls (Alt + mouse):
     //   Alt+LMB orbit, Alt+MMB pan, wheel dolly.
@@ -10641,8 +13188,8 @@ prev_uy = uy_now;
         const float aspect = (viewport_h > 0) ? (float)viewport_w / (float)viewport_h : 1.0f;
         const float fov = 60.0f * 0.01745329251994329577f;
         const float tanh = tanf(fov * 0.5f);
-        const float nx = ((float)input_.mouse_x / (float)viewport_w) * 2.0f - 1.0f;
-        const float ny = 1.0f - ((float)input_.mouse_y / (float)viewport_h) * 2.0f;
+        const float nx = ((float)mouse_view_x / (float)viewport_w) * 2.0f - 1.0f;
+        const float ny = 1.0f - ((float)mouse_view_y / (float)viewport_h) * 2.0f;
 
         // Camera basis from rig.
         const float cy = cosf(cam_yaw_rad_);
@@ -10967,6 +13514,7 @@ if (editor_axis_constraint_u8_ == 1) {
     // Projection (camera-relative instances)
     scene_->instances.clear();
     scene_->instances.reserve(scene_->objects.size() + 20000u);
+    const bool render_world_objects = !live_mode_enabled_;
 
     // Compute emergent realism carrier triples (x=leak Q16.16, y=doppler_k Q16.16, z=harm_mean Q0.15)
     // for all visible object anchors in a single deterministic batch.
@@ -10978,6 +13526,10 @@ if (editor_axis_constraint_u8_ == 1) {
 
     size_t idx_obj = 0;
     for (const auto& o : scene_->objects) {
+        if (!render_world_objects) {
+            ++idx_obj;
+            continue;
+        }
         const float dx = o.xf.pos[0] - cam_.pos[0];
         const float dy = o.xf.pos[1] - cam_.pos[1];
         const float dz = o.xf.pos[2] - cam_.pos[2];
@@ -11033,7 +13585,6 @@ if (editor_axis_constraint_u8_ == 1) {
         }
 
 EwRenderInstance inst{};
-inst.object_id_u64 = o.object_id_u64;
 inst.anchor_id_u32 = o.anchor_id_u32;
 inst.rel_pos_q16_16[0] = (int32_t)(cx * 65536.0f);
 inst.rel_pos_q16_16[1] = (int32_t)(cy * 65536.0f);
@@ -11042,27 +13593,27 @@ inst.rel_pos_q16_16[2] = (int32_t)(cz * 65536.0f);
 
 // Physical parameters
 inst.radius_q16_16 = (int32_t)(o.radius_m_f32 * 65536.0f);
-inst.emissive_q16_16 = (int32_t)(o.emissive_f32 * 65536.0f);
-inst.atmosphere_thickness_q16_16 = (int32_t)(o.atmosphere_thickness_m_f32 * 65536.0f);
 inst.lod_bias_q16_16 = (int32_t)(lod_bias * 65536.0f);
 inst.clarity_q16_16 = (int32_t)(clarity * 65536.0f);
-inst.albedo_rgba8 = o.albedo_rgba8;
-inst.atmosphere_rgba8 = o.atmosphere_rgba8;
 
         // Emergent realism carrier triple derived from a deterministic bundle
         // of anchors: (self, self+1, self+2). This compacts multiple anchors'
         // computations into one carrier triple sent to the shader.
+        const EwCarrierTriple* carrier = (idx_obj < carrier_triples.size()) ? &carrier_triples[idx_obj] : nullptr;
+        const EwPhaseMaterialSample phase_material = ew_build_phase_material_sample(o, clarity, carrier);
+        inst.albedo_rgba8 = phase_material.albedo_rgba8;
+        inst.atmosphere_rgba8 = phase_material.atmosphere_rgba8;
+        inst.emissive_q16_16 = phase_material.emissive_q16_16;
+        inst.atmosphere_thickness_q16_16 = phase_material.atmosphere_thickness_q16_16;
         if (idx_obj < carrier_triples.size()) {
-            inst.carrier_x_u32 = carrier_triples[idx_obj].x_u32;
-            inst.carrier_y_u32 = carrier_triples[idx_obj].y_u32;
-            inst.carrier_z_u32 = carrier_triples[idx_obj].z_u32;
+            inst.carrier_x_u32 = phase_material.carrier_x_u32;
+            inst.carrier_y_u32 = phase_material.carrier_y_u32;
+            inst.carrier_z_u32 = phase_material.carrier_z_u32;
         }
 
 if (o.name_utf8 == "Sun") inst.kind_u32 = 1;
 else if (o.name_utf8 == "Earth") inst.kind_u32 = 2;
 else inst.kind_u32 = 0;
-
-inst.tick_u64 = scene_->sm.canonical_tick;
 scene_->instances.push_back(inst);
         ++idx_obj;
     }
@@ -11071,13 +13622,41 @@ scene_->instances.push_back(inst);
     // will project a deterministic point cloud. Render those points as small
     // emissive instances in camera space.
     {
-        const uint32_t max_pts = 20000u;
+        const uint32_t max_pts = live_mode_enabled_
+            ? std::min<uint32_t>(viewport_lattice_max_points_u32_, 4096u)
+            : 20000u;
         const std::vector<EwVizPoint> pts = ew_runtime_project_points(&scene_->sm, max_pts);
         viewport_projected_points_u32_ = (uint32_t)pts.size();
+        viewport_research_points_u32_ = 0u;
         viewport_anchor_points_visible_u32_ = 0u;
         viewport_anchor_points_hidden_u32_ = 0u;
         if (!pts.empty()) {
-            const float viz_scale_m = 50.0f;
+            // Compute bounding box of projected points
+            float min_x = std::numeric_limits<float>::max();
+            float max_x = std::numeric_limits<float>::lowest();
+            float min_y = std::numeric_limits<float>::max();
+            float max_y = std::numeric_limits<float>::lowest();
+            float min_z = std::numeric_limits<float>::max();
+            float max_z = std::numeric_limits<float>::lowest();
+            for (const EwVizPoint& p : pts) {
+                float x = (float)p.x_q16_16 / 65536.0f;
+                float y = (float)p.y_q16_16 / 65536.0f;
+                float z = (float)p.z_q16_16 / 65536.0f;
+                if (x < min_x) min_x = x;
+                if (x > max_x) max_x = x;
+                if (y < min_y) min_y = y;
+                if (y > max_y) max_y = y;
+                if (z < min_z) min_z = z;
+                if (z > max_z) max_z = z;
+            }
+            float extent_x = max_x - min_x;
+            float extent_y = max_y - min_y;
+            float extent_z = max_z - min_z;
+            float max_extent = std::max({extent_x, extent_y, extent_z, 1.0f});
+            const float reference_size = live_mode_enabled_
+                ? (3.5f + 1.5f * temporal_coupling_01)
+                : 50.0f;
+            const float viz_scale_m = reference_size / max_extent;
             for (const EwVizPoint& p : pts) {
                 const bool is_anchor_particle = (p.anchor_id != 0u);
                 if (is_anchor_particle && !confinement_particles_enabled_) {
@@ -11086,35 +13665,245 @@ scene_->instances.push_back(inst);
                 }
                 if (is_anchor_particle) viewport_anchor_points_visible_u32_++;
 
-                const float wx = ((float)p.x_q16_16 / 65536.0f) * viz_scale_m;
-                const float wy = ((float)p.y_q16_16 / 65536.0f) * viz_scale_m;
-                const float wz = ((float)p.z_q16_16 / 65536.0f) * viz_scale_m;
+                const float density = ew_saturate_f32_local((float)p.density_q0_15 / 32767.0f);
+                const float specularity = ew_saturate_f32_local((float)p.specularity_q0_15 / 32767.0f);
+                const float roughness = ew_saturate_f32_local((float)p.roughness_q0_15 / 32767.0f);
+                const float occlusion = ew_saturate_f32_local((float)p.occlusion_q0_15 / 32767.0f);
+                const float phase_bias = std::max(-1.0f, std::min(1.0f, (float)p.phase_bias_q1_15 / 32767.0f));
+                float nx = std::max(-1.0f, std::min(1.0f, (float)p.vec_x_q1_15 / 32767.0f));
+                float ny = std::max(-1.0f, std::min(1.0f, (float)p.vec_y_q1_15 / 32767.0f));
+                float nz = std::max(-1.0f, std::min(1.0f, (float)p.vec_z_q1_15 / 32767.0f));
+                const float nlen = std::sqrt(nx * nx + ny * ny + nz * nz);
+                if (nlen > 1.0e-6f) {
+                    nx /= nlen;
+                    ny /= nlen;
+                    nz /= nlen;
+                } else {
+                    nx = 0.0f; ny = 0.0f; nz = 1.0f;
+                }
+
+                float bx = 1.0f, by = 0.0f, bz = 0.0f;
+                ew_build_lattice_basis_local(nx, ny, nz, bx, by, bz);
+                const float tx = ny * bz - nz * by;
+                const float ty = nz * bx - nx * bz;
+                const float tz = nx * by - ny * bx;
+                const float local_phase_01 = std::fmod(
+                    frame_phase_01 +
+                    density * 0.23f +
+                    specularity * 0.17f +
+                    (float)((((uint32_t)std::abs((int32_t)p.x_q16_16)) >> 9) & 0xFFu) / 255.0f,
+                    1.0f);
+                const float local_angle = 6.28318530718f * (local_phase_01 < 0.0f ? (local_phase_01 + 1.0f) : local_phase_01);
+                const float observer_shift = phase_bias * (0.020f + 0.060f * temporal_coupling_01);
+                const float curvature = ew_saturate_f32_local(
+                    0.18f + 0.42f * roughness + 0.22f * specularity + 0.18f * std::fabs(phase_bias));
+                const float temporal_advance =
+                    std::sin(local_angle) * (0.10f + 0.26f * temporal_coupling_01) * (0.35f + 0.65f * density);
+                const float curvature_arc =
+                    std::cos(local_angle) * curvature * (0.04f + 0.10f * temporal_coupling_01);
+
+                const float base_x = ((float)p.x_q16_16 / 65536.0f) * viz_scale_m;
+                const float base_y = ((float)p.y_q16_16 / 65536.0f) * viz_scale_m;
+                const float base_z = ((float)p.z_q16_16 / 65536.0f) * viz_scale_m;
+                const float wx = base_x + nx * temporal_advance + bx * (observer_shift + curvature_arc) + tx * curvature_arc * 0.65f;
+                const float wy = base_y + ny * temporal_advance + by * (observer_shift + curvature_arc) + ty * curvature_arc * 0.65f;
+                const float wz = base_z + nz * temporal_advance + bz * (observer_shift + curvature_arc) + tz * curvature_arc * 0.65f;
 
                 float cx = 0.0f, cy = 0.0f, cz = 0.0f;
                 camera_space_pos(wx, wy, wz, cx, cy, cz);
 
                 EwRenderInstance inst{};
-                inst.object_id_u64 = 0;
                 inst.anchor_id_u32 = p.anchor_id;
-                inst.kind_u32 = 0;
+                inst.kind_u32 = live_mode_enabled_ ? EW_RENDER_KIND_LATTICE_FIELD : EW_RENDER_KIND_GENERIC;
                 inst.rel_pos_q16_16[0] = (int32_t)(cx * 65536.0f);
                 inst.rel_pos_q16_16[1] = (int32_t)(cy * 65536.0f);
                 inst.rel_pos_q16_16[2] = (int32_t)(cz * 65536.0f);
                 inst.rel_pos_q16_16[3] = 0;
 
-                const float point_radius_m = is_anchor_particle ? 0.42f : 0.25f;
-                const float emissive = is_anchor_particle ? 3.25f : 2.0f;
+                const float point_radius_m = live_mode_enabled_
+                    ? ((10.0f + 14.0f * density + 10.0f * specularity) / 65536.0f)
+                    : (is_anchor_particle ? 0.42f : 0.25f);
+                const float emissive = live_mode_enabled_
+                    ? (1.10f + density * 2.70f + specularity * 1.35f + temporal_coupling_01 * 0.95f)
+                    : (is_anchor_particle
+                        ? (1.10f + density * 2.25f + specularity * 0.85f)
+                        : (0.40f + density * 1.45f + specularity * 0.55f));
                 inst.radius_q16_16 = (int32_t)(point_radius_m * 65536.0f);
                 inst.emissive_q16_16 = (int32_t)(emissive * 65536.0f);
-                inst.atmosphere_thickness_q16_16 = 0;
+                inst.atmosphere_thickness_q16_16 = (int32_t)((point_radius_m * (0.08f + roughness * 0.32f)) * 65536.0f);
                 inst.lod_bias_q16_16 = 0;
-                inst.clarity_q16_16 = (int32_t)(1.0f * 65536.0f);
-                inst.albedo_rgba8 = p.rgba8;
-                inst.atmosphere_rgba8 = 0;
-                inst.tick_u64 = scene_->sm.canonical_tick;
+                inst.clarity_q16_16 = (int32_t)((live_mode_enabled_ ? (0.82f + 0.18f * temporal_coupling_01) : 1.0f) * 65536.0f);
+
+                const float photon_w = ew_saturate_f32_local(density * (1.0f - roughness) * (1.0f - std::fabs(phase_bias)));
+                const float weighted_w = ew_saturate_f32_local(density * roughness);
+                const float flavor_w = ew_saturate_f32_local(specularity * (1.0f - std::fabs(phase_bias) * 0.5f));
+                const float charged_w = ew_saturate_f32_local(std::fabs(phase_bias) * (0.45f + 0.55f * specularity));
+                const float weight_sum = std::max(0.0001f, photon_w + weighted_w + flavor_w + charged_w);
+                const float base_r = (photon_w * 1.00f + weighted_w * 1.00f + flavor_w * 0.98f + charged_w * 0.18f) / weight_sum;
+                const float base_g = (photon_w * 1.00f + weighted_w * 0.20f + flavor_w * 0.86f + charged_w * 0.54f) / weight_sum;
+                const float base_b = (photon_w * 1.00f + weighted_w * 0.20f + flavor_w * 0.20f + charged_w * 1.00f) / weight_sum;
+                const float alpha = ew_saturate_f32_local(
+                    live_mode_enabled_
+                        ? (0.24f + density * 0.34f + specularity * 0.20f - occlusion * 0.06f)
+                        : ((0.45f + density * 0.40f) * (1.0f - 0.30f * occlusion)));
+                inst.albedo_rgba8 = ew_pack_rgba8_local(
+                    base_r * (0.55f + 0.65f * density),
+                    base_g * (0.55f + 0.65f * density),
+                    base_b * (0.55f + 0.65f * density),
+                    alpha);
+                inst.atmosphere_rgba8 = ew_pack_rgba8_local(
+                    nx * 0.5f + 0.5f,
+                    ny * 0.5f + 0.5f,
+                    nz * 0.5f + 0.5f,
+                    occlusion);
+                inst.carrier_x_u32 = (uint32_t)(int32_t)std::llround((double)(ew_saturate_f32_local(density * (0.65f + 0.35f * temporal_coupling_01)) * 65536.0f));
+                inst.carrier_y_u32 = (uint32_t)(int32_t)std::llround((double)(std::max(-1.0f, std::min(1.0f, phase_bias + observer_shift * 1.8f)) * 65536.0f));
+                const uint32_t spec_q15 = (uint32_t)std::llround((double)(specularity * 32767.0f));
+                const uint32_t rough_q15 = (uint32_t)std::llround((double)(roughness * 32767.0f));
+                inst.carrier_z_u32 = (spec_q15 & 0xFFFFu) | ((rough_q15 & 0xFFFFu) << 16);
+                scene_->instances.push_back(inst);
+
+                if (live_mode_enabled_) {
+                    for (int echo_idx = 1; echo_idx <= 2; ++echo_idx) {
+                        const float echo_decay = std::pow(0.62f, (float)echo_idx);
+                        const float echo_angle = local_angle - 0.55f * (float)echo_idx;
+                        const float echo_backstep = (0.10f + 0.20f * temporal_coupling_01) * (float)echo_idx;
+                        const float echo_arc = std::cos(echo_angle) * curvature * (0.06f + 0.10f * temporal_coupling_01);
+                        const float ex = base_x - nx * echo_backstep + bx * (observer_shift + echo_arc) + tx * echo_arc * 0.85f;
+                        const float ey = base_y - ny * echo_backstep + by * (observer_shift + echo_arc) + ty * echo_arc * 0.85f;
+                        const float ez = base_z - nz * echo_backstep + bz * (observer_shift + echo_arc) + tz * echo_arc * 0.85f;
+                        float ecx = 0.0f, ecy = 0.0f, ecz = 0.0f;
+                        camera_space_pos(ex, ey, ez, ecx, ecy, ecz);
+
+                        EwRenderInstance echo = inst;
+                        echo.kind_u32 = EW_RENDER_KIND_LATTICE_ECHO;
+                        echo.rel_pos_q16_16[0] = (int32_t)std::llround((double)ecx * 65536.0);
+                        echo.rel_pos_q16_16[1] = (int32_t)std::llround((double)ecy * 65536.0);
+                        echo.rel_pos_q16_16[2] = (int32_t)std::llround((double)ecz * 65536.0);
+                        const float echo_radius = point_radius_m * (0.90f - 0.18f * (float)echo_idx);
+                        const float echo_emissive = emissive * (0.48f + 0.24f * echo_decay);
+                        echo.radius_q16_16 = (int32_t)std::llround((double)echo_radius * 65536.0);
+                        echo.emissive_q16_16 = (int32_t)std::llround((double)echo_emissive * 65536.0);
+                        echo.clarity_q16_16 = (int32_t)std::llround((double)(0.55f + 0.20f * echo_decay) * 65536.0);
+                        echo.albedo_rgba8 = ew_pack_rgba8_local(
+                            base_r * (0.42f + 0.46f * echo_decay),
+                            base_g * (0.42f + 0.46f * echo_decay),
+                            base_b * (0.52f + 0.50f * echo_decay),
+                            0.14f + 0.14f * echo_decay);
+                        echo.carrier_x_u32 = (uint32_t)(int32_t)std::llround((double)(density * echo_decay * 65536.0f));
+                        echo.carrier_y_u32 = (uint32_t)(int32_t)std::llround((double)(std::max(-1.0f, std::min(1.0f, phase_bias + echo_arc * 2.2f)) * 65536.0f));
+                        scene_->instances.push_back(echo);
+                    }
+                }
+            }
+        }
+    }
+
+    if (confinement_particles_enabled_ && scene_->research_confinement.loaded) {
+        std::vector<genesis::GeResearchParticleVizPoint> research_points;
+        // Increase max_points to make trajectory paths denser and more continuous
+        genesis::ge_build_research_particle_viz(
+            scene_->research_confinement,
+            scene_->sm.canonical_tick,
+            384u, // was 96u; increase for denser trails
+            frame_phase_01,
+            temporal_coupling_01,
+            research_points);
+        viewport_research_points_u32_ = (uint32_t)research_points.size();
+        if (!research_points.empty()) {
+            float min_x = std::numeric_limits<float>::max();
+            float max_x = std::numeric_limits<float>::lowest();
+            float min_y = std::numeric_limits<float>::max();
+            float max_y = std::numeric_limits<float>::lowest();
+            float min_z = std::numeric_limits<float>::max();
+            float max_z = std::numeric_limits<float>::lowest();
+            for (const genesis::GeResearchParticleVizPoint& p : research_points) {
+                min_x = std::min(min_x, p.x);
+                max_x = std::max(max_x, p.x);
+                min_y = std::min(min_y, p.y);
+                max_y = std::max(max_y, p.y);
+                min_z = std::min(min_z, p.z);
+                max_z = std::max(max_z, p.z);
+            }
+            const float extent_x = max_x - min_x;
+            const float extent_y = max_y - min_y;
+            const float extent_z = max_z - min_z;
+            const float max_extent = std::max({extent_x, extent_y, extent_z, 1.0e-9f});
+            const float viz_scale_m = live_mode_enabled_ ? (4.0f / max_extent) : (38.0f / max_extent);
+
+            for (const genesis::GeResearchParticleVizPoint& p : research_points) {
+                float nx = p.vx;
+                float ny = p.vy;
+                float nz = p.vz;
+                const float nlen = std::sqrt(nx * nx + ny * ny + nz * nz);
+                if (nlen > 1.0e-6f) {
+                    nx /= nlen;
+                    ny /= nlen;
+                    nz /= nlen;
+                } else {
+                    nx = 0.0f;
+                    ny = 0.0f;
+                    nz = 1.0f;
+                }
+                float bx = 1.0f, by = 0.0f, bz = 0.0f;
+                ew_build_lattice_basis_local(nx, ny, nz, bx, by, bz);
+                const float tx = ny * bz - nz * by;
+                const float ty = nz * bx - nx * bz;
+                const float tz = nx * by - ny * bx;
+                const float local_phase_01 = std::fmod(frame_phase_01 + p.trail_age * 0.35f + p.temporal_coupling * 0.25f, 1.0f);
+                const float local_angle = 6.28318530718f * (local_phase_01 < 0.0f ? (local_phase_01 + 1.0f) : local_phase_01);
+                const float temporal_shift = std::sin(local_angle) * (0.12f + 0.24f * p.temporal_coupling);
+                const float observer_arc = std::cos(local_angle) * p.observer_shift * (0.08f + 0.14f * p.curvature_n);
+                const float wx = p.x * viz_scale_m + nx * temporal_shift + bx * observer_arc + tx * observer_arc * 0.70f;
+                const float wy = p.y * viz_scale_m + ny * temporal_shift + by * observer_arc + ty * observer_arc * 0.70f;
+                const float wz = p.z * viz_scale_m + nz * temporal_shift + bz * observer_arc + tz * observer_arc * 0.70f;
+
+                float cx = 0.0f, cy = 0.0f, cz = 0.0f;
+                camera_space_pos(wx, wy, wz, cx, cy, cz);
+
+                EwRenderInstance inst{};
+                inst.anchor_id_u32 = 0u;
+                inst.kind_u32 = ew_research_particle_render_kind_local(p.particle_class);
+                inst.rel_pos_q16_16[0] = (int32_t)std::llround((double)cx * 65536.0);
+                inst.rel_pos_q16_16[1] = (int32_t)std::llround((double)cy * 65536.0);
+                inst.rel_pos_q16_16[2] = (int32_t)std::llround((double)cz * 65536.0);
+                inst.rel_pos_q16_16[3] = 0;
+
+                const float point_radius_m = live_mode_enabled_
+                    ? ((11.0f + 12.0f * p.amplitude + 8.0f * p.temporal_coupling) / 65536.0f)
+                    : (0.22f + p.amplitude * 0.20f);
+                const float emissive = 1.00f + p.amplitude * 2.55f + p.specularity * 0.82f;
+                inst.radius_q16_16 = (int32_t)std::llround((double)point_radius_m * 65536.0);
+                inst.emissive_q16_16 = (int32_t)std::llround((double)emissive * 65536.0);
+                inst.atmosphere_thickness_q16_16 = (int32_t)std::llround((double)(point_radius_m * (0.10f + p.specularity * 0.26f)) * 65536.0);
+                inst.lod_bias_q16_16 = 0;
+                inst.clarity_q16_16 = (int32_t)std::llround((double)std::max(0.35f, 1.0f - p.roughness * 0.55f) * 65536.0);
+
+                const uint32_t rgba8 = genesis::ge_particle_class_rgba8(p.particle_class);
+                const float base_r = ew_saturate_f32_local((float)(rgba8 & 0xFFu) / 255.0f);
+                const float base_g = ew_saturate_f32_local((float)((rgba8 >> 8) & 0xFFu) / 255.0f);
+                const float base_b = ew_saturate_f32_local((float)((rgba8 >> 16) & 0xFFu) / 255.0f);
+                const float alpha = ew_saturate_f32_local(0.62f + p.amplitude * 0.28f - p.occlusion * 0.16f);
+                inst.albedo_rgba8 = ew_pack_rgba8_local(
+                    base_r * (0.76f + 0.36f * p.density),
+                    base_g * (0.76f + 0.36f * p.density),
+                    base_b * (0.76f + 0.36f * p.density),
+                    alpha);
+                inst.atmosphere_rgba8 = ew_pack_rgba8_local(
+                    nx * 0.5f + 0.5f,
+                    ny * 0.5f + 0.5f,
+                    nz * 0.5f + 0.5f,
+                    ew_saturate_f32_local(p.occlusion));
+                inst.carrier_x_u32 = (uint32_t)(int32_t)std::llround((double)(ew_saturate_f32_local(p.density * (0.72f + 0.28f * p.temporal_coupling)) * 65536.0f));
+                inst.carrier_y_u32 = (uint32_t)(int32_t)std::llround((double)(std::max(-1.0f, std::min(1.0f, p.phase_bias + p.observer_shift * 0.5f)) * 65536.0f));
+                const uint32_t spec_q15 = (uint32_t)std::llround((double)(ew_saturate_f32_local(p.specularity) * 32767.0f));
+                const uint32_t rough_q15 = (uint32_t)std::llround((double)(ew_saturate_f32_local(p.roughness) * 32767.0f));
+                inst.carrier_z_u32 = (spec_q15 & 0xFFFFu) | ((rough_q15 & 0xFFFFu) << 16);
                 scene_->instances.push_back(inst);
             }
         }
+    } else {
+        viewport_research_points_u32_ = 0u;
     }
 
     // UI output
@@ -11154,33 +13943,32 @@ void App::Render() {
 
     try {
         bool xr_ended_this_frame = false;
+        if (hwnd_main_ && IsIconic(hwnd_main_)) {
+            if (xr_.HasOpenXR()) xr_.EndFrame();
+            return;
+        }
 
         // Resize handling
         if (resized_) {
-            resized_ = false;
+            RECT vrc{}; GetClientRect(hwnd_viewport_, &vrc);
+            const int raw_w = vrc.right - vrc.left;
+            const int raw_h = vrc.bottom - vrc.top;
+            if (raw_w <= 0 || raw_h <= 0) {
+                resized_ = true;
+                if (xr_.HasOpenXR()) xr_.EndFrame();
+                return;
+            }
             vkDeviceWaitIdle(vk_->dev);
             vk_->DestroySwap();
-            RECT vrc{}; GetClientRect(hwnd_viewport_, &vrc);
-            uint32_t w = (uint32_t)std::max(1L, vrc.right - vrc.left);
-            uint32_t h = (uint32_t)std::max(1L, vrc.bottom - vrc.top);
+            resized_ = false;
+            uint32_t w = (uint32_t)std::max(1, raw_w);
+            uint32_t h = (uint32_t)std::max(1, raw_h);
             create_swap(*vk_, w, h);
-            create_pipeline(*vk_);
+            create_pipeline(vk_);
         }
 
     vk_check(vkWaitForFences(vk_->dev, 1, &vk_->fence, VK_TRUE, UINT64_MAX), "vkWaitForFences");
     vk_check(vkResetFences(vk_->dev, 1, &vk_->fence), "vkResetFences");
-
-    // Read last frame's camera histogram median (written by compute) and
-    // submit as an observation ingress packet to the substrate.
-    if (scene_ && vk_->cam_out_mapped) {
-        const uint32_t* out_u32 = (const uint32_t*)vk_->cam_out_mapped;
-        const uint32_t median_q16 = out_u32[0];
-        const uint32_t total = out_u32[1];
-        if (total > 0u) {
-            scene_->sm.camera_sensor.median_depth_norm_q16_16 = (int32_t)median_q16;
-            scene_->sm.camera_sensor.tick_u64 = scene_->sm.canonical_tick;
-        }
-    }
 
     // ------------------------------------------------------------
     // OpenXR stereo presentation (Vulkan path)
@@ -11343,20 +14131,26 @@ void App::Render() {
                 }
 
                 EwRenderInstance inst{};
-                inst.object_id_u64 = o.object_id_u64;
                 inst.anchor_id_u32 = o.anchor_id_u32;
                 if (o.name_utf8 == "Sun") inst.kind_u32 = 1u;
                 else if (o.name_utf8 == "Earth") inst.kind_u32 = 2u;
-                inst.albedo_rgba8 = o.albedo_rgba8;
-                inst.atmosphere_rgba8 = o.atmosphere_rgba8;
                 inst.rel_pos_q16_16[0] = rel_q16_16[0];
                 inst.rel_pos_q16_16[1] = rel_q16_16[1];
                 inst.rel_pos_q16_16[2] = rel_q16_16[2];
                 inst.radius_q16_16 = (int32_t)std::llround(o.radius_m_f32 * 65536.0);
-                inst.emissive_q16_16 = (int32_t)std::llround(o.emissive_f32 * 65536.0);
-                inst.atmosphere_thickness_q16_16 = (int32_t)std::llround(o.atmosphere_thickness_m_f32 * 65536.0);
                 inst.lod_bias_q16_16 = lod_bias_q16_16;
                 inst.clarity_q16_16 = clarity_q16_16;
+                {
+                    const float clarity_f32 = (float)clarity_q16_16 / 65536.0f;
+                    const EwPhaseMaterialSample phase_material = ew_build_phase_material_sample(o, clarity_f32, nullptr);
+                    inst.albedo_rgba8 = phase_material.albedo_rgba8;
+                    inst.atmosphere_rgba8 = phase_material.atmosphere_rgba8;
+                    inst.emissive_q16_16 = phase_material.emissive_q16_16;
+                    inst.atmosphere_thickness_q16_16 = phase_material.atmosphere_thickness_q16_16;
+                    inst.carrier_x_u32 = phase_material.carrier_x_u32;
+                    inst.carrier_y_u32 = phase_material.carrier_y_u32;
+                    inst.carrier_z_u32 = phase_material.carrier_z_u32;
+                }
 
                 if (inst.anchor_id_u32 < scene_->sm.anchors.size()) {
                     const uint32_t n = (uint32_t)scene_->sm.anchors.size();
@@ -11385,11 +14179,20 @@ void App::Render() {
                     uint32_t hm = (h0 + h1 + h2) / 3u;
                     hm &= 65535u;
 
-                    inst.carrier_x_u32 = (uint32_t)(uint32_t)leak_bundled;
-                    inst.carrier_y_u32 = (uint32_t)(uint32_t)doppler_bundled;
-                    inst.carrier_z_u32 = hm;
+                    EwCarrierTriple carrier{};
+                    carrier.x_u32 = (uint32_t)(uint32_t)leak_bundled;
+                    carrier.y_u32 = (uint32_t)(uint32_t)doppler_bundled;
+                    carrier.z_u32 = hm;
+                    const float clarity_f32 = (float)clarity_q16_16 / 65536.0f;
+                    const EwPhaseMaterialSample phase_material = ew_build_phase_material_sample(o, clarity_f32, &carrier);
+                    inst.albedo_rgba8 = phase_material.albedo_rgba8;
+                    inst.atmosphere_rgba8 = phase_material.atmosphere_rgba8;
+                    inst.emissive_q16_16 = phase_material.emissive_q16_16;
+                    inst.atmosphere_thickness_q16_16 = phase_material.atmosphere_thickness_q16_16;
+                    inst.carrier_x_u32 = phase_material.carrier_x_u32;
+                    inst.carrier_y_u32 = phase_material.carrier_y_u32;
+                    inst.carrier_z_u32 = phase_material.carrier_z_u32;
                 }
-                inst.tick_u64 = scene_->sm.canonical_tick;
                 scene_->instances.push_back(inst);
             }
         };
@@ -11434,45 +14237,53 @@ void App::Render() {
             vk_check(vkBeginCommandBuffer(cmd, &bi), "vkBeginCommandBuffer(XR)");
 
             const bool valid_layout = xr_layout_is_valid(xr_img);
-            VkImageMemoryBarrier2 bar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-            bar.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
-            bar.srcAccessMask = 0;
-            bar.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-            bar.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-            bar.oldLayout = valid_layout ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED;
-            bar.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-            bar.image = xr_img;
-            bar.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            bar.subresourceRange.levelCount = 1;
-            bar.subresourceRange.layerCount = 1;
-            VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-            dep.imageMemoryBarrierCount = 1;
-            dep.pImageMemoryBarriers = &bar;
-            vkCmdPipelineBarrier2(cmd, &dep);
+            ew_cmd_image_barrier_legacy(
+                cmd,
+                valid_layout ? VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                valid_layout ? VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT : 0u,
+                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                valid_layout ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,
+                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                xr_img,
+                VK_IMAGE_ASPECT_COLOR_BIT,
+                1u,
+                1u);
 
-            // Ensure depth is in attachment layout for this frame.
-            if (vk_->depth_image) {
-                VkImageMemoryBarrier2 dbar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                dbar.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
-                dbar.srcAccessMask = 0;
-                dbar.dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
-                dbar.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-                dbar.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                dbar.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-                dbar.image = vk_->depth_image;
-                dbar.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-                dbar.subresourceRange.levelCount = 1;
-                dbar.subresourceRange.layerCount = 1;
-                VkDependencyInfo ddep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                ddep.imageMemoryBarrierCount = 1;
-                ddep.pImageMemoryBarriers = &dbar;
-                vkCmdPipelineBarrier2(cmd, &ddep);
-            }
+            ew_cmd_image_barrier_legacy(
+                cmd,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                VK_ACCESS_SHADER_READ_BIT,
+                VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                vk_->depth_image,
+                VK_IMAGE_ASPECT_DEPTH_BIT,
+                1u,
+                1u);
 
             VkClearValue clear{};
-            clear.color.float32[0] = 0.0f;
-            clear.color.float32[1] = 0.0f;
-            clear.color.float32[2] = 0.0f;
+            const uint64_t clear_tick_u64 = scene_ ? scene_->sm.canonical_tick : 0ull;
+            const bool sim_play_enabled = scene_ && (scene_->sm.sim_world_play_u32 != 0u);
+            float clear_r = resonance_view_ ? 0.090f : 0.030f;
+            float clear_g = resonance_view_ ? 0.066f : 0.036f;
+            float clear_b = resonance_view_ ? 0.018f : 0.044f;
+            if (sim_play_enabled) {
+                clear_r = (float)((clear_tick_u64 % 256ull) / 255.0);
+                clear_g = (float)(((clear_tick_u64 / 7ull) % 256ull) / 255.0);
+                clear_b = (float)(((clear_tick_u64 / 19ull) % 256ull) / 255.0);
+            }
+            if (resonance_view_ && sim_play_enabled) {
+                const float ph = spectrum_phase_f32_ + (float)(clear_tick_u64 & 255ull) * 0.03125f + (float)spectrum_band_i32_ * 0.21f;
+                const float pulse = 0.5f + 0.5f * sinf(ph);
+                clear_r = 0.06f + 0.18f * pulse;
+                clear_g = 0.035f + 0.12f * pulse;
+                clear_b = 0.0f;
+            }
+            clear.color.float32[0] = clear_r;
+            clear.color.float32[1] = clear_g;
+            clear.color.float32[2] = clear_b;
             clear.color.float32[3] = 1.0f;
 
             VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
@@ -11521,32 +14332,26 @@ void App::Render() {
             const float b = std::tan(fov4[3]);
             const float zn = 0.1f;
             const float zf = 1.0e13f;
-            struct Push { float proj[16]; float sunPosCam[3]; float pointSize; float debug[4]; } push{};
+            EwViewportPushConstants push{};
             push.proj[0] = 2.0f/(r-l); push.proj[4] = 0;           push.proj[8]  = (r+l)/(r-l);   push.proj[12] = 0;
             push.proj[1] = 0;          push.proj[5] = 2.0f/(t-b);  push.proj[9]  = (t+b)/(t-b);   push.proj[13] = 0;
             push.proj[2] = 0;          push.proj[6] = 0;           push.proj[10] = (zf)/(zn-zf);  push.proj[14] = (zf*zn)/(zn-zf);
             push.proj[3] = 0;          push.proj[7] = 0;           push.proj[11] = -1.0f;         push.proj[15] = 0;
-
-            push.sunPosCam[0] = 0.0f; push.sunPosCam[1] = 0.0f; push.sunPosCam[2] = 0.0f;
-            for (const auto& inst : scene_->instances) {
-                if (inst.kind_u32 == 1u) {
-                    push.sunPosCam[0] = (float)inst.rel_pos_q16_16[0] / 65536.0f;
-                    push.sunPosCam[1] = (float)inst.rel_pos_q16_16[1] / 65536.0f;
-                    push.sunPosCam[2] = (float)inst.rel_pos_q16_16[2] / 65536.0f;
-                    break;
-                }
-            }
-            push.pointSize = 20000.0f;
-            // Render debug controls (UI-only):
-            //  - resonance_view_: render resonance carriers only (black background)
-            //  - spectrum_band_i32_: scroll with `+wheel to shift spectrum band
-            //  - spectrum_phase_f32_: user bias; plus deterministic tick-based phase for carrier motion
-            push.debug[0] = resonance_view_ ? 1.0f : 0.0f;
-            push.debug[1] = (float)spectrum_band_i32_;
-            const float tick_ph = (float)((scene_->sm.canonical_tick & 1023ull)) * 0.03125f;
-            push.debug[2] = spectrum_phase_f32_ + tick_ph;
-            push.debug[3] = 0.0f;
-            vkCmdPushConstants(cmd, vk_->pipe_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(Push), &push);
+            ew_fill_viewport_push_common(
+                &push,
+                scene_ ? &scene_->instances : nullptr,
+                scene_ ? scene_->sm.canonical_tick : 0ull,
+                scene_ ? (scene_->sm.sim_world_play_u32 != 0u) : false,
+                live_mode_enabled_,
+                resonance_view_,
+                spectrum_band_i32_,
+                spectrum_phase_f32_ + viewport_temporal_phase_f32_ * 0.618f,
+                0.0f,
+                viewport_vector_visualization_enabled_,
+                viewport_vector_gain_u8_,
+                viewport_field_depth_m_f32_,
+                viewport_focal_length_mm_f32_);
+            vkCmdPushConstants(cmd, vk_->pipe_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(EwViewportPushConstants), &push);
 
             uint32_t inst_n = (uint32_t)scene_->instances.size();
             if (inst_n > 0) vkCmdDraw(cmd, 6, inst_n, 0, 0);
@@ -11569,8 +14374,12 @@ void App::Render() {
 
     uint32_t image_index = 0;
     VkResult acq = vkAcquireNextImageKHR(vk_->dev, vk_->swap, UINT64_MAX, vk_->sem_image, VK_NULL_HANDLE, &image_index);
-    if (acq == VK_ERROR_OUT_OF_DATE_KHR) { resized_ = true; return; }
+    if (acq == VK_ERROR_OUT_OF_DATE_KHR || acq == VK_SUBOPTIMAL_KHR) { resized_ = true; return; }
     vk_check(acq, "vkAcquireNextImageKHR");
+    if (image_index >= vk_->cmdbufs.size() || image_index >= vk_->swap_views.size() || image_index >= vk_->swap_images.size()) {
+        resized_ = true;
+        return;
+    }
 
     // Upload instances to SSBO and update descriptor set.
     if (scene_) {
@@ -11597,7 +14406,7 @@ void App::Render() {
     if (!vk_->vt_atlas_image) {
         ew_vt_init(*vk_);
         // Pipeline needs the atlas/page-table bindings. Recreate if we were missing.
-        create_pipeline(*vk_);
+        create_pipeline(vk_);
     }
     if (scene_ && vk_->vt_atlas_image) {
         bool pt_changed = false;
@@ -11637,47 +14446,56 @@ void App::Render() {
     VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     vk_check(vkBeginCommandBuffer(cmd, &bi), "vkBeginCommandBuffer");
 
-    // Transition to COLOR_ATTACHMENT_OPTIMAL
-    VkImageMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-    barrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
-    barrier.srcAccessMask = 0;
-    barrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-    barrier.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    barrier.image = vk_->swap_images[image_index];
-    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    barrier.subresourceRange.levelCount = 1;
-    barrier.subresourceRange.layerCount = 1;
+    ew_cmd_image_barrier_legacy(
+        cmd,
+        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+        0u,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+        VK_IMAGE_LAYOUT_UNDEFINED,
+        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        vk_->swap_images[image_index],
+        VK_IMAGE_ASPECT_COLOR_BIT,
+        1u,
+        1u);
 
-    VkImageMemoryBarrier2 barriers[2]{};
-    barriers[0] = barrier;
-    // Depth to attachment layout
-    barriers[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-    barriers[1].srcStageMask = VK_PIPELINE_STAGE_2_NONE;
-    barriers[1].srcAccessMask = 0;
-    barriers[1].dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
-    barriers[1].dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-    barriers[1].oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    barriers[1].newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-    barriers[1].image = vk_->depth_image;
-    barriers[1].subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-    barriers[1].subresourceRange.levelCount = 1;
-    barriers[1].subresourceRange.layerCount = 1;
-
-    VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    dep.imageMemoryBarrierCount = 2;
-    dep.pImageMemoryBarriers = barriers;
-    vkCmdPipelineBarrier2(cmd, &dep);
+    ew_cmd_image_barrier_legacy(
+        cmd,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        VK_ACCESS_SHADER_READ_BIT,
+        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        vk_->depth_image,
+        VK_IMAGE_ASPECT_DEPTH_BIT,
+        1u,
+        1u);
 
     // Dynamic rendering begin
     VkClearValue clear{};
-    // Deterministic visual cue: normal mode uses a bounded ambient cycle; resonance mode collapses to black+gold.
+    // Deterministic visual cue: paused state remains static; play state can pulse.
     const uint64_t t = scene_ ? scene_->sm.canonical_tick : 0;
-    float r = (float)((t % 256) / 255.0);
-    float g = (float)(((t / 7) % 256) / 255.0);
-    float b = (float)(((t / 19) % 256) / 255.0);
-    if (resonance_view_) {
+    const bool sim_play_enabled = scene_ && (scene_->sm.sim_world_play_u32 != 0u);
+    float r = resonance_view_ ? 0.020f : 0.012f;
+    float g = resonance_view_ ? 0.014f : 0.014f;
+    float b = resonance_view_ ? 0.008f : 0.018f;
+    if (live_mode_enabled_) {
+        if (resonance_view_) {
+            r = 0.024f;
+            g = 0.016f;
+            b = 0.008f;
+        } else {
+            r = 0.010f;
+            g = 0.012f;
+            b = 0.018f;
+        }
+    } else if (sim_play_enabled) {
+        r = (float)((t % 256) / 255.0);
+        g = (float)(((t / 7) % 256) / 255.0);
+        b = (float)(((t / 19) % 256) / 255.0);
+    }
+    if (resonance_view_ && sim_play_enabled) {
         const float ph = spectrum_phase_f32_ + (float)(t & 255ull) * 0.03125f + (float)spectrum_band_i32_ * 0.21f;
         const float pulse = 0.5f + 0.5f * sinf(ph);
         r = 0.06f + 0.18f * pulse;
@@ -11732,7 +14550,7 @@ void App::Render() {
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, vk_->pipe);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, vk_->pipe_layout, 0, 1, &vk_->ds, 0, nullptr);
 
-    struct Push { float proj[16]; float sunPosCam[3]; float pointSize; float debug[4]; } push{};
+    EwViewportPushConstants push{};
     const float aspect = (vk_->swap_extent.height > 0) ? (float)vk_->swap_extent.width / (float)vk_->swap_extent.height : 1.0f;
     const float fov = 60.0f * 0.01745329251994329577f;
     const float f = 1.0f / std::tan(fov * 0.5f);
@@ -11744,138 +14562,45 @@ void App::Render() {
     push.proj[2] = 0;        push.proj[6] = 0; push.proj[10] = (zf)/(zn-zf);               push.proj[14] = (zf*zn)/(zn-zf);
     push.proj[3] = 0;        push.proj[7] = 0; push.proj[11] = -1.0f;                      push.proj[15] = 0;
     
-// Sun position in camera space for natural lighting (fragment shader).
-push.sunPosCam[0] = 0.0f; push.sunPosCam[1] = 0.0f; push.sunPosCam[2] = 0.0f;
-if (scene_) {
-    for (const auto& inst : scene_->instances) {
-        if (inst.kind_u32 == 1u) { // Sun
-            push.sunPosCam[0] = (float)inst.rel_pos_q16_16[0] / 65536.0f;
-            push.sunPosCam[1] = (float)inst.rel_pos_q16_16[1] / 65536.0f;
-            push.sunPosCam[2] = (float)inst.rel_pos_q16_16[2] / 65536.0f;
-            break;
-        }
-    }
-}
-
-push.pointSize = 20000.0f;
-
-    // Desktop path must mirror the XR push-constant debug state so resonance view
-    // actually reaches the shaders instead of becoming UI theater.
-    push.debug[0] = resonance_view_ ? 1.0f : 0.0f;
-    push.debug[1] = (float)spectrum_band_i32_;
-    const float tick_ph = (float)(((scene_ ? scene_->sm.canonical_tick : 0ull) & 1023ull)) * 0.03125f;
-    push.debug[2] = spectrum_phase_f32_ + tick_ph;
     int selected_strength_pct = 0;
     if (node_graph_selected_i32_ >= 0 && node_graph_selected_i32_ < (int)node_graph_strength_pct_i32_.size()) {
         selected_strength_pct = node_graph_strength_pct_i32_[(size_t)node_graph_selected_i32_];
     }
-    push.debug[3] = std::clamp((float)selected_strength_pct / 100.0f, 0.0f, 1.0f);
+    ew_fill_viewport_push_common(
+        &push,
+        scene_ ? &scene_->instances : nullptr,
+        scene_ ? scene_->sm.canonical_tick : 0ull,
+        scene_ ? (scene_->sm.sim_world_play_u32 != 0u) : false,
+        live_mode_enabled_,
+        resonance_view_,
+        spectrum_band_i32_,
+        spectrum_phase_f32_ + viewport_temporal_phase_f32_ * 0.618f,
+        std::clamp((float)selected_strength_pct / 100.0f, 0.0f, 1.0f),
+        viewport_vector_visualization_enabled_,
+        viewport_vector_gain_u8_,
+        viewport_field_depth_m_f32_,
+        viewport_focal_length_mm_f32_);
 
-    vkCmdPushConstants(cmd, vk_->pipe_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(Push), &push);
+    vkCmdPushConstants(cmd, vk_->pipe_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(EwViewportPushConstants), &push);
     uint32_t inst_n = scene_ ? (uint32_t)scene_->instances.size() : 0;
     if (inst_n > 0) {
         vkCmdDraw(cmd, 6, inst_n, 0, 0);
     }
+    if (ui_layer_) ui_layer_->Render(cmd, vk_->swap_extent);
     vkCmdEndRendering(cmd);
 
-    // ------------------------------------------------------------
-    // Camera sensor histogram + deterministic median (Vulkan compute)
-    // Produces median normalized depth (Q16.16) into cam_out_buf.
-    // ------------------------------------------------------------
-    if (vk_->cam_hist_pipe && vk_->cam_median_pipe) {
-        // Depth attachment -> shader read
-        VkImageMemoryBarrier2 db{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-        db.srcStageMask = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
-        db.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-        db.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        db.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-        db.oldLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-        db.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        db.image = vk_->depth_image;
-        db.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-        db.subresourceRange.levelCount = 1;
-        db.subresourceRange.layerCount = 1;
-        VkDependencyInfo ddep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-        ddep.imageMemoryBarrierCount = 1;
-        ddep.pImageMemoryBarriers = &db;
-        vkCmdPipelineBarrier2(cmd, &ddep);
-
-        // Clear histogram buffer deterministically.
-        vkCmdFillBuffer(cmd, vk_->cam_hist_buf, 0, sizeof(uint32_t) * 256, 0u);
-
-        VkBufferMemoryBarrier2 bb{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
-        bb.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-        bb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-        bb.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        bb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-        bb.buffer = vk_->cam_hist_buf;
-        bb.offset = 0;
-        bb.size = VK_WHOLE_SIZE;
-        VkDependencyInfo bdep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-        bdep.bufferMemoryBarrierCount = 1;
-        bdep.pBufferMemoryBarriers = &bb;
-        vkCmdPipelineBarrier2(cmd, &bdep);
-
-        // Histogram pass
-        struct PC { uint32_t w; uint32_t h; } pc{vk_->swap_extent.width, vk_->swap_extent.height};
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, vk_->cam_hist_pipe);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, vk_->cam_pipe_layout, 0, 1, &vk_->cam_hist_ds, 0, nullptr);
-        vkCmdPushConstants(cmd, vk_->cam_pipe_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PC), &pc);
-        uint32_t gx = (pc.w + 15u) / 16u;
-        uint32_t gy = (pc.h + 15u) / 16u;
-        vkCmdDispatch(cmd, gx, gy, 1);
-
-        // Barrier for histogram writes
-        VkBufferMemoryBarrier2 bb2{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
-        bb2.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        bb2.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-        bb2.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        bb2.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
-        bb2.buffer = vk_->cam_hist_buf;
-        bb2.offset = 0;
-        bb2.size = VK_WHOLE_SIZE;
-        VkDependencyInfo bdep2{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-        bdep2.bufferMemoryBarrierCount = 1;
-        bdep2.pBufferMemoryBarriers = &bb2;
-        vkCmdPipelineBarrier2(cmd, &bdep2);
-
-        // Median pass
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, vk_->cam_median_pipe);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, vk_->cam_pipe_layout, 0, 1, &vk_->cam_median_ds, 0, nullptr);
-        vkCmdDispatch(cmd, 1, 1, 1);
-
-        // Barrier for out buffer visibility to host (next frame read after fence)
-        VkBufferMemoryBarrier2 bo{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
-        bo.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        bo.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-        bo.dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT;
-        bo.dstAccessMask = VK_ACCESS_2_HOST_READ_BIT;
-        bo.buffer = vk_->cam_out_buf;
-        bo.offset = 0;
-        bo.size = VK_WHOLE_SIZE;
-        VkDependencyInfo odep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-        odep.bufferMemoryBarrierCount = 1;
-        odep.pBufferMemoryBarriers = &bo;
-        vkCmdPipelineBarrier2(cmd, &odep);
-    }
-
-    // Transition to PRESENT
-    VkImageMemoryBarrier2 barrier2{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-    barrier2.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-    barrier2.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-    barrier2.dstStageMask = VK_PIPELINE_STAGE_2_NONE;
-    barrier2.dstAccessMask = 0;
-    barrier2.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    barrier2.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-    barrier2.image = vk_->swap_images[image_index];
-    barrier2.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    barrier2.subresourceRange.levelCount = 1;
-    barrier2.subresourceRange.layerCount = 1;
-
-    VkDependencyInfo dep2{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    dep2.imageMemoryBarrierCount = 1;
-    dep2.pImageMemoryBarriers = &barrier2;
-    vkCmdPipelineBarrier2(cmd, &dep2);
+    ew_cmd_image_barrier_legacy(
+        cmd,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+        VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+        0u,
+        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+        vk_->swap_images[image_index],
+        VK_IMAGE_ASPECT_COLOR_BIT,
+        1u,
+        1u);
 
     vk_check(vkEndCommandBuffer(cmd), "vkEndCommandBuffer");
 
@@ -12318,67 +15043,7 @@ bool App::PasteFocusedSurfaceFromClipboard() {
 
     auto select_content_rel = [&](const std::string& rel_utf8)->bool {
         if (rel_utf8.empty()) return false;
-        HWND target = nullptr;
-        if (focus == hwnd_asset_thumb_ || IsChild(hwnd_asset_thumb_, focus)) target = hwnd_asset_thumb_;
-        else if (focus == hwnd_content_thumb_ || IsChild(hwnd_content_thumb_, focus)) target = hwnd_content_thumb_;
-        else target = hwnd_content_list_ ? hwnd_content_list_ : hwnd_content_thumb_;
-        if (!target) return false;
-        const int n = ListView_GetItemCount(target);
-        for (int i = 0; i < n; ++i) {
-            wchar_t wrel[512]{};
-            ew_listview_get_item_text_w(target, i, 0, wrel, 512);
-            if (wide_to_utf8(std::wstring(wrel)) != rel_utf8) continue;
-            content_selection_sync_guard_ = true;
-            if (hwnd_content_list_) {
-                const int m = ListView_GetItemCount(hwnd_content_list_);
-                for (int j = 0; j < m; ++j) ListView_SetItemState(hwnd_content_list_, j, 0, LVIS_SELECTED | LVIS_FOCUSED);
-            }
-            if (hwnd_content_thumb_) {
-                const int m = ListView_GetItemCount(hwnd_content_thumb_);
-                for (int j = 0; j < m; ++j) ListView_SetItemState(hwnd_content_thumb_, j, 0, LVIS_SELECTED | LVIS_FOCUSED);
-            }
-            if (hwnd_asset_thumb_) {
-                const int m = ListView_GetItemCount(hwnd_asset_thumb_);
-                for (int j = 0; j < m; ++j) ListView_SetItemState(hwnd_asset_thumb_, j, 0, LVIS_SELECTED | LVIS_FOCUSED);
-            }
-            if (hwnd_content_list_) {
-                const int m = ListView_GetItemCount(hwnd_content_list_);
-                for (int j = 0; j < m; ++j) {
-                    wchar_t w2[512]{};
-                    ew_listview_get_item_text_w(hwnd_content_list_, j, 0, w2, 512);
-                    if (wide_to_utf8(std::wstring(w2)) == rel_utf8) {
-                        ListView_SetItemState(hwnd_content_list_, j, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
-                        ListView_EnsureVisible(hwnd_content_list_, j, FALSE);
-                        break;
-                    }
-                }
-            }
-            if (hwnd_content_thumb_) {
-                const int m = ListView_GetItemCount(hwnd_content_thumb_);
-                for (int j = 0; j < m; ++j) {
-                    wchar_t w2[512]{};
-                    ew_listview_get_item_text_w(hwnd_content_thumb_, j, 0, w2, 512);
-                    if (wide_to_utf8(std::wstring(w2)) == rel_utf8) {
-                        ListView_SetItemState(hwnd_content_thumb_, j, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
-                        ListView_EnsureVisible(hwnd_content_thumb_, j, FALSE);
-                        break;
-                    }
-                }
-            }
-            if (hwnd_asset_thumb_) {
-                const int m = ListView_GetItemCount(hwnd_asset_thumb_);
-                for (int j = 0; j < m; ++j) {
-                    wchar_t w2[512]{};
-                    ew_listview_get_item_text_w(hwnd_asset_thumb_, j, 0, w2, 512);
-                    if (wide_to_utf8(std::wstring(w2)) == rel_utf8) {
-                        ListView_SetItemState(hwnd_asset_thumb_, j, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
-                        ListView_EnsureVisible(hwnd_asset_thumb_, j, FALSE);
-                        break;
-                    }
-                }
-            }
-            content_selection_sync_guard_ = false;
-            content_selected_rel_utf8_ = rel_utf8;
+        if (SelectContentRelativePath(rel_utf8, false)) {
             AppendOutputUtf8("CONTENT: selected from clipboard path");
             return true;
         }
@@ -12728,8 +15393,10 @@ void App::EmitCameraSetFromRig() {
     cpkt.payload.camera_set.pad_u8[0] = 0;
     cpkt.payload.camera_set.pad_u8[1] = 0;
     cpkt.payload.camera_set.pad_u8[2] = 0;
-    cpkt.payload.camera_set.manual_focus_distance_m_q32_32 = (int64_t)(5) * (1ll<<32);
-    cpkt.payload.camera_set.focal_length_mm_q16_16 = (int32_t)(50 * 65536);
+    const double focus_depth_m = std::max(0.5, (double)viewport_field_depth_m_f32_);
+    const double focal_length_mm = std::clamp((double)viewport_focal_length_mm_f32_, 18.0, 200.0);
+    cpkt.payload.camera_set.manual_focus_distance_m_q32_32 = (int64_t)llround(focus_depth_m * (double)(1ll << 32));
+    cpkt.payload.camera_set.focal_length_mm_q16_16 = (int32_t)llround(focal_length_mm * 65536.0);
     cpkt.payload.camera_set.aperture_f_q16_16 = (int32_t)(28 * 65536 / 10);
     cpkt.payload.camera_set.exposure_ev_q16_16 = 0;
     cpkt.payload.camera_set.pos_xyz_q16_16[0] = (int32_t)llround((double)pos[0] * 65536.0);
@@ -12840,7 +15507,7 @@ std::string App::BuildChatGptReasoningInputUtf8(uint32_t chat_idx_u32, const std
     ctx.viewport_live_mode_enabled = live_mode_enabled_;
     ctx.viewport_resonance_view_enabled = resonance_view_;
     ctx.viewport_confinement_particles_enabled = confinement_particles_enabled_;
-    ctx.sequencer_play_enabled = seq_play_enabled_;
+    ctx.sequencer_play_enabled = IsSimPlayEnabledCanonical();
     ctx.sequencer_stress_overlay_enabled = seq_stress_overlay_enabled_;
     ctx.spectrum_band_i32 = spectrum_band_i32_;
     ctx.spectrum_phase_f32 = spectrum_phase_f32_;
@@ -13056,12 +15723,12 @@ void App::ExecuteExternalCommandUtf8(const std::string& line) {
             const size_t arg_off = (args_lower.rfind("confinement ", 0) == 0) ? 12u : ((args_lower.rfind("particles ", 0) == 0) ? 10u : 7u);
             const std::string mode = ew_lower_ascii_copy(ew_trim_ascii_copy(args.substr(arg_off)));
             if (mode == "status") {
-                AppendOutputUtf8(BuildPhotonConfinementStatusUtf8());
+                AppendOutputUtf8(std::string("REMOTE_VIEWPORT confinement=") + (confinement_particles_enabled_ ? "1" : "0"));
                 return;
             }
             if (mode == "toggle") confinement_particles_enabled_ = !confinement_particles_enabled_;
             else confinement_particles_enabled_ = ew_parse_bool_ascii(mode, confinement_particles_enabled_);
-            AppendOutputUtf8(BuildPhotonConfinementStatusUtf8());
+            AppendOutputUtf8(std::string("REMOTE_VIEWPORT confinement=") + (confinement_particles_enabled_ ? "1" : "0"));
             if (hwnd_viewport_) InvalidateRect(hwnd_viewport_, nullptr, FALSE);
             RefreshViewportResonanceOverlay();
             RefreshTopBarChrome();
@@ -13079,12 +15746,133 @@ void App::ExecuteExternalCommandUtf8(const std::string& line) {
             if (hwnd_viewport_) InvalidateRect(hwnd_viewport_, nullptr, FALSE);
             return;
         }
+        if (args_lower.rfind("lattice ", 0) == 0) {
+            const std::string lattice_args = ew_trim_ascii_copy(args.substr(8u));
+            const std::string lattice_lower = ew_lower_ascii_copy(lattice_args);
+            bool changed = false;
+            if (lattice_lower == "status") {
+                AppendOutputUtf8(std::string("REMOTE_VIEWPORT_LATTICE mode=") +
+                                 (viewport_lattice_volume_mode_ ? "volume" : "slice") +
+                                 " slice=" + std::to_string((unsigned long long)viewport_lattice_slice_z_u32_) +
+                                 " stride=" + std::to_string((unsigned long long)viewport_lattice_stride_u32_) +
+                                 " max_points=" + std::to_string((unsigned long long)viewport_lattice_max_points_u32_) +
+                                 " intensity=" + std::to_string((unsigned long long)viewport_lattice_intensity_min_u8_));
+                return;
+            } else if (lattice_lower.rfind("volume ", 0) == 0) {
+                viewport_lattice_volume_mode_ = ew_parse_bool_ascii(lattice_args.substr(7u), viewport_lattice_volume_mode_);
+                changed = true;
+            } else if (lattice_lower.rfind("slice ", 0) == 0) {
+                int v = std::atoi(lattice_args.substr(6u).c_str());
+                if (v < 0) v = 0;
+                if (v > 127) v = 127;
+                viewport_lattice_slice_z_u32_ = (uint32_t)v;
+                changed = true;
+            } else if (lattice_lower.rfind("stride ", 0) == 0) {
+                int v = std::atoi(lattice_args.substr(7u).c_str());
+                if (v < 1) v = 1;
+                if (v > 16) v = 16;
+                viewport_lattice_stride_u32_ = (uint32_t)v;
+                changed = true;
+            } else if (lattice_lower.rfind("maxpoints ", 0) == 0) {
+                int v = std::atoi(lattice_args.substr(10u).c_str());
+                if (v < 1024) v = 1024;
+                if (v > 262144) v = 262144;
+                viewport_lattice_max_points_u32_ = (uint32_t)v;
+                changed = true;
+            } else if (lattice_lower.rfind("intensity ", 0) == 0) {
+                int v = std::atoi(lattice_args.substr(10u).c_str());
+                if (v < 0) v = 0;
+                if (v > 255) v = 255;
+                viewport_lattice_intensity_min_u8_ = (uint8_t)v;
+                changed = true;
+            }
+            if (changed) {
+                if (hwnd_rdock_voxel_) {
+                    if (hwnd_voxel_lattice_volume_) SendMessageW(hwnd_voxel_lattice_volume_, BM_SETCHECK, viewport_lattice_volume_mode_ ? BST_CHECKED : BST_UNCHECKED, 0);
+                    if (HWND h = GetDlgItem(hwnd_rdock_voxel_, EW_VOXEL_LATTICE_SLICE_ID)) SendMessageW(h, TBM_SETPOS, (WPARAM)TRUE, (LPARAM)viewport_lattice_slice_z_u32_);
+                    if (HWND h = GetDlgItem(hwnd_rdock_voxel_, EW_VOXEL_LATTICE_STRIDE_ID)) SendMessageW(h, TBM_SETPOS, (WPARAM)TRUE, (LPARAM)viewport_lattice_stride_u32_);
+                    if (HWND h = GetDlgItem(hwnd_rdock_voxel_, EW_VOXEL_LATTICE_MAXPTS_ID)) SendMessageW(h, TBM_SETPOS, (WPARAM)TRUE, (LPARAM)ew_lattice_max_points_to_slider(viewport_lattice_max_points_u32_));
+                    if (HWND h = GetDlgItem(hwnd_rdock_voxel_, EW_VOXEL_LATTICE_INTENSITY_ID)) SendMessageW(h, TBM_SETPOS, (WPARAM)TRUE, (LPARAM)viewport_lattice_intensity_min_u8_);
+                }
+                ApplyViewportLatticeProjectionFromControls(true);
+                RefreshVoxelDesignerPanel();
+                if (hwnd_viewport_) InvalidateRect(hwnd_viewport_, nullptr, FALSE);
+                return;
+            }
+        }
+        if (args_lower.rfind("vector ", 0) == 0) {
+            const std::string vector_args = ew_trim_ascii_copy(args.substr(7u));
+            const std::string vector_lower = ew_lower_ascii_copy(vector_args);
+            bool changed = false;
+            if (vector_lower == "status") {
+                AppendOutputUtf8(std::string("REMOTE_VIEWPORT_VECTOR enabled=") +
+                                 (viewport_vector_visualization_enabled_ ? "1" : "0") +
+                                 " gain=" + std::to_string((unsigned long long)viewport_vector_gain_u8_));
+                return;
+            } else if (vector_lower == "toggle") {
+                viewport_vector_visualization_enabled_ = !viewport_vector_visualization_enabled_;
+                changed = true;
+            } else if (vector_lower.rfind("gain ", 0) == 0) {
+                int v = std::atoi(vector_args.substr(5u).c_str());
+                if (v < 0) v = 0;
+                if (v > 100) v = 100;
+                viewport_vector_gain_u8_ = (uint8_t)v;
+                changed = true;
+            } else {
+                viewport_vector_visualization_enabled_ = ew_parse_bool_ascii(vector_args, viewport_vector_visualization_enabled_);
+                changed = true;
+            }
+            if (changed) {
+                if (hwnd_rdock_voxel_) {
+                    if (hwnd_voxel_vector_visualization_) SendMessageW(hwnd_voxel_vector_visualization_, BM_SETCHECK, viewport_vector_visualization_enabled_ ? BST_CHECKED : BST_UNCHECKED, 0);
+                    if (HWND h = GetDlgItem(hwnd_rdock_voxel_, EW_VOXEL_VECTOR_GAIN_ID)) SendMessageW(h, TBM_SETPOS, (WPARAM)TRUE, (LPARAM)viewport_vector_gain_u8_);
+                }
+                ApplyViewportVisualFxFromControls(true);
+                RefreshVoxelDesignerPanel();
+                if (hwnd_viewport_) InvalidateRect(hwnd_viewport_, nullptr, FALSE);
+                return;
+            }
+        }
+        if (args_lower.rfind("dof ", 0) == 0) {
+            const std::string dof_args = ew_trim_ascii_copy(args.substr(4u));
+            const std::string dof_lower = ew_lower_ascii_copy(dof_args);
+            bool changed = false;
+            if (dof_lower == "status") {
+                AppendOutputUtf8(std::string("REMOTE_VIEWPORT_DOF field_depth_m=") +
+                                 std::to_string((double)viewport_field_depth_m_f32_) +
+                                 " focal_mm=" + std::to_string((double)viewport_focal_length_mm_f32_));
+                return;
+            } else if (dof_lower.rfind("field ", 0) == 0 || dof_lower.rfind("depth ", 0) == 0) {
+                const size_t off_field = (dof_lower.rfind("field ", 0) == 0) ? 6u : 6u;
+                int v = std::atoi(dof_args.substr(off_field).c_str());
+                if (v < 2) v = 2;
+                if (v > 250) v = 250;
+                viewport_field_depth_m_f32_ = (float)v;
+                changed = true;
+            } else if (dof_lower.rfind("focal ", 0) == 0) {
+                int v = std::atoi(dof_args.substr(6u).c_str());
+                if (v < 18) v = 18;
+                if (v > 200) v = 200;
+                viewport_focal_length_mm_f32_ = (float)v;
+                changed = true;
+            }
+            if (changed) {
+                if (hwnd_rdock_voxel_) {
+                    if (HWND h = GetDlgItem(hwnd_rdock_voxel_, EW_VOXEL_FIELD_DEPTH_ID)) SendMessageW(h, TBM_SETPOS, (WPARAM)TRUE, (LPARAM)(int)std::lround((double)viewport_field_depth_m_f32_));
+                    if (HWND h = GetDlgItem(hwnd_rdock_voxel_, EW_VOXEL_FOCAL_MM_ID)) SendMessageW(h, TBM_SETPOS, (WPARAM)TRUE, (LPARAM)(int)std::lround((double)viewport_focal_length_mm_f32_));
+                }
+                ApplyViewportVisualFxFromControls(true);
+                RefreshVoxelDesignerPanel();
+                if (hwnd_viewport_) InvalidateRect(hwnd_viewport_, nullptr, FALSE);
+                return;
+            }
+        }
         if (args_lower == "status") {
             AppendOutputUtf8(std::string("REMOTE_VIEWPORT_STATUS live=") + (live_mode_enabled_ ? "1" : "0") +
                              " confinement=" + (confinement_particles_enabled_ ? "1" : "0") +
                              " resonance=" + (resonance_view_ ? "1" : "0") +
-                             " tick=" + std::to_string((unsigned long long)scene_->sm.canonical_tick));
-            AppendOutputUtf8(BuildPhotonConfinementStatusUtf8());
+                             " vector=" + (viewport_vector_visualization_enabled_ ? std::string("1") : std::string("0")) +
+                             " sim_play=" + (scene_ && (scene_->sm.sim_world_play_u32 != 0u) ? "1" : "0"));
             return;
         }
     }
@@ -13166,6 +15954,18 @@ LRESULT App::WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 SetTextColor(hdc, hctrl == hwnd_topbar_title_ ? g_theme.gold_hot : g_theme.text);
                 return (INT_PTR)g_brush_topbar;
             }
+            if (hctrl == hwnd_content_) {
+                SetBkMode(hdc, OPAQUE);
+                SetBkColor(hdc, g_theme.panel_alt);
+                SetTextColor(hdc, g_theme.text);
+                return (INT_PTR)g_brush_panel_alt;
+            }
+            if (hctrl == hwnd_ai_panel_chat_title_ || hctrl == hwnd_ai_panel_chat_state_) {
+                SetBkMode(hdc, TRANSPARENT);
+                SetBkColor(hdc, g_theme.panel);
+                SetTextColor(hdc, hctrl == hwnd_ai_panel_chat_title_ ? g_theme.gold_hot : g_theme.dim);
+                return (INT_PTR)g_brush_panel;
+            }
             SetBkMode(hdc, TRANSPARENT);
             SetTextColor(hdc, g_theme.text);
             SetBkColor(hdc, g_theme.panel);
@@ -13211,7 +16011,7 @@ LRESULT App::WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             POINT pt{ GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) };
             ScreenToClient(hwnd_main_, &pt);
             const UINT main_dpi_now = hwnd_main_ ? GetDpiForWindow(hwnd_main_) : 96u;
-            const int topbar_h = MulDiv(44, (int)main_dpi_now, 96);
+            const int topbar_h = MulDiv(86, (int)main_dpi_now, 96);
             if (pt.y < 0 || pt.y >= topbar_h) return hit;
             HWND target = ChildWindowFromPointEx(hwnd_main_, pt, CWP_SKIPDISABLED | CWP_SKIPINVISIBLE | CWP_SKIPTRANSPARENT);
             if (!target || target == hwnd_main_ || target == hwnd_topbar_ ||
@@ -13290,6 +16090,37 @@ LRESULT App::WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 InvalidateRect(hwnd_viewport_, nullptr, FALSE);
                 return 0;
             }
+            if (id == EW_VOXEL_LATTICE_VOLUME_ID && code == BN_CLICKED) {
+                ApplyViewportLatticeProjectionFromControls(false);
+                if (hwnd_ai_status_) {
+                    SetWindowTextW(hwnd_ai_status_, viewport_lattice_volume_mode_
+                        ? L"Viewport lattice projection mode set to 3D volume."
+                        : L"Viewport lattice projection mode set to single Z slice.");
+                }
+                RefreshVoxelDesignerPanel();
+                InvalidateRect(hwnd_viewport_, nullptr, FALSE);
+                return 0;
+            }
+            if (id == EW_VOXEL_LATTICE_APPLY_ID && code == BN_CLICKED) {
+                ApplyViewportLatticeProjectionFromControls(true);
+                if (hwnd_ai_status_) {
+                    SetWindowTextW(hwnd_ai_status_, L"Viewport lattice projection parameters applied from voxel controls.");
+                }
+                RefreshVoxelDesignerPanel();
+                InvalidateRect(hwnd_viewport_, nullptr, FALSE);
+                return 0;
+            }
+            if (id == EW_VOXEL_VECTOR_VIS_ID && code == BN_CLICKED) {
+                ApplyViewportVisualFxFromControls(true);
+                if (hwnd_ai_status_) {
+                    SetWindowTextW(hwnd_ai_status_, viewport_vector_visualization_enabled_
+                        ? L"Viewport vector visualization enabled."
+                        : L"Viewport vector visualization disabled.");
+                }
+                RefreshVoxelDesignerPanel();
+                InvalidateRect(hwnd_viewport_, nullptr, FALSE);
+                return 0;
+            }
 
             // Apply voxel preset (UI-only). Emits a line and sets representative sliders.
             if (id == 2611 && code == BN_CLICKED && hwnd_voxel_preset_) {
@@ -13326,15 +16157,145 @@ LRESULT App::WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 return 0;
             }
 
+            auto run_transport_command = [&](int cmd_id_i32)->bool {
+                switch (cmd_id_i32) {
+                    case EW_CMD_TOPBAR_TRANSPORT_BACK:
+                    case 2728:
+                        sequencer_scrub_t_f32_ = std::max(0.0f, sequencer_scrub_t_f32_ - 0.0625f);
+                        RefreshSequencerPanel();
+                        RefreshTopBarChrome();
+                        return true;
+                    case EW_CMD_TOPBAR_TRANSPORT_START:
+                    case 2729:
+                        sequencer_scrub_t_f32_ = 0.0f;
+                        RefreshSequencerPanel();
+                        RefreshTopBarChrome();
+                        return true;
+                    case 1601:
+                    case 2722: {
+                        const bool next_enabled = !IsSimPlayEnabledCanonical();
+                        SubmitToggleControlPacket(EwControlPacketKind::SimSetPlay, next_enabled);
+                        seq_play_enabled_ = next_enabled;
+                        if (hwnd_ai_status_) {
+                            SetWindowTextW(hwnd_ai_status_,
+                                           next_enabled ? L"Simulation transport enabled."
+                                                        : L"Simulation transport paused.");
+                        }
+                        RefreshAiToggleWidgets();
+                        RefreshSequencerPanel();
+                        RefreshTopBarChrome();
+                        if (hwnd_viewport_) InvalidateRect(hwnd_viewport_, nullptr, FALSE);
+                        return true;
+                    }
+                    case EW_CMD_TOPBAR_PAUSE:
+                    case 2730:
+                        SubmitToggleControlPacket(EwControlPacketKind::SimSetPlay, false);
+                        seq_play_enabled_ = false;
+                        if (hwnd_ai_status_) SetWindowTextW(hwnd_ai_status_, L"Simulation transport paused.");
+                        RefreshAiToggleWidgets();
+                        RefreshSequencerPanel();
+                        RefreshTopBarChrome();
+                        if (hwnd_viewport_) InvalidateRect(hwnd_viewport_, nullptr, FALSE);
+                        return true;
+                    case EW_CMD_TOPBAR_STOP:
+                    case 2737:
+                        SubmitToggleControlPacket(EwControlPacketKind::SimSetPlay, false);
+                        seq_play_enabled_ = false;
+                        sequencer_scrub_t_f32_ = 0.0f;
+                        if (hwnd_ai_status_) SetWindowTextW(hwnd_ai_status_, L"Simulation transport stopped and rewound.");
+                        RefreshAiToggleWidgets();
+                        RefreshSequencerPanel();
+                        RefreshTopBarChrome();
+                        if (hwnd_viewport_) InvalidateRect(hwnd_viewport_, nullptr, FALSE);
+                        return true;
+                    case EW_CMD_TOPBAR_REPLAY:
+                    case 2738:
+                        sequencer_scrub_t_f32_ = 0.0f;
+                        SubmitToggleControlPacket(EwControlPacketKind::SimSetPlay, true);
+                        seq_play_enabled_ = true;
+                        if (hwnd_ai_status_) SetWindowTextW(hwnd_ai_status_, L"Simulation transport replaying from start.");
+                        RefreshAiToggleWidgets();
+                        RefreshSequencerPanel();
+                        RefreshTopBarChrome();
+                        if (hwnd_viewport_) InvalidateRect(hwnd_viewport_, nullptr, FALSE);
+                        return true;
+                    default:
+                        return false;
+                }
+            };
+
             // Menu actions (HIWORD==0).
             if (code == 0) {
-                if (id == 1607) { ShowTopBarWorkbenchMenu(); return 0; }
-                if (id == 1601) { SendMessageW(hwnd_main_, WM_COMMAND, MAKEWPARAM(2040, BN_CLICKED), 0); return 0; }
+                if (id == EW_CMD_TOPBAR_MENU_FILE) { ShowTopBarMenuForButton(EW_CMD_TOPBAR_MENU_FILE, hwnd_topbar_menu_); return 0; }
+                if (id == EW_CMD_TOPBAR_MENU_EDIT) { ShowTopBarMenuForButton(EW_CMD_TOPBAR_MENU_EDIT, hwnd_topbar_menu_edit_); return 0; }
+                if (id == EW_CMD_TOPBAR_MENU_WINDOW) { ShowTopBarMenuForButton(EW_CMD_TOPBAR_MENU_WINDOW, hwnd_topbar_menu_window_); return 0; }
+                if (id == EW_CMD_TOPBAR_MENU_TOOLS) { ShowTopBarMenuForButton(EW_CMD_TOPBAR_MENU_TOOLS, hwnd_topbar_menu_tools_); return 0; }
+                if (id == EW_CMD_TOPBAR_MENU_BUILD) { ShowTopBarMenuForButton(EW_CMD_TOPBAR_MENU_BUILD, hwnd_topbar_menu_build_); return 0; }
+                if (id == EW_CMD_TOPBAR_MENU_PLATFORMS) { ShowTopBarMenuForButton(EW_CMD_TOPBAR_MENU_PLATFORMS, hwnd_topbar_menu_platforms_); return 0; }
+                if (id == EW_CMD_TOPBAR_MENU_SELECT) { ShowTopBarMenuForButton(EW_CMD_TOPBAR_MENU_SELECT, hwnd_topbar_menu_select_); return 0; }
+                if (id == EW_CMD_TOPBAR_MENU_ACTOR) { ShowTopBarMenuForButton(EW_CMD_TOPBAR_MENU_ACTOR, hwnd_topbar_menu_actor_); return 0; }
+                if (id == EW_CMD_TOPBAR_MENU_HELP) { ShowTopBarMenuForButton(EW_CMD_TOPBAR_MENU_HELP, hwnd_topbar_menu_help_); return 0; }
+                if (id == EW_CMD_TOPBAR_SELECT_MODE) { ShowTopBarMenuForButton(EW_CMD_TOPBAR_MENU_SELECT, hwnd_topbar_select_mode_); return 0; }
+                if (id == EW_CMD_TOPBAR_ADD_ACTOR) {
+                    if (scene_ && scene_->selected >= 0 && scene_->selected < (int)scene_->objects.size()) {
+                        const bool duplicated = scene_->DuplicateSelectedObjectForEditor(0.20f, 0.0f, 0.20f);
+                        if (duplicated) {
+                            if (scene_->selected >= 0 && scene_->selected < (int)scene_->objects.size()) {
+                                editor_selected_object_id_u64_ = scene_->objects[(size_t)scene_->selected].object_id_u64;
+                                EmitEditorSelection(editor_selected_object_id_u64_);
+                                if (hwnd_objlist_) SendMessageW(hwnd_objlist_, LB_SETCURSEL, (WPARAM)scene_->selected, 0);
+                            }
+                            RebuildOutlinerList();
+                            RebuildPropertyGrid();
+                            RefreshAssetDesignerPanel();
+                            RefreshVoxelDesignerPanel();
+                            RefreshNodePanel();
+                            RefreshSequencerPanel();
+                            if (hwnd_ai_status_) SetWindowTextW(hwnd_ai_status_, L"Add Actor: duplicated the selected object into the level.");
+                            return 0;
+                        }
+                    }
+                    if (hwnd_left_panel_) SetFocus(hwnd_left_panel_);
+                    SetPrimaryWorkspaceTab(EW_WORKSPACE_LEVEL_SIM);
+                    if (hwnd_left_search_) SetFocus(hwnd_left_search_);
+                    if (hwnd_ai_status_) SetWindowTextW(hwnd_ai_status_, L"Add Actor: choose an actor template or import an asset to place into the level.");
+                    return 0;
+                }
+                if (id == EW_CMD_TOPBAR_TOOL_TRANSLATE) { SendMessageW(hwnd_main_, WM_COMMAND, MAKEWPARAM(2020, BN_CLICKED), 0); return 0; }
+                if (id == EW_CMD_TOPBAR_TOOL_ROTATE) { SendMessageW(hwnd_main_, WM_COMMAND, MAKEWPARAM(2021, BN_CLICKED), 0); return 0; }
+                if (id == EW_CMD_TOPBAR_TOOL_FRAME) { SendMessageW(hwnd_main_, WM_COMMAND, MAKEWPARAM(2022, BN_CLICKED), 0); return 0; }
+                if (id == EW_CMD_TOPBAR_VIEW_PERSPECTIVE) {
+                    resonance_view_ = false;
+                    cam_yaw_rad_ = 0.65f;
+                    cam_pitch_rad_ = 0.32f;
+                    cam_dist_m_ = 6.0f;
+                    cam_target_[0] = 0.0f;
+                    cam_target_[1] = 0.0f;
+                    cam_target_[2] = 0.0f;
+                    if (scene_ && scene_->selected >= 0 && scene_->selected < (int)scene_->objects.size()) {
+                        const auto& o = scene_->objects[(size_t)scene_->selected];
+                        cam_target_[0] = (float)o.pos_q16_16[0] / 65536.0f;
+                        cam_target_[1] = (float)o.pos_q16_16[1] / 65536.0f;
+                        cam_target_[2] = (float)o.pos_q16_16[2] / 65536.0f;
+                        const float r = (float)o.radius_q16_16 / 65536.0f;
+                        cam_dist_m_ = (r > 0.001f) ? std::max(4.0f, r * 4.0f) : 6.0f;
+                    }
+                    EmitCameraSetFromRig();
+                    if (hwnd_ai_status_) {
+                        SetWindowTextW(hwnd_ai_status_, L"Viewport reset to standard perspective orbit view.");
+                    }
+                    InvalidateRect(hwnd_viewport_, nullptr, FALSE);
+                    RefreshTopBarChrome();
+                    return 0;
+                }
+                if (id == EW_CMD_TOPBAR_VIEW_LIT) { resonance_view_ = false; InvalidateRect(hwnd_viewport_, nullptr, FALSE); RefreshTopBarChrome(); return 0; }
+                if (id == EW_CMD_TOPBAR_VIEW_SHOW) { ShowTopBarWorkbenchMenu(); return 0; }
+                if (run_transport_command(id)) return 0;
                 if (id == 1602) { SendMessageW(hwnd_main_, WM_COMMAND, MAKEWPARAM(2041, BN_CLICKED), 0); return 0; }
                 if (id == 1603) { SendMessageW(hwnd_main_, WM_COMMAND, MAKEWPARAM(9209, 0), 0); return 0; }
                 if (id == 1604) {
                     confinement_particles_enabled_ = !confinement_particles_enabled_;
-                    AppendOutputUtf8(BuildPhotonConfinementStatusUtf8());
+                    AppendOutputUtf8(std::string("REMOTE_VIEWPORT confinement=") + (confinement_particles_enabled_ ? "1" : "0"));
                     if (hwnd_viewport_) InvalidateRect(hwnd_viewport_, nullptr, FALSE);
                     RefreshViewportResonanceOverlay();
                     RefreshTopBarChrome();
@@ -13342,15 +16303,18 @@ LRESULT App::WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 }
                 if (id == 1605) { SendMessageW(hwnd_main_, WM_COMMAND, MAKEWPARAM(9201, 0), 0); return 0; }
                 if (id == 1606) { SendMessageW(hwnd_main_, WM_COMMAND, MAKEWPARAM(9202, 0), 0); return 0; }
+                if (id == EW_CMD_TOPBAR_WORKSPACE_LEVEL) { SetPrimaryWorkspaceTab(EW_WORKSPACE_LEVEL_SIM); return 0; }
+                if (id == EW_CMD_TOPBAR_WORKSPACE_ASSET) { SetPrimaryWorkspaceTab(EW_WORKSPACE_ASSET_BUILDER); return 0; }
+                if (id == EW_CMD_TOPBAR_WORKSPACE_VOXEL) { SetPrimaryWorkspaceTab(EW_WORKSPACE_VOXEL_BUILDER); return 0; }
                 if (id == 1609) { ShowWindow(hwnd_main_, SW_MINIMIZE); return 0; }
                 if (id == 1610) { ShowWindow(hwnd_main_, IsZoomed(hwnd_main_) ? SW_RESTORE : SW_MAXIMIZE); return 0; }
-                if (id == 1611) { SendMessageW(hwnd_main_, WM_CLOSE, 0, 0); return 0; }
+                if (id == 1611) { exit_requested_ = true; SendMessageW(hwnd_main_, WM_CLOSE, 0, 0); return 0; }
                 if (id >= 2760 && id < 2760 + (int)node_palette_entries_.size()) {
                     const size_t palette_idx = (size_t)(id - 2760);
                     (void)SpawnNodePaletteEntry(palette_idx);
                     return 0;
                 }
-                if (id == 9001) { PostQuitMessage(0); return 0; }
+                if (id == 9001) { exit_requested_ = true; SendMessageW(hwnd_main_, WM_CLOSE, 0, 0); return 0; }
                 if (id == 9201) {
                     content_visible_ = !content_visible_;
                     if (hwnd_content_) ShowWindow(hwnd_content_, content_visible_ ? SW_SHOW : SW_HIDE);
@@ -13363,6 +16327,38 @@ LRESULT App::WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 if (id >= 9203 && id <= 9208) { SetRightDockPanelVisible((uint32_t)(id - 9203), !rdock_panel_visible_[id - 9203]); RefreshNodePanel(); RefreshSequencerPanel(); return 0; }
                 if (id == 9301 && scene_) { scene_->ContentReindex(); return 0; }
                 if (id == 9302) { RefreshContentBrowserFromRuntime(200u); return 0; }
+                if (id == EW_CMD_CONTENT_ADD) {
+                    SetPrimaryWorkspaceTab(EW_WORKSPACE_ASSET_BUILDER);
+                    OnImportObj();
+                    return 0;
+                }
+                if (id == EW_CMD_CONTENT_IMPORT) { SendMessageW(hwnd_main_, WM_COMMAND, MAKEWPARAM(2003, BN_CLICKED), 0); return 0; }
+                if (id == EW_CMD_CONTENT_SAVE_ALL) {
+                    if (scene_) {
+                        scene_->ContentReindex();
+                    }
+                    RefreshContentBrowserFromRuntime(200u);
+                    if (hwnd_content_status_) SetWindowTextW(hwnd_content_status_, L"Content Browser: substrate content reindexed and refreshed.");
+                    AppendOutputUtf8("CONTENT: substrate content reindexed and browser refreshed");
+                    return 0;
+                }
+                if (id == EW_CMD_CONTENT_FAB) {
+                    if (scene_) {
+                        EwAiVaultBrowserDialog dlg = EwAiVaultBrowserDialog::RunModal(hwnd_main_, scene_);
+                        if (dlg.import_requested && !dlg.imported_path.empty()) {
+                            RefreshContentBrowserFromRuntime(200u);
+                            if (hwnd_content_status_) {
+                                SetWindowTextW(hwnd_content_status_, (std::wstring(L"Content Browser: imported vault handle ") + dlg.imported_path).c_str());
+                            }
+                            AppendOutputUtf8(std::string("CONTENT: imported vault handle ") + wide_to_utf8(dlg.imported_path));
+                        } else if (hwnd_content_status_) {
+                            SetWindowTextW(hwnd_content_status_, L"Content Browser: Fab/Vault browser closed without import.");
+                        }
+                    }
+                    return 0;
+                }
+                if (id == EW_CMD_CONTENT_BACK) { NavigateContentHistory(-1); return 0; }
+                if (id == EW_CMD_CONTENT_FORWARD) { NavigateContentHistory(+1); return 0; }
                 if (id == 9101 || id == 2090) {
                     if (!CopyFocusedSurfaceToClipboard() && id == 2090) {
                         (void)CopyDetailsBlockToClipboard();
@@ -13375,6 +16371,37 @@ LRESULT App::WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                     }
                     return 0;
                 }
+            }
+
+            if (id == 1401 && code == EN_CHANGE) { RefreshPlaceActorsPanel(); return 0; }
+            if (id == 1402 && code == CBN_SELCHANGE) { RefreshPlaceActorsPanel(); return 0; }
+            if (id == 1403 && code == LBN_SELCHANGE) {
+                const int sel = hwnd_left_actor_list_ ? (int)SendMessageW(hwnd_left_actor_list_, LB_GETCURSEL, 0, 0) : -1;
+                if (!left_place_actor_sync_guard_ && hwnd_left_actor_thumb_) {
+                    left_place_actor_sync_guard_ = true;
+                    const int thumb_count = ListView_GetItemCount(hwnd_left_actor_thumb_);
+                    for (int i = 0; i < thumb_count; ++i) {
+                        ListView_SetItemState(hwnd_left_actor_thumb_, i, 0, LVIS_SELECTED | LVIS_FOCUSED);
+                    }
+                    if (sel >= 0 && sel < thumb_count) {
+                        ListView_SetItemState(hwnd_left_actor_thumb_, sel, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+                        ListView_EnsureVisible(hwnd_left_actor_thumb_, sel, FALSE);
+                    }
+                    left_place_actor_sync_guard_ = false;
+                }
+                if (sel >= 0 && (size_t)sel < left_vault_visible_paths_utf8_.size() && hwnd_ai_status_) {
+                    const std::wstring label_w = utf8_to_wide(left_vault_visible_paths_utf8_[(size_t)sel]);
+                    const std::wstring status_w = BuildPlaceActorsStatusLine(label_w);
+                    SetWindowTextW(hwnd_ai_status_, status_w.c_str());
+                }
+                return 0;
+            }
+            if (id == 1403 && code == LBN_DBLCLK) {
+                const int sel = hwnd_left_actor_list_ ? (int)SendMessageW(hwnd_left_actor_list_, LB_GETCURSEL, 0, 0) : -1;
+                if (sel >= 0 && (size_t)sel < left_vault_visible_paths_utf8_.size()) {
+                    (void)ActivatePlaceActorsEntryByLabel(utf8_to_wide(left_vault_visible_paths_utf8_[(size_t)sel]));
+                }
+                return 0;
             }
 
             if (id == 4861 && code == BN_CLICKED) { AiPanelSetView(0u); return 0; }
@@ -13510,9 +16537,10 @@ LRESULT App::WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 return 0;
             }
             if ((id == 4877 || id == 4878) && code == BN_CLICKED) {
-                if (scene_ && hwnd_ai_coh_old_ && hwnd_ai_coh_new_) {
-                    wchar_t oldb[256]{}, newb[256]{}; GetWindowTextW(hwnd_ai_coh_old_, oldb, 256); GetWindowTextW(hwnd_ai_coh_new_, newb, 256);
-                    std::string olda = wide_to_utf8(oldb), newa = wide_to_utf8(newb), err;
+                if (scene_ && hwnd_ai_coh_new_) {
+                    wchar_t newb[256]{}; GetWindowTextW(hwnd_ai_coh_new_, newb, 256);
+                    std::string olda, newa = wide_to_utf8(newb), err;
+                    // olda removed: logic for old name must be refactored to canonical input source.
                     if (id == 4877) {
                         CanonicalReferenceSummary summary{};
                         if (BuildCanonicalReferenceSummaryForRename(olda, newa, 64u, &summary, &err)) {
@@ -13749,7 +16777,6 @@ LRESULT App::WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                     InvalidateRect(hwnd_viewport_, nullptr, FALSE);
                     return 0;
                 }
-                if (id == 2722) { seq_play_enabled_ = !seq_play_enabled_; sequencer_scrub_t_f32_ += seq_play_enabled_ ? 0.125f : 0.0f; if (hwnd_ai_status_) SetWindowTextW(hwnd_ai_status_, seq_play_enabled_ ? L"Sequencer transport enabled for derived timeline preview." : L"Sequencer transport paused."); RefreshSequencerPanel(); InvalidateRect(hwnd_viewport_, nullptr, FALSE); return 0; }
                 if (id == 2723) { seq_loop_builder_enabled_ = !seq_loop_builder_enabled_; if (hwnd_ai_status_) SetWindowTextW(hwnd_ai_status_, seq_loop_builder_enabled_ ? L"Loop builder armed for contact/recovery stitching." : L"Loop builder returned to idle."); RefreshSequencerPanel(); return 0; }
                 if (id == 2724) { if (hwnd_ai_status_) SetWindowTextW(hwnd_ai_status_, L"Sequencer added a bounded advisory key on the selected timeline lane."); sequencer_scrub_t_f32_ += 0.0625f; RefreshSequencerPanel(); return 0; }
                 if (id == 2725) { seq_stress_overlay_enabled_ = !seq_stress_overlay_enabled_; if (hwnd_ai_status_) SetWindowTextW(hwnd_ai_status_, seq_stress_overlay_enabled_ ? L"Stress/pain advisory overlays enabled." : L"Stress/pain advisory overlays hidden."); RefreshSequencerPanel(); InvalidateRect(hwnd_viewport_, nullptr, FALSE); return 0; }
@@ -13778,7 +16805,9 @@ LRESULT App::WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 if (id == 2040) {
                     const bool next_enabled = !IsSimPlayEnabledCanonical();
                     SubmitToggleControlPacket(EwControlPacketKind::SimSetPlay, next_enabled);
+                    seq_play_enabled_ = next_enabled;
                     RefreshAiToggleWidgets();
+                    RefreshSequencerPanel();
                 } else if (id == 2041) {
                     const bool next_ai_enabled = !IsAiEnabledCanonical();
                     SetAiStateCanonical(next_ai_enabled,
@@ -14173,6 +17202,20 @@ LRESULT App::WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 RefreshContentBrowserFromRuntime(200u);
                 return 0;
             }
+            if (id == EW_CMD_CONTENT_SETTINGS_MENU && code == BN_CLICKED) {
+                ShowContentBrowserSettingsMenu(hwnd_content_settings_);
+                return 0;
+            }
+            if (id == EW_CMD_CONTENT_TAB_PRIMARY && code == BN_CLICKED) {
+                content_secondary_tab_active_ = false;
+                RefreshContentBrowserChrome();
+                return 0;
+            }
+            if (id == EW_CMD_CONTENT_TAB_SECONDARY && code == BN_CLICKED) {
+                content_secondary_tab_active_ = true;
+                RefreshContentBrowserChrome();
+                return 0;
+            }
 
             // Content search (simple substring filter; deterministic rebuild from cached list)
             if (id == 1011 && code == EN_CHANGE) {
@@ -14185,18 +17228,59 @@ LRESULT App::WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             if (id == 1014 && code == BN_CLICKED) { SetContentBrowserViewMode(0u); return 0; }
             if (id == 1015 && code == BN_CLICKED) { SetContentBrowserViewMode(1u); return 0; }
             if (id == 1016 && code == BN_CLICKED) { SetContentBrowserViewMode(2u); return 0; }
-            if (id == 1018 && code == LBN_SELCHANGE && hwnd_content_3d_) {
+            if ((id == 1098 || id == 1018) && code == LBN_SELCHANGE && hwnd_content_3d_) {
                 if (!content_selection_sync_guard_) {
                     const int sel = (int)SendMessageW(hwnd_content_3d_, LB_GETCURSEL, 0, 0);
                     if (sel >= 0) {
                         const LRESULT data = SendMessageW(hwnd_content_3d_, LB_GETITEMDATA, (WPARAM)sel, 0);
-                        if (data >= 0 && (size_t)data < content_items_.size()) (void)SelectContentRelativePath(content_items_[(size_t)data].rel_utf8);
+                        if (data >= 0 && (size_t)data < content_items_.size()) (void)SelectContentRelativePath(content_items_[(size_t)data].rel_utf8, false);
                     }
                 }
                 return 0;
             }
             if (id == 1019 && code == BN_CLICKED) {
                 if (!content_selected_rel_utf8_.empty()) (void)ReviewReferencesForPath(content_selected_rel_utf8_, L"Content reference review");
+                return 0;
+            }
+
+            // Content browser settings menu commands (menu-originated -> code==0).
+            if (id >= EW_CMD_CONTENT_OPT_VIEW_GRID && id <= EW_CMD_CONTENT_OPT_LOCK_BROWSER) {
+                bool rebuild_sources = false;
+                bool rebuild_views = false;
+                bool relayout = false;
+                switch ((UINT)id) {
+                    case EW_CMD_CONTENT_OPT_VIEW_GRID: SetContentBrowserViewMode(0u); return 0;
+                    case EW_CMD_CONTENT_OPT_VIEW_LIST: SetContentBrowserViewMode(1u); return 0;
+                    case EW_CMD_CONTENT_OPT_VIEW_COLUMNS: SetContentBrowserViewMode(2u); return 0;
+                    case EW_CMD_CONTENT_OPT_SOURCES_PANEL: content_sources_panel_visible_ = !content_sources_panel_visible_; relayout = true; break;
+                    case EW_CMD_CONTENT_OPT_SHOW_FAVORITES: content_show_favorites_ = !content_show_favorites_; rebuild_sources = rebuild_views = true; break;
+                    case EW_CMD_CONTENT_OPT_SHOW_FOLDERS: content_show_folders_ = !content_show_folders_; rebuild_sources = rebuild_views = true; break;
+                    case EW_CMD_CONTENT_OPT_SHOW_EMPTY_FOLDERS: content_show_empty_folders_ = !content_show_empty_folders_; rebuild_sources = true; break;
+                    case EW_CMD_CONTENT_OPT_ORGANIZE_FOLDERS: content_organize_folders_ = !content_organize_folders_; rebuild_sources = true; break;
+                    case EW_CMD_CONTENT_OPT_SHOW_ALL_FOLDER: content_show_all_folder_ = !content_show_all_folder_; rebuild_sources = true; break;
+                    case EW_CMD_CONTENT_OPT_SHOW_CPP: content_show_cpp_classes_ = !content_show_cpp_classes_; rebuild_sources = rebuild_views = true; break;
+                    case EW_CMD_CONTENT_OPT_SHOW_DEVELOPERS: content_show_developers_content_ = !content_show_developers_content_; rebuild_sources = rebuild_views = true; break;
+                    case EW_CMD_CONTENT_OPT_SHOW_ENGINE: content_show_engine_content_ = !content_show_engine_content_; rebuild_sources = rebuild_views = true; break;
+                    case EW_CMD_CONTENT_OPT_SHOW_PLUGIN: content_show_plugin_content_ = !content_show_plugin_content_; rebuild_sources = rebuild_views = true; break;
+                    case EW_CMD_CONTENT_OPT_SHOW_LOCALIZED: content_show_localized_content_ = !content_show_localized_content_; rebuild_sources = rebuild_views = true; break;
+                    case EW_CMD_CONTENT_OPT_SEARCH_CLASS: content_search_asset_class_names_ = !content_search_asset_class_names_; rebuild_views = true; break;
+                    case EW_CMD_CONTENT_OPT_SEARCH_PATH: content_search_asset_path_ = !content_search_asset_path_; rebuild_views = true; break;
+                    case EW_CMD_CONTENT_OPT_SEARCH_COLLECTION: content_search_collection_names_ = !content_search_collection_names_; rebuild_views = true; break;
+                    case EW_CMD_CONTENT_OPT_THUMB_TINY: content_thumbnail_size_u32_ = 0u; break;
+                    case EW_CMD_CONTENT_OPT_THUMB_SMALL: content_thumbnail_size_u32_ = 1u; break;
+                    case EW_CMD_CONTENT_OPT_THUMB_MEDIUM: content_thumbnail_size_u32_ = 2u; break;
+                    case EW_CMD_CONTENT_OPT_THUMB_LARGE: content_thumbnail_size_u32_ = 3u; break;
+                    case EW_CMD_CONTENT_OPT_THUMB_HUGE: content_thumbnail_size_u32_ = 4u; break;
+                    case EW_CMD_CONTENT_OPT_THUMB_EDIT: content_thumbnail_edit_mode_ = !content_thumbnail_edit_mode_; break;
+                    case EW_CMD_CONTENT_OPT_THUMB_REALTIME: content_realtime_thumbnails_ = !content_realtime_thumbnails_; break;
+                    case EW_CMD_CONTENT_OPT_EXPAND_TOOLTIPS: content_always_expand_tooltips_ = !content_always_expand_tooltips_; ConfigureContentBrowserListView(); break;
+                    case EW_CMD_CONTENT_OPT_LOCK_BROWSER: content_locked_ = !content_locked_; break;
+                    default: break;
+                }
+                if (rebuild_sources) RebuildContentSourcesPanel();
+                if (rebuild_views) RebuildContentBrowserViews();
+                if (relayout) LayoutChildren(client_w_, client_h_);
+                RefreshContentBrowserChrome();
                 return 0;
             }
 
@@ -14447,8 +17531,27 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
         } break;
         case WM_HSCROLL: {
             HWND hscroll = (HWND)lparam;
-            if (hscroll == GetDlgItem(hwnd_rdock_voxel_, 2601) || hscroll == GetDlgItem(hwnd_rdock_voxel_, 2602) || hscroll == GetDlgItem(hwnd_rdock_voxel_, 2603)) {
+            if (hscroll == GetDlgItem(hwnd_rdock_voxel_, 2601) ||
+                hscroll == GetDlgItem(hwnd_rdock_voxel_, 2602) ||
+                hscroll == GetDlgItem(hwnd_rdock_voxel_, 2603)) {
                 RefreshVoxelDesignerPanel();
+                return 0;
+            }
+            if (hscroll == GetDlgItem(hwnd_rdock_voxel_, EW_VOXEL_LATTICE_SLICE_ID) ||
+                hscroll == GetDlgItem(hwnd_rdock_voxel_, EW_VOXEL_LATTICE_STRIDE_ID) ||
+                hscroll == GetDlgItem(hwnd_rdock_voxel_, EW_VOXEL_LATTICE_MAXPTS_ID) ||
+                hscroll == GetDlgItem(hwnd_rdock_voxel_, EW_VOXEL_LATTICE_INTENSITY_ID)) {
+                ApplyViewportLatticeProjectionFromControls(false);
+                RefreshVoxelDesignerPanel();
+                InvalidateRect(hwnd_viewport_, nullptr, FALSE);
+                return 0;
+            }
+            if (hscroll == GetDlgItem(hwnd_rdock_voxel_, EW_VOXEL_VECTOR_GAIN_ID) ||
+                hscroll == GetDlgItem(hwnd_rdock_voxel_, EW_VOXEL_FIELD_DEPTH_ID) ||
+                hscroll == GetDlgItem(hwnd_rdock_voxel_, EW_VOXEL_FOCAL_MM_ID)) {
+                ApplyViewportVisualFxFromControls(false);
+                RefreshVoxelDesignerPanel();
+                InvalidateRect(hwnd_viewport_, nullptr, FALSE);
                 return 0;
             }
             if (hscroll == hwnd_asset_planet_atmo_ || hscroll == hwnd_asset_planet_iono_ || hscroll == hwnd_asset_planet_magneto_ ||
@@ -14461,9 +17564,13 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
             const NMHDR* nh = (const NMHDR*)lparam;
             if (nh && nh->code == NM_CUSTOMDRAW) {
                 // Tabs and list controls use deterministic custom-draw for theme + coherence highlights.
-                if (nh->hwndFrom == hwnd_rdock_tab_ || nh->hwndFrom == hwnd_ai_tab_) {
+                if (nh->hwndFrom == hwnd_rdock_tab_ || nh->hwndFrom == hwnd_ai_tab_ || nh->hwndFrom == hwnd_primary_tab_) {
                     LRESULT res = 0;
                     if (ew_tab_custom_draw(nh, &res)) return res;
+                }
+                if (ew_is_class_name(nh->hwndFrom, WC_HEADERW)) {
+                    LRESULT res = 0;
+                    if (ew_header_custom_draw(nh, &res)) return res;
                 }
                 if (nh->hwndFrom == hwnd_content_list_) {
                     const NMLVCUSTOMDRAW* cd = (const NMLVCUSTOMDRAW*)lparam;
@@ -14508,10 +17615,15 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
                 }
 
             }
+            if (nh && hwnd_primary_tab_ && nh->hwndFrom == hwnd_primary_tab_ && nh->code == TCN_SELCHANGE) {
+                const int sel = TabCtrl_GetCurSel(hwnd_primary_tab_);
+                if (sel >= 0) SetPrimaryWorkspaceTab((uint32_t)sel);
+                return 0;
+            }
             if (nh && hwnd_rdock_tab_ && nh->hwndFrom == hwnd_rdock_tab_ && nh->code == TCN_SELCHANGE) {
                 const int sel = TabCtrl_GetCurSel(hwnd_rdock_tab_);
                 if (sel >= 0) {
-                    if (!rdock_panel_visible_[sel]) {
+                    if (!rdock_panel_visible_[sel] || !rdock_panel_workspace_enabled_[sel]) {
                         const int fallback = ResolveNextVisibleDockTab((int)rdock_tab_index_u32_);
                         if (fallback >= 0) TabCtrl_SetCurSel(hwnd_rdock_tab_, fallback);
                     } else {
@@ -14722,6 +17834,58 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
                 }
             }
 
+            if (nh && nh->hwndFrom == hwnd_left_actor_thumb_) {
+                if (nh->code == LVN_ITEMCHANGED) {
+                    const NMLISTVIEW* lv = (const NMLISTVIEW*)lparam;
+                    if (lv && (lv->uChanged & LVIF_STATE) != 0) {
+                        const bool was_sel = (lv->uOldState & LVIS_SELECTED) != 0;
+                        const bool now_sel = (lv->uNewState & LVIS_SELECTED) != 0;
+                        if (!was_sel && now_sel && lv->iItem >= 0 && !left_place_actor_sync_guard_) {
+                            left_place_actor_sync_guard_ = true;
+                            if (hwnd_left_actor_list_) {
+                                SendMessageW(hwnd_left_actor_list_, LB_SETCURSEL, (WPARAM)lv->iItem, 0);
+                            }
+                            left_place_actor_sync_guard_ = false;
+                            if ((size_t)lv->iItem < left_vault_visible_paths_utf8_.size() && hwnd_ai_status_) {
+                                const std::wstring label_w = utf8_to_wide(left_vault_visible_paths_utf8_[(size_t)lv->iItem]);
+                                const std::wstring status_w = BuildPlaceActorsStatusLine(label_w);
+                                SetWindowTextW(hwnd_ai_status_, status_w.c_str());
+                            }
+                        }
+                    }
+                    return 0;
+                }
+                if (nh->code == NM_CLICK) {
+                    const int sel = hwnd_left_actor_thumb_ ? ListView_GetNextItem(hwnd_left_actor_thumb_, -1, LVNI_SELECTED) : -1;
+                    if (sel >= 0 && (size_t)sel < left_vault_visible_paths_utf8_.size()) {
+                        (void)OpenPlaceActorsBuilderByLabel(utf8_to_wide(left_vault_visible_paths_utf8_[(size_t)sel]));
+                    }
+                    return 0;
+                }
+                if (nh->code == NM_DBLCLK) {
+                    const int sel = hwnd_left_actor_thumb_ ? ListView_GetNextItem(hwnd_left_actor_thumb_, -1, LVNI_SELECTED) : -1;
+                    if (sel >= 0 && (size_t)sel < left_vault_visible_paths_utf8_.size()) {
+                        (void)ActivatePlaceActorsEntryByLabel(utf8_to_wide(left_vault_visible_paths_utf8_[(size_t)sel]));
+                    }
+                    return 0;
+                }
+            }
+
+            if (nh && nh->hwndFrom == hwnd_content_sources_ && (nh->code == TVN_SELCHANGEDW || nh->code == TVN_SELCHANGEDA)) {
+                if (content_source_sync_guard_) return 0;
+                const NMTREEVIEWW* tv = (const NMTREEVIEWW*)lparam;
+                if (!tv) return 0;
+                auto it = content_source_paths_by_item_.find(tv->itemNew.hItem);
+                const std::string next_prefix = (it != content_source_paths_by_item_.end()) ? it->second : std::string();
+                if (next_prefix != content_source_prefix_utf8_) {
+                    content_source_prefix_utf8_ = next_prefix;
+                    PushContentNavigationPrefix(content_source_prefix_utf8_);
+                    RebuildContentBrowserViews();
+                    RefreshContentBrowserChrome();
+                }
+                return 0;
+            }
+
             // Content browser selection sync between List and Thumb surfaces.
             if (nh && (nh->hwndFrom == hwnd_content_list_ || nh->hwndFrom == hwnd_content_thumb_ || nh->hwndFrom == hwnd_asset_thumb_)) {
                 if (nh->code == LVN_ITEMCHANGED) {
@@ -14734,12 +17898,15 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
                     if (was_sel == now_sel) return 0;
                     if (!now_sel) return 0; // we sync only on selection, not deselection.
 
-                    wchar_t wbuf[512]; wbuf[0] = 0;
-                    ew_listview_get_item_text_w(nh->hwndFrom, lv->iItem, 0, wbuf, 512);
-                    std::string rel = wide_to_utf8(std::wstring(wbuf));
+                    LVITEMW item{};
+                    item.mask = LVIF_PARAM;
+                    item.iItem = lv->iItem;
+                    if (!ListView_GetItem(nh->hwndFrom, &item)) return 0;
+                    if (item.lParam < 0 || (size_t)item.lParam >= content_items_.size()) return 0;
+                    const std::string rel = content_items_[(size_t)item.lParam].rel_utf8;
                     if (rel.empty()) return 0;
                     content_selected_rel_utf8_ = rel;
-                    (void)SelectContentRelativePath(rel);
+                    (void)SelectContentRelativePath(rel, false);
                     return 0;
                 }
 
@@ -14766,9 +17933,12 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
                     int sel = ListView_GetNextItem(nh->hwndFrom, -1, LVNI_SELECTED);
                     if (sel < 0) return 0;
 
-                    wchar_t wrel[512]; wrel[0] = 0;
-                    ew_listview_get_item_text_w(nh->hwndFrom, sel, 0, wrel, 512);
-                    std::string rel_utf8 = wide_to_utf8(std::wstring(wrel));
+                    LVITEMW item{};
+                    item.mask = LVIF_PARAM;
+                    item.iItem = sel;
+                    if (!ListView_GetItem(nh->hwndFrom, &item)) return 0;
+                    if (item.lParam < 0 || (size_t)item.lParam >= content_items_.size()) return 0;
+                    const std::string rel_utf8 = content_items_[(size_t)item.lParam].rel_utf8;
                     if (rel_utf8.empty()) return 0;
 
                     // Basename (display convenience only).
@@ -14802,7 +17972,7 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
                     if (cmd == 5603) {
                         if (scene_) {
                             scene_->SetCoherenceHighlightPath(rel_utf8);
-                            (void)SelectContentRelativePath(rel_utf8);
+                            (void)SelectContentRelativePath(rel_utf8, false);
                             AppendOutputUtf8("COH: highlight requested");
                         }
                         return 0;
@@ -14819,7 +17989,7 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
         case WM_MEASUREITEM: {
             MEASUREITEMSTRUCT* mis = (MEASUREITEMSTRUCT*)lparam;
             if (!mis) break;
-            if ((int)mis->CtlID == 1018) { mis->itemHeight = 54; return TRUE; }
+            if ((int)mis->CtlID == 1098) { mis->itemHeight = 54; return TRUE; }
             if ((int)mis->CtlID == 4060) {
                 if (!hwnd_ai_chat_list_) { mis->itemHeight = 26; return TRUE; }
                 // Bubble height depends on wrapped text.
@@ -14841,16 +18011,24 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
             const int id = (int)dis->CtlID;
             if (id == 1607) { ew_draw_action_text_button(dis); return TRUE; }
             if (id == 1608) { ew_draw_project_badge(dis); return TRUE; }
-            if (id == 1601) { ew_draw_ai_mode_button(dis, L"Sim", IsSimPlayEnabledCanonical()); return TRUE; }
-            if (id == 1602) { ew_draw_ai_mode_button(dis, L"AI", IsAiEnabledCanonical()); return TRUE; }
-            if (id == 1603) { ew_draw_ai_mode_button(dis, L"Live", live_mode_enabled_); return TRUE; }
-            if (id == 1604) { ew_draw_ai_mode_button(dis, L"Photon", confinement_particles_enabled_); return TRUE; }
-            if (id == 1605) { ew_draw_ai_mode_button(dis, L"Content", content_visible_); return TRUE; }
-            if (id == 1606) { ew_draw_ai_mode_button(dis, L"Assistant", hwnd_ai_panel_ && IsWindowVisible(hwnd_ai_panel_)); return TRUE; }
+            if (id == 1601) { ew_draw_play_transport_button(dis, IsSimPlayEnabledCanonical(), true); return TRUE; }
+            if (id == 1602) { ew_draw_ai_mode_button(dis, L"AI", IsAiEnabledCanonical(), EwTopBarIcon::Ai); return TRUE; }
+            if (id == 1603) { ew_draw_ai_mode_button(dis, L"Live", live_mode_enabled_, EwTopBarIcon::Live); return TRUE; }
+            if (id == 1604) { ew_draw_ai_mode_button(dis, L"Photon", confinement_particles_enabled_, EwTopBarIcon::Photon); return TRUE; }
+            if (id == 1605) { ew_draw_ai_mode_button(dis, L"Content", content_visible_, EwTopBarIcon::Content); return TRUE; }
+            if (id == 1606) { ew_draw_ai_mode_button(dis, L"Assistant", hwnd_ai_panel_ && IsWindowVisible(hwnd_ai_panel_), EwTopBarIcon::Assistant); return TRUE; }
+            if (id == EW_CMD_CONTENT_TAB_PRIMARY) { ew_draw_action_text_button_state(dis, !content_secondary_tab_active_); return TRUE; }
+            if (id == EW_CMD_CONTENT_TAB_SECONDARY) { ew_draw_action_text_button_state(dis, content_secondary_tab_active_); return TRUE; }
+            if (id == 1014) { ew_draw_action_text_button_state(dis, content_view_mode_u32_ == 0u); return TRUE; }
+            if (id == 1015) { ew_draw_action_text_button_state(dis, content_view_mode_u32_ == 1u); return TRUE; }
+            if (id == 1016) { ew_draw_action_text_button_state(dis, content_view_mode_u32_ == 2u); return TRUE; }
+            if (id == EW_CMD_TOPBAR_WORKSPACE_LEVEL) { ew_draw_ai_mode_button(dis, L"Level Sim", primary_workspace_tab_index_u32_ == EW_WORKSPACE_LEVEL_SIM); return TRUE; }
+            if (id == EW_CMD_TOPBAR_WORKSPACE_ASSET) { ew_draw_ai_mode_button(dis, L"Asset Builder", primary_workspace_tab_index_u32_ == EW_WORKSPACE_ASSET_BUILDER); return TRUE; }
+            if (id == EW_CMD_TOPBAR_WORKSPACE_VOXEL) { ew_draw_ai_mode_button(dis, L"Voxel Builder", primary_workspace_tab_index_u32_ == EW_WORKSPACE_VOXEL_BUILDER); return TRUE; }
             if (id == 1609) { ew_draw_window_chrome_button(dis, false); return TRUE; }
             if (id == 1610) { ew_draw_window_chrome_button(dis, false); return TRUE; }
             if (id == 1611) { ew_draw_window_chrome_button(dis, true); return TRUE; }
-            if (id == 2040) { ew_draw_toggle_switch(dis, IsSimPlayEnabledCanonical()); return TRUE; }
+            if (id == 2040) { ew_draw_play_transport_button(dis, IsSimPlayEnabledCanonical(), false); return TRUE; }
             if (id == 2041) { ew_draw_toggle_switch(dis, IsAiEnabledCanonical()); return TRUE; }
             if (id == 2042) { ew_draw_toggle_switch(dis, IsAiLearningEnabledCanonical()); return TRUE; }
             if (id == 2043) { ew_draw_toggle_switch(dis, IsAiCrawlingEnabledCanonical()); return TRUE; }
@@ -14996,10 +18174,39 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
                 return TRUE;
             }
             if (id == 4060) { ew_ai_chat_draw_bubble(dis); return TRUE; }
+            if (id == 4867 || id == 4879) {
+                HDC hdc     = dis->hDC;
+                RECT rc     = dis->rcItem;
+                const bool sel = (dis->itemState & ODS_SELECTED) != 0;
+                HWND hlist  = (id == 4867) ? hwnd_ai_repo_list_ : hwnd_ai_coh_results_;
+                COLORREF bg = sel ? g_theme.gold_fill : g_theme.edit_bg;
+                HBRUSH br   = CreateSolidBrush(bg);
+                FillRect(hdc, &rc, br);
+                DeleteObject(br);
+                if (sel) {
+                    HPEN pen  = CreatePen(PS_SOLID, 1, g_theme.gold);
+                    HGDIOBJ op = SelectObject(hdc, pen);
+                    HGDIOBJ ob = SelectObject(hdc, GetStockObject(HOLLOW_BRUSH));
+                    Rectangle(hdc, rc.left, rc.top, rc.right - 1, rc.bottom - 1);
+                    SelectObject(hdc, ob);
+                    SelectObject(hdc, op);
+                    DeleteObject(pen);
+                }
+                SetBkMode(hdc, TRANSPARENT);
+                SetTextColor(hdc, sel ? g_theme.gold_hot : g_theme.text);
+                wchar_t buf[512]{};
+                SendMessageW(hlist, LB_GETTEXT, dis->itemID, (LPARAM)buf);
+                RECT tr = rc; tr.left += 8; tr.right -= 4;
+                DrawTextW(hdc, buf, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+                if (sel && (dis->itemState & ODS_FOCUS)) DrawFocusRect(hdc, &rc);
+                return TRUE;
+            }
             if (id == 4061) { ew_draw_compose_icon(dis); return TRUE; }
             if (id == 4062) { ew_draw_apply_button(dis); return TRUE; }
             if (id == 4063) { ew_draw_usepatch_button(dis); return TRUE; }
             if (id == 4064 || id == 4066 || id == 4067) { ew_draw_action_text_button(dis); return TRUE; }
+            if (id == 2722) { ew_draw_play_transport_button(dis, IsSimPlayEnabledCanonical(), false); return TRUE; }
+            if (dis->CtlType == ODT_BUTTON) { ew_draw_action_text_button(dis); return TRUE; }
         } break;
         case WM_CONTEXTMENU: {
             HWND hctx = (HWND)wparam;
@@ -15032,6 +18239,12 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
             input_.alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
             input_.shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
             input_.ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+            if (wparam == VK_ESCAPE && input_.shift && !was_down) {
+                exit_requested_ = true;
+                AppendOutputUtf8("APP_EXIT request=shift_escape");
+                SendMessageW(hwnd_main_, WM_CLOSE, 0, 0);
+                return 0;
+            }
             if ((HWND)GetFocus() == hwnd_node_search_) {
                 if (wparam == VK_RETURN) {
                     RebuildNodePaletteEntries();
@@ -15048,6 +18261,24 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
                 if (wparam == VK_ESCAPE) {
                     if (hwnd_node_search_) SetWindowTextW(hwnd_node_search_, L"");
                     RefreshNodePanel();
+                    return 0;
+                }
+            }
+            if ((HWND)GetFocus() == hwnd_left_actor_list_) {
+                if (wparam == VK_RETURN) {
+                    const int sel = hwnd_left_actor_list_ ? (int)SendMessageW(hwnd_left_actor_list_, LB_GETCURSEL, 0, 0) : -1;
+                    if (sel >= 0 && (size_t)sel < left_vault_visible_paths_utf8_.size()) {
+                        (void)ActivatePlaceActorsEntryByLabel(utf8_to_wide(left_vault_visible_paths_utf8_[(size_t)sel]));
+                    }
+                    return 0;
+                }
+            }
+            if ((HWND)GetFocus() == hwnd_left_actor_thumb_) {
+                if (wparam == VK_RETURN) {
+                    const int sel = hwnd_left_actor_thumb_ ? ListView_GetNextItem(hwnd_left_actor_thumb_, -1, LVNI_SELECTED) : -1;
+                    if (sel >= 0 && (size_t)sel < left_vault_visible_paths_utf8_.size()) {
+                        (void)OpenPlaceActorsBuilderByLabel(utf8_to_wide(left_vault_visible_paths_utf8_[(size_t)sel]));
+                    }
                     return 0;
                 }
             }
@@ -15075,7 +18306,7 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
             if (wparam == VK_F10) immersion_mode_ = !immersion_mode_;
             if (wparam == VK_F8 && !was_down) {
                 confinement_particles_enabled_ = !confinement_particles_enabled_;
-                AppendOutputUtf8(BuildPhotonConfinementStatusUtf8());
+                AppendOutputUtf8(std::string("REMOTE_VIEWPORT confinement=") + (confinement_particles_enabled_ ? "1" : "0"));
                 if (hwnd_ai_status_) {
                     SetWindowTextW(hwnd_ai_status_, confinement_particles_enabled_
                         ? L"Photon confinement particles enabled."
@@ -15102,12 +18333,18 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
             input_.shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
             input_.ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
         } break;
+        case WM_NCLBUTTONDOWN: {
+            if (wparam == HTCLOSE) {
+                exit_requested_ = true;
+                AppendOutputUtf8("APP_EXIT request=titlebar_close_button");
+            }
+        } break;
         case WM_SETCURSOR: {
             if (hwnd == hwnd_main_ && ew_editor_build_enabled) {
                 POINT pt{};
                 GetCursorPos(&pt);
                 ScreenToClient(hwnd_main_, &pt);
-                const int panel_w = ew_ui_clamp_right_dock_width_px(right_dock_width_px_, client_w_);
+                const int panel_w = ew_ui_clamp_right_dock_width_px(right_dock_width_px_, client_w_, ew_editor_build_enabled);
                 if (right_dock_splitter_dragging_ ||
                     ew_ui_hit_test_right_dock_splitter_px(pt.x, pt.y, client_w_, client_h_, panel_w, content_visible_)) {
                     SetCursor(LoadCursor(nullptr, IDC_SIZEWE));
@@ -15122,7 +18359,7 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
             const int x = GET_X_LPARAM(lparam);
             const int y = GET_Y_LPARAM(lparam);
             if (hwnd == hwnd_main_ && ew_editor_build_enabled) {
-                const int panel_w = ew_ui_clamp_right_dock_width_px(right_dock_width_px_, client_w_);
+                const int panel_w = ew_ui_clamp_right_dock_width_px(right_dock_width_px_, client_w_, ew_editor_build_enabled);
                 if (ew_ui_hit_test_right_dock_splitter_px(x, y, client_w_, client_h_, panel_w, content_visible_)) {
                     const int split_x = client_w_ - panel_w;
                     right_dock_splitter_dragging_ = true;
@@ -15173,7 +18410,7 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
             if (right_dock_splitter_dragging_) {
                 const int split_x = x - right_dock_splitter_grab_dx_px_;
                 const int desired_w = client_w_ - split_x;
-                const int clamped_w = ew_ui_clamp_right_dock_width_px(desired_w, client_w_);
+                const int clamped_w = ew_ui_clamp_right_dock_width_px(desired_w, client_w_, ew_editor_build_enabled);
                 if (clamped_w != right_dock_width_px_) {
                     right_dock_width_px_ = clamped_w;
                     LayoutChildren(client_w_, client_h_);
@@ -15194,8 +18431,39 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); RefreshEditorHistoryUi
                 }
             }
         } break;
+        case WM_QUERYENDSESSION:
+            // Session-end notifications must not arm process exit by themselves.
+            // We only allow close from explicit in-app intent.
+            AppendOutputUtf8("APP_EXIT blocked=query_end_session_without_explicit_intent");
+            return TRUE;
+        case WM_ENDSESSION:
+            if (wparam) {
+                AppendOutputUtf8("APP_EXIT blocked=end_session_without_explicit_intent");
+            }
+            return 0;
+        case WM_SYSCOMMAND: {
+            if ((wparam & 0xFFF0u) == SC_CLOSE) {
+                if (!exit_requested_) {
+                    AppendOutputUtf8("APP_EXIT blocked=system_close_without_explicit_intent");
+                    return 0;
+                }
+                AppendOutputUtf8("APP_EXIT request=system_close accepted explicit=1");
+            }
+        } break;
+        case WM_CLOSE: {
+            if (hwnd == hwnd_main_) {
+                if (!exit_requested_) {
+                    AppendOutputUtf8("APP_EXIT blocked=unexpected_wm_close");
+                    return 0;
+                }
+                AppendOutputUtf8("APP_EXIT request=confirmed");
+            }
+            DestroyWindow(hwnd);
+            return 0;
+        }
         case WM_DESTROY: {
             if (hwnd == hwnd_main_) {
+                AppendOutputUtf8(std::string("APP_DESTROY main exit_requested=") + (exit_requested_ ? "1" : "0"));
                 running_ = false;
                 PostQuitMessage(0);
             }

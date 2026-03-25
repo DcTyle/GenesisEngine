@@ -2,6 +2,7 @@
 #include "GE_runtime.hpp"
 #include "fixed_point.hpp"
 #include <cstring>
+#include <limits>
 
 namespace genesis {
 
@@ -9,11 +10,7 @@ static inline __int128 mul_q32_32_to_q32_32(int64_t a_q32_32, int64_t b_q32_32) 
     return (__int128)a_q32_32 * (__int128)b_q32_32; // result Q64.64
 }
 
-static inline int64_t clamp_i64(int64_t v, int64_t lo, int64_t hi) {
-    if (v < lo) return lo;
-    if (v > hi) return hi;
-    return v;
-}
+// Clamp helper removed here — use project-wide clamp helpers when needed.
 
 // Integer sqrt for unsigned 128-bit values, returns floor(sqrt(x)).
 static inline uint64_t isqrt_u128(__uint128_t x) {
@@ -53,7 +50,14 @@ void ew_nbody_init_default(EwNBodyState* st) {
     {
         EwNBodyBody& b = st->bodies[0];
         b.object_id_u64 = 0x4E424F44595F0001ULL; // "NBODY"+1
-        b.mass_kg_q32_32 = (int64_t)1988500LL * 1000000LL << 32; // 1.9885e30 approx (kg)
+        // Compute large placeholder mass with 128-bit intermediate and clamp to int64.
+        {
+            __int128 tmp = (__int128)1988500LL * (__int128)1000000LL; // base magnitude
+            tmp *= (__int128(1) << 32); // scale to Q32.32
+            if (tmp > (__int128)std::numeric_limits<int64_t>::max()) tmp = (__int128)std::numeric_limits<int64_t>::max();
+            if (tmp < (__int128)std::numeric_limits<int64_t>::min()) tmp = (__int128)std::numeric_limits<int64_t>::min();
+            b.mass_kg_q32_32 = (int64_t)tmp;
+        }
         b.radius_m_q32_32 = (int64_t)696340000LL << 32;
         b.albedo_rgba8 = 0xFFFFCC55u;
         b.emissive_q32_32 = (int64_t)1LL << 32;
@@ -63,14 +67,24 @@ void ew_nbody_init_default(EwNBodyState* st) {
     {
         EwNBodyBody& b = st->bodies[1];
         b.object_id_u64 = 0x4E424F44595F0002ULL;
-        b.mass_kg_q32_32 = (int64_t)59722LL * 100000000000000000LL; // 5.9722e24 *2^32? (rough integer scaling)
-        b.mass_kg_q32_32 <<= 0; // already huge; keep as-is; deterministic magnitude only
-        b.radius_m_q32_32 = (int64_t)6371000LL << 32;
+        {
+            __int128 tmp = (__int128)59722LL * (__int128)100000000000000000LL;
+            if (tmp > (__int128)std::numeric_limits<int64_t>::max()) tmp = (__int128)std::numeric_limits<int64_t>::max();
+            if (tmp < (__int128)std::numeric_limits<int64_t>::min()) tmp = (__int128)std::numeric_limits<int64_t>::min();
+            b.mass_kg_q32_32 = (int64_t)tmp;
+        }
+        // deterministic magnitude only
+        b.radius_m_q32_32 = (int64_t)((__int128)6371000LL * (__int128(1) << 32));
         b.albedo_rgba8 = 0xFF2266FFu;
         b.atmosphere_rgba8 = 0x332266FFu;
         b.atmosphere_thickness_m_q32_32 = (int64_t)100000LL << 32;
-        // 1 AU along +X
-        b.pos_m_q32_32[0] = (int64_t)149597870700LL << 32;
+        // 1 AU along +X (compute with 128-bit intermediate and clamp)
+        {
+            __int128 tmp = (__int128)149597870700LL * (__int128(1) << 32);
+            if (tmp > (__int128)std::numeric_limits<int64_t>::max()) tmp = (__int128)std::numeric_limits<int64_t>::max();
+            if (tmp < (__int128)std::numeric_limits<int64_t>::min()) tmp = (__int128)std::numeric_limits<int64_t>::min();
+            b.pos_m_q32_32[0] = (int64_t)tmp;
+        }
         // Circular-ish orbital velocity along +Y: 29.78 km/s
         b.vel_mps_q32_32[1] = (int64_t)29780LL << 32;
     }
@@ -79,12 +93,21 @@ void ew_nbody_init_default(EwNBodyState* st) {
     {
         EwNBodyBody& b = st->bodies[2];
         b.object_id_u64 = 0x4E424F44595F0003ULL;
-        b.mass_kg_q32_32 = (int64_t)7342LL * 10000000000000000LL; // 7.342e22 rough scaling
-        b.mass_kg_q32_32 <<= 0;
-        b.radius_m_q32_32 = (int64_t)1737400LL << 32;
+        {
+            __int128 tmp = (__int128)7342LL * (__int128)10000000000000000LL;
+            if (tmp > (__int128)std::numeric_limits<int64_t>::max()) tmp = (__int128)std::numeric_limits<int64_t>::max();
+            if (tmp < (__int128)std::numeric_limits<int64_t>::min()) tmp = (__int128)std::numeric_limits<int64_t>::min();
+            b.mass_kg_q32_32 = (int64_t)tmp;
+        }
+        b.radius_m_q32_32 = (int64_t)((__int128)1737400LL * (__int128(1) << 32));
         b.albedo_rgba8 = 0xFFBBBBBBu;
-        // Start near Earth on +X with ~384,400 km offset and velocity +Y relative
-        b.pos_m_q32_32[0] = ((int64_t)149597870700LL + (int64_t)384400000LL) << 32;
+        // Start near Earth on +X with ~384,400 km offset (use 128-bit intermediate and clamp)
+        {
+            __int128 tmp = (__int128)((__int128)149597870700LL + (__int128)384400000LL) * (__int128(1) << 32);
+            if (tmp > (__int128)std::numeric_limits<int64_t>::max()) tmp = (__int128)std::numeric_limits<int64_t>::max();
+            if (tmp < (__int128)std::numeric_limits<int64_t>::min()) tmp = (__int128)std::numeric_limits<int64_t>::min();
+            b.pos_m_q32_32[0] = (int64_t)tmp;
+        }
         b.vel_mps_q32_32[1] = ((int64_t)29780LL + (int64_t)1022LL) << 32;
     }
 }

@@ -148,10 +148,11 @@ static bool create_timestamp_pool(EwVulkanRenderer& r) {
 }
 
 static bool create_surface(EwVulkanRenderer& r, HWND hwnd) {
-    VkWin64SurfaceCreateInfoKHR ci{VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR};
+    // Vulkan on 64-bit Windows still uses the Win32 surface extension types.
+    VkWin32SurfaceCreateInfoKHR ci{VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR};
     ci.hinstance = GetModuleHandleW(nullptr);
     ci.hwnd = hwnd;
-    return vk_check(vkCreateWin64SurfaceKHR(r.instance, &ci, nullptr, &r.surface));
+    return vk_check(vkCreateWin32SurfaceKHR(r.instance, &ci, nullptr, &r.surface));
 }
 
 static bool create_swapchain(EwVulkanRenderer& r) {

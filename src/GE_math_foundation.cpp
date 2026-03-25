@@ -9,7 +9,7 @@
 
 namespace genesis {
 
-static inline int64_t abs_i64(int64_t x) { return (x < 0) ? -x : x; }
+// Use canonical abs_i64 from canonical_ops.cpp/header; avoid local duplicate.
 
 MathFoundation::MathFoundation() {
     stats_ = {};
@@ -289,7 +289,7 @@ void MathFoundation::tick(::SubstrateManager* sm) {
     req.graph_a_q32_32 = graph_a_q32_32_;
     req.graph_b_q32_32 = graph_b_q32_32_;
     req.graph_samples_u32 = stats_.graph_1d_samples_total_u32;
-    req.graph_xmin_q32_32 = ((int64_t)-8) << 32;
+    req.graph_xmin_q32_32 = -(((int64_t)8) << 32);
     req.graph_xmax_q32_32 = ((int64_t)8) << 32;
     (void)sm->compile_and_submit_experiment(req);
     stats_.graph_1d_packets_emitted_u32 += 1u;
