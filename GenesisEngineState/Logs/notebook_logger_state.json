@@ -1,0 +1,70 @@
+{
+  "entry_counter": 23,
+  "processed_logs": {
+    "D:\\GameCreation\\GenesisEngine\\GenesisEngineState\\Logs\\genesis_engine.log": {
+      "entry_index": 21,
+      "fingerprint": "4826:1774321658771168800:1193e2271256b107a4cf1703a3c24852d6ce0526",
+      "mtime_utc": "2026-03-24 03:07:38Z"
+    },
+    "D:\\GameCreation\\GenesisEngine\\GenesisEngineState\\Logs\\genesis_runtime.log": {
+      "entry_index": 4,
+      "fingerprint": "4075:1774198040556190900:62f6b52b16325c8f7ead2752b299c11d7616b706",
+      "mtime_utc": "2026-03-22 16:47:20Z"
+    },
+    "D:\\GameCreation\\GenesisEngine\\GenesisEngineState\\Logs\\genesis_viewport.log": {
+      "entry_index": 1,
+      "fingerprint": "332:1774152593197142500:3f12813aaf9984430dbb94dc4292311c0ce4656b",
+      "mtime_utc": "2026-03-22 04:09:53Z"
+    },
+    "D:\\GameCreation\\GenesisEngine\\GenesisEngineState\\Logs\\install_vulkan_app_win64_build.log": {
+      "entry_index": 12,
+      "fingerprint": "2363:1774215270274335500:b6c169b60fec76359d9662735e49b04cb9fa905d",
+      "mtime_utc": "2026-03-22 21:34:30Z"
+    },
+    "D:\\GameCreation\\GenesisEngine\\GenesisEngineState\\Logs\\install_vulkan_app_win64_configure.log": {
+      "entry_index": 12,
+      "fingerprint": "751:1774215265931735300:8a01d518fed230b79f053221d16b5dc2578c7715",
+      "mtime_utc": "2026-03-22 21:34:25Z"
+    },
+    "D:\\GameCreation\\GenesisEngine\\GenesisEngineState\\Logs\\install_vulkan_app_win64_install.log": {
+      "entry_index": 12,
+      "fingerprint": "4306:1774215271828146500:1d208a255765eccb93249eb3d75786c1ff046849",
+      "mtime_utc": "2026-03-22 21:34:31Z"
+    },
+    "D:\\GameCreation\\GenesisEngine\\build_config_log.txt": {
+      "entry_index": 1,
+      "fingerprint": "1045:1772943440716433400:4c3339ae8785268883b9b4e50cfcaca049c54c98",
+      "mtime_utc": "2026-03-08 04:17:20Z"
+    },
+    "D:\\GameCreation\\GenesisEngine\\build_config_log_capture.txt": {
+      "entry_index": 1,
+      "fingerprint": "3570:1774154350514658500:8baaa01d228663eafe18931b21d35799125fd2c6",
+      "mtime_utc": "2026-03-22 04:39:10Z"
+    },
+    "D:\\GameCreation\\GenesisEngine\\out\\build\\gui_log.txt": {
+      "entry_index": 1,
+      "fingerprint": "307:1774149013676388000:3b525e170c984241fa1538df5063e11460d9178f",
+      "mtime_utc": "2026-03-22 03:10:13Z"
+    },
+    "D:\\GameCreation\\GenesisEngine\\out\\build\\smoke_log.txt": {
+      "entry_index": 1,
+      "fingerprint": "309:1774148947771612700:320076b4143a909cc90d7bc6fcda58a8187cdb6e",
+      "mtime_utc": "2026-03-22 03:09:07Z"
+    },
+    "D:\\GameCreation\\GenesisEngine\\out\\build\\win64-vs2022-clang-vulkan\\GenesisEngineState\\Binaries\\Win64\\Editor\\Debug\\GenesisEngineState\\Logs\\genesis_engine.log": {
+      "entry_index": 22,
+      "fingerprint": "13026:1774324852689442000:118e577d2681bf5d1d0d25ad4da938b086b3ce4e",
+      "mtime_utc": "2026-03-24 04:00:52Z"
+    },
+    "D:\\GameCreation\\GenesisEngine\\out\\build\\win64-vs2022-clang-vulkan\\GenesisEngineState\\Binaries\\Win64\\Editor\\GenesisEngineState\\Logs\\genesis_engine.log": {
+      "entry_index": 16,
+      "fingerprint": "6261:1774320875872988800:9835ba49509d1da4442b66cadf866667273e773e",
+      "mtime_utc": "2026-03-24 02:54:35Z"
+    },
+    "D:\\GameCreation\\GenesisEngine\\out\\build\\win64-vs2022-clang-vulkan\\GenesisEngineState\\Binaries\\Win64\\Editor\\Release\\GenesisEngineState\\Logs\\genesis_engine.log": {
+      "entry_index": 23,
+      "fingerprint": "429076:1774415627827875500:34563cd920a01614df89a4f65c3c5a012be591e9",
+      "mtime_utc": "2026-03-25 05:13:47Z"
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "dataset": "nist_silicon_reference",
+  "sources": {
+    "lattice_spacing_pdf_url": "https://nvlpubs.nist.gov/nistpubs/jres/122/jres.122.024.pdf",
+    "material_constants_url": "https://physics.nist.gov/PhysRefData/XrayMassCoef/tab1.html",
+    "composition_url": "https://physics.nist.gov/cgi-bin/Star/compos.pl?matno=014&mode=text",
+    "atomic_data_url": "https://physics.nist.gov/PhysRefData/Handbook/Tables/silicontable1.htm",
+    "attenuation_url": "https://physics.nist.gov/PhysRefData/XrayMassCoef/ElemTab/z14.html"
+  },
+  "inference_note": "lattice_constant_m is an engine-side inference computed as sqrt(8)*d220 from the NIST lattice-spacing reference.",
+  "lattice_spacing_d220_m": 1.920155691e-10,
+  "lattice_constant_m": 5.431020511e-10,
+  "density_g_cm3": 2.33,
+  "z_over_a": 0.49848,
+  "atomic_weight_u": 28.0855,
+  "mean_excitation_energy_ev": 173.0,
+  "first_ionization_energy_ev": 8.15168,
+  "k_edge_energy_ev": 1838.9,
+  "mass_attenuation_10kev_cm2_g": 33.89,
+  "mass_energy_absorption_10kev_cm2_g": 32.89
+}

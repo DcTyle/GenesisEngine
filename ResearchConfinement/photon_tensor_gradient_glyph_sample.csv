@@ -1,0 +1,5 @@
+// photon_tensor_gradient_glyph_sample.csv
+x,y,z,tensor_00,tensor_01,tensor_02,tensor_10,tensor_11,tensor_12,tensor_20,tensor_21,tensor_22,color_r,color_g,color_b
+0,0,0,1.0,0.1,0.0,0.1,1.0,0.2,0.0,0.2,1.0,0.8,0.2,0.5
+0,0,1,0.9,0.0,0.1,0.0,0.9,0.1,0.1,0.1,0.9,0.7,0.3,0.6
+...

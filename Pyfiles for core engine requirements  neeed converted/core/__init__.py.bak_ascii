@@ -1,0 +1,100 @@
+# ================================================================
+# File: core/__init__.py
+# Description:
+#   Core package initialization for the VirtualMiner stack (v4.8.3).
+#   - All imports use absolute paths for deterministic resolution.
+#   - Integrates AI state-vector read/write engine (AI_processor.py).
+#   - ASCII-safe and DMT-compliant.
+# ================================================================
+
+from core.constants_eq import (
+    get_effective, snapshot_to_vsd, export_as_json, diagnostic_trend_check,
+)
+from core.hamiltonian_eq import (
+    hamiltonian_norm, two_level_effective, n_level_effective,
+    spectral_decompose_hermitian, make_propagator_first_order,
+    evolve_state_two_level, evolve_state_n_level, adaptive_step_integrate,
+)
+from core.lattice9d_eq import (
+    lattice_map_9d, lattice_route_9d, energy_project_9d, diagnostic_smoothness_check,
+)
+from core.lorenz_eq import (
+    lorenz_step, lorenz_trajectory, lorentz_field_energy,
+    lorentz_flux_spectrum, diagnostic_lorentz_stability,
+)
+from core.measurement_eq import (
+    measure_project, weak_measurement, fidelity, partial_trace_density,
+    diagnostic_measurement_noise,
+)
+from core.pulse_eq import (
+    pulse_gaussian, pulse_lorentzian, pulse_propagate, pulse_group_velocity,
+    diagnostic_pulse_coherence,
+)
+from core.qubit_eq import (
+    Qubit, apply_gate, gate_x, gate_y, gate_z, gate_h, gate_rz,
+)
+from core.schrodinger_eq import (
+    propagate_two_level, propagate_n_level, batch_propagate,
+    checkpoint_to_vsd, energy_proxy, diagnostic_propagation_health,
+)
+from core.state_eq import (
+    save_vector, load_vector, slice_vector, replace_segment, exists, clear,
+)
+from core.stochastic_eq import (
+    gaussian_noise, lorentzian_noise, correlated_noise_series,
+    temporal_jitter_profile, diagnostic_stochastic_spectrum,
+)
+from core.utils import (
+    now_s, get, store, delete, exists as vsd_exists, hw_snapshot,
+    append_telemetry, serialize_vector_with_tokens,
+    deserialize_vector_with_tokens, vsd_lock_acquire, vsd_lock_release,
+)
+
+# ----------------------------------------------------------------
+# AI-Processor integration (added in v4.8.3)
+# ----------------------------------------------------------------
+try:
+    from core.AI_processor import (
+        Dehydrator, Rehydrator, VectorEncoder, VectorDecoder,
+        encode_bytes_to_ascii, decode_ascii_to_bytes
+    )
+except Exception:
+    Dehydrator = Rehydrator = VectorEncoder = VectorDecoder = None
+    encode_bytes_to_ascii = decode_ascii_to_bytes = None  # type: ignore
+
+__all__ = [
+    # constants
+    "get_effective", "snapshot_to_vsd", "export_as_json", "diagnostic_trend_check",
+    # hamiltonian
+    "hamiltonian_norm", "two_level_effective", "n_level_effective",
+    "spectral_decompose_hermitian", "make_propagator_first_order",
+    "evolve_state_two_level", "evolve_state_n_level", "adaptive_step_integrate",
+    # lattice
+    "lattice_map_9d", "lattice_route_9d", "energy_project_9d", "diagnostic_smoothness_check",
+    # lorenz
+    "lorenz_step", "lorenz_trajectory", "lorentz_field_energy", "lorentz_flux_spectrum",
+    "diagnostic_lorentz_stability",
+    # measurement
+    "measure_project", "weak_measurement", "fidelity", "partial_trace_density",
+    "diagnostic_measurement_noise",
+    # pulse
+    "pulse_gaussian", "pulse_lorentzian", "pulse_propagate", "pulse_group_velocity",
+    "diagnostic_pulse_coherence",
+    # qubit
+    "Qubit", "apply_gate", "gate_x", "gate_y", "gate_z", "gate_h", "gate_rz",
+    # schrodinger
+    "propagate_two_level", "propagate_n_level", "batch_propagate",
+    "checkpoint_to_vsd", "energy_proxy", "diagnostic_propagation_health",
+    # state
+    "save_vector", "load_vector", "slice_vector", "replace_segment", "exists", "clear",
+    # stochastic
+    "gaussian_noise", "lorentzian_noise", "correlated_noise_series",
+    "temporal_jitter_profile", "diagnostic_stochastic_spectrum",
+    # utils
+    "now_s", "get", "store", "delete", "vsd_exists", "hw_snapshot",
+    "append_telemetry", "serialize_vector_with_tokens",
+    "deserialize_vector_with_tokens", "vsd_lock_acquire", "vsd_lock_release",
+    # AI-Processor
+    "Dehydrator", "Rehydrator", "VectorEncoder", "VectorDecoder",
+    "encode_bytes_to_ascii", "decode_ascii_to_bytes",
+]

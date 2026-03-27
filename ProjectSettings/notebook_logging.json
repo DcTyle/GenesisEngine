@@ -1,0 +1,26 @@
+{
+  "provider": "aethen",
+  "notebook_path": "ResearchConfinement/docs_v4/ENGINE_BUILD_RUNTIME_LAB_NOTEBOOK.md",
+  "state_path": "GenesisEngineState/Logs/notebook_logger_state.json",
+  "append_runtime_logs": true,
+  "known_log_paths": [
+    "GenesisEngineState/Logs/genesis_engine.log",
+    "GenesisEngineState/Logs/genesis_runtime.log",
+    "GenesisEngineState/Logs/genesis_viewport.log",
+    "out/build/gui_log.txt",
+    "out/build/smoke_log.txt",
+    "build_config_log.txt",
+    "build_config_log_capture.txt"
+  ],
+  "providers": {
+    "copilot": {
+      "bridge_command": "",
+      "timeout_seconds": 45,
+      "fallback_to_aethen": true
+    },
+    "aethen": {
+      "max_key_lines": 10,
+      "tail_line_count": 16
+    }
+  }
+}

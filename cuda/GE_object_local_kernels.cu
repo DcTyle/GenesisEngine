@@ -86,6 +86,10 @@ __global__ void k_object_local_step(const uint8_t* occ,
     //  - damping term prevents runaway and acts as leak
     //  - boundary_bias couples object-local boundary voxels to world lattice mean
     //    energy in the object's neighborhood (bidirectional boundary exchange).
+    //  - (lap >> 3) sets the effective propagation rate; ensure this is physically justified.
+    // PHASE PROPAGATION SPEED ENFORCEMENT:
+    //  The shift value (>> 3) determines the maximum phase propagation speed.
+    //  If this is changed, recalculate the effective speed and ensure it does not exceed c.
     int32_t p = c + (lap >> 3) - (c >> 7);
     p = clamp_i32(p, -32768, 32767);
     phi_out[tid] = (int16_t)p;

@@ -134,6 +134,21 @@ extern "C" __global__ void ew_kernel_wave_step(const float* E_prev, const float*
     const int n = gx * gy * gz;
     if (tid >= n) return;
 
+    // --- PHASE PROPAGATION SPEED CHECK ---
+    // Ensure c^2 * dt^2 does not exceed grid stability limit (CFL condition)
+    // This prevents superluminal phase/wave propagation.
+    #ifndef NDEBUG
+    float dx = 1.0f; // grid spacing (assumed 1.0, replace if not)
+    float cfl = c2 * dt * dt / (dx * dx);
+    if (cfl > 1.0f) {
+        printf("[ERROR] Phase propagation speed exceeds grid stability limit: c^2*dt^2/dx^2 = %f > 1.0\n", cfl);
+        asm("trap;");
+    }
+    else if (tid == 0) {
+        printf("[INFO] Phase propagation CFL check: c^2*dt^2/dx^2 = %f\n", cfl);
+    }
+    #endif
+
     const int xy = gx * gy;
     const int z = tid / xy;
     const int rem = tid - z * xy;
@@ -183,6 +198,11 @@ extern "C" __global__ void ew_kernel_wave_step(const float* E_prev, const float*
     const float oa0 = (opA ? opA[iC] : 0.0f);
     const float ob0 = (opB ? opB[iC] : 0.0f);
     const float absEc0 = (Ec0 >= 0.0f) ? Ec0 : -Ec0;
+
+    // Log phase update event for data collection (sampled for tid==0)
+    if (tid == 0) {
+        printf("[INFO] Phase update event: Ec0=%e, f0=%e, oa0=%e, ob0=%e, c2=%e, dt=%e\n", Ec0, f0, oa0, ob0, c2, dt);
+    }
     const float absf0 = (f0 >= 0.0f) ? f0 : -f0;
     const float absoa0 = (oa0 >= 0.0f) ? oa0 : -oa0;
     const float absob0 = (ob0 >= 0.0f) ? ob0 : -ob0;
@@ -209,6 +229,11 @@ extern "C" __global__ void ew_kernel_wave_step(const float* E_prev, const float*
     const float abs_lap = (lap >= 0.0f) ? lap : -lap;
     const float cmb_lap_floor = 5.0e-7f;
     const float lap_eff = (abs_lap > cmb_lap_floor) ? lap : 0.0f;
+
+    // Log phase update event for data collection (sampled for tid==0)
+    if (tid == 0) {
+        printf("[INFO] Phase update event: lap_eff=%e, dt=%e, c2=%e\n", lap_eff, dt, c2);
+    }
 
     // Density-driven response coefficient.
     const float dens = (float)density_u8[iC] / 255.0f;

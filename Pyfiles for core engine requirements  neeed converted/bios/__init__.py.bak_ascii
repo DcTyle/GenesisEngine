@@ -1,0 +1,43 @@
+# ============================================================================
+# VirtualMiner / bios
+# ASCII-ONLY SOURCE FILE
+# File: __init__.py
+# Version: v4.8.3 (Unified Imports + VSDManager Integration)
+# Jarvis ADA v4.8.3 Hybrid Compatible
+# ============================================================================
+"""
+Purpose
+-------
+Package initializer for BIOS.
+Handles bootstrap, scheduling, runtime diagnostics,
+and self-checks tied to the VirtualMiner hardware abstraction layer.
+"""
+
+from __future__ import annotations
+
+# ---------------------------------------------------------------------------
+# BIOS Core Imports
+# ---------------------------------------------------------------------------
+try:
+    from bios.boot import BIOSBoot
+    from bios.scheduler import run_forever as scheduler_run
+    from bios.diagnostic_report import generate_diagnostic_report
+    from bios.event_bus import EventBus
+    from bios.state_manager import StateManager
+    from bios.policy import *
+    from VHW.vsd_manager import VSDManager
+except Exception as e:
+    if globals().get('runtime_debugger', False):
+        print(f"[bios.__init__] Warning: module import failed -> {e}")
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+__all__ = [
+    "BIOSBoot",
+    "scheduler_run",
+    "generate_diagnostic_report",
+    "EventBus",
+    "StateManager",
+    "VSDManager"
+]

@@ -1,0 +1,19 @@
+// photon_packet_path_classification_sample.json
+[
+  {
+    "packet_id": 1,
+    "classification": "shared",
+    "group_id": 0,
+    "phase_lock_score": 0.99,
+    "curvature_depth": 0.02,
+    "coherence_score": 0.98
+  },
+  {
+    "packet_id": 2,
+    "classification": "individual",
+    "group_id": 1,
+    "phase_lock_score": 0.10,
+    "curvature_depth": 0.01,
+    "coherence_score": 0.95
+  }
+]

@@ -1,0 +1,95 @@
+# ============================================================================
+# VirtualMiner / BIOS
+# File: state_manager.py
+# Directory: /BIOS/
+# ASCII-ONLY SOURCE FILE
+# Note: This file avoids any non-ASCII characters. Jarvis ADA v4.7 Hybrid ready.
+# ============================================================================
+
+"""
+Purpose
+-------
+Simple BIOS state manager that emits ascii_floatmap snapshots and can
+persist small manifests to the VSD. Designed for headless lab bring-up.
+
+Public API
+---------
+StateManager(vsd)
+  .record_manifest(key: str, payload: dict) -> None
+  .snapshot_counters() -> dict ascii snapshot
+  .get(key: str, default=None) -> any
+"""
+
+from __future__ import annotations
+from typing import Any, Dict, Optional
+import threading
+import time
+
+# ---------------------------------------------------------------------------
+# Layered imports
+# ---------------------------------------------------------------------------
+from core.utils import get, store, delete
+from core.AI_processor import Dehydrator
+
+
+ASCII_MIN = 32
+ASCII_MAX = 126
+
+def _clamp(v: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, v))
+
+def _float_to_ascii(v: float) -> str:
+    v = _clamp(v, -1.0, 1.0)
+    code = int((v + 1.0) * 47) + 32
+    code = _clamp(code, ASCII_MIN, ASCII_MAX)
+    return chr(int(code))
+
+def _ascii_from_vector(vec):
+    return ''.join(_float_to_ascii(x) for x in vec)
+
+def _sha256(s: str) -> str:
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+class StateManager:
+    def __init__(self, vsd):
+        self.vsd = vsd
+        self._lock = threading.RLock()
+        self.counters = {"boots": 0, "plans": 0, "alerts": 0}
+        self.phase = 0.0
+
+    def record_manifest(self, key: str, payload: Dict[str, Any]) -> None:
+        with self._lock:
+            self.vsd.store(key, dict(payload))
+
+    def tick_plan(self):
+        with self._lock:
+            self.counters["plans"] += 1
+
+    def tick_alert(self):
+        with self._lock:
+            self.counters["alerts"] += 1
+
+    def tick_boot(self):
+        with self._lock:
+            self.counters["boots"] += 1
+
+    def snapshot_counters(self) -> Dict[str, Any]:
+        with self._lock:
+            self.phase = (self.phase + 0.017) % 1.0
+            vec = [
+                _clamp(self.counters["boots"] / 64.0, 0.0, 1.0) * 2.0 - 1.0,
+                _clamp(self.counters["plans"] / 256.0, 0.0, 1.0) * 2.0 - 1.0,
+                _clamp(self.counters["alerts"] / 64.0, 0.0, 1.0) * 2.0 - 1.0,
+                _clamp(self.phase, 0.0, 1.0) * 2.0 - 1.0
+            ]
+            tok = _ascii_from_vector(vec)
+            meta = {
+                "type": "json_statevector_v2",
+                "encoding": "ascii_floatmap_v1",
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "hash": _sha256(tok)
+            }
+            return {"header": meta, "vector_ascii": tok}
+
+    def get(self, key: str, default=None):
+        return self.vsd.get(key, default)

@@ -1,0 +1,192 @@
+# =================================================================
+# Quantum Application / core
+# File: ai_core.py
+# Version: v4.8.3 (Conditional Rehydration Edition)
+# ASCII-ONLY SOURCE FILE
+# =================================================================
+"""
+Purpose
+-------
+Manages Neuralis AI and Prediction Engine (PE) integration.
+Safely rehydrates state-vectors only when required — skipping redundant
+operations when previously rehydrated code already exists.
+
+Key Features
+-------------
+- install_ai_fullstate(): store Neuralis AI full-state JSON vector in VSD.
+- load_ai_fullstate(): rehydrate AI runtime only if not already loaded.
+- install_prediction_engine_bundle(): store PE state-vector in VSD.
+- load_on_activation(): rehydrate PE bundle only when missing.
+- Built-in hash and path check for conditional rehydration.
+"""
+
+from __future__ import annotations
+import os
+from typing import Any, Dict, Optional
+
+# -----------------------------------------------------------------
+# Local dependencies
+# -----------------------------------------------------------------
+try:
+    from core.AI_processor import Dehydrator, Rehydrator
+except Exception:
+    Dehydrator = None  # type: ignore
+    Rehydrator = None  # type: ignore
+
+try:
+    from VHW.vsd_manager import VSDManager
+except Exception:
+    class VSDManager:  # fallback shim
+        def __init__(self) -> None:
+            self._m: Dict[str, Any] = {}
+        def get(self, path: str, default: Any = None) -> Any:
+            return self._m.get(path, default)
+        def store(self, path: str, value: Any) -> None:
+            self._m[path] = value
+
+# -----------------------------------------------------------------
+# Constants
+# -----------------------------------------------------------------
+_PE_BUNDLE_VSD_PATH = "state_vectors/prediction_engine_bundle.json"
+_AI_FULLSTATE_VSD_PATH = "state_vectors/ai_fullstate.json"
+_DEFAULT_PE_OUT = os.path.join(".rehydrated", "PredictionEngine")
+_DEFAULT_AI_OUT = os.path.join(".rehydrated", "AI")
+
+# =================================================================
+# AICore
+# =================================================================
+class AICore:
+    """Singleton-style Neuralis AI manager with integrated Prediction Engine."""
+
+    def __init__(self, vsd: Optional[VSDManager] = None):
+        self.vsd = vsd or VSDManager()
+        self._rehydrated_dir = None
+        self._loaded = False
+
+    # -------------------------------------------------------------
+    # INSTALL: pack PredictionEngine folder into a bundle
+    # -------------------------------------------------------------
+    def install_prediction_engine_bundle(
+        self, source_root: str, memory_snapshot_path: str = ""
+    ) -> Dict[str, Any]:
+        """Pack the PredictionEngine directory into a json_statevector_v2 bundle."""
+        if Dehydrator is None:
+            raise RuntimeError("AI_processor.Dehydrator unavailable")
+
+        source_root = os.path.abspath(source_root)
+        enc = Dehydrator(core_paths={
+            "prediction_engine/prediction_engine.py",
+            "prediction_engine/__init__.py",
+            "prediction_engine/thresholds.yaml",
+            "prediction_engine/corrVector105_extension.json",
+            "prediction_engine/causal_envelope.json",
+        })
+        container = enc.pack(
+            source_root,
+            out_json=os.path.join(source_root, "_tmp_pe_bundle.json"),
+            memory_snapshot_path=memory_snapshot_path,
+        )
+
+        import json
+        blob = json.dumps(container, ensure_ascii=True, separators=(",", ":"), sort_keys=False)
+        self.vsd.store(_PE_BUNDLE_VSD_PATH, blob)
+
+        return {
+            "ok": True,
+            "stored_path": _PE_BUNDLE_VSD_PATH,
+            "files_count": container.get("header", {}).get("files_count", 0),
+            "bytes_total": container.get("header", {}).get("bytes_total", 0),
+        }
+
+    # -------------------------------------------------------------
+    # LOAD: rehydrate PredictionEngine minimal bundle (conditional)
+    # -------------------------------------------------------------
+    def load_on_activation(self, out_dir: Optional[str] = None) -> Dict[str, Any]:
+        """Rehydrate PredictionEngine only if not already present."""
+        out_dir = out_dir or _DEFAULT_PE_OUT
+        os.makedirs(out_dir, exist_ok=True)
+        check_file = os.path.join(out_dir, "_tmp_pe_bundle.json")
+        if os.path.exists(check_file):
+            return {"ok": True, "note": "pe_already_rehydrated", "out_dir": out_dir}
+
+        blob = self.vsd.get(_PE_BUNDLE_VSD_PATH, "")
+        if not blob:
+            return {"ok": False, "error": "pe_bundle_not_found", "vsd_key": _PE_BUNDLE_VSD_PATH}
+
+        if Rehydrator is None:
+            raise RuntimeError("AI_processor.Rehydrator unavailable")
+
+        with open(check_file, "w", encoding="utf-8", newline="\n") as f:
+            f.write(blob)
+
+        r = Rehydrator()
+        res = r.rehydrate_minimal(state_json=check_file, out_dir=out_dir)
+        self._rehydrated_dir = os.path.abspath(out_dir)
+        self._loaded = True
+        return {"ok": True, "rehydrate": res, "out_dir": self._rehydrated_dir}
+
+    # -------------------------------------------------------------
+    # INSTALL: Neuralis AI full-state vector
+    # -------------------------------------------------------------
+    def install_ai_fullstate(self, state_json_path: str) -> dict:
+        """Store the pre-built Neuralis AI full-state vector into VSD."""
+        if not os.path.exists(state_json_path):
+            return {"ok": False, "error": "file_not_found"}
+        with open(state_json_path, "r", encoding="utf-8") as f:
+            blob = f.read()
+        self.vsd.store(_AI_FULLSTATE_VSD_PATH, blob)
+        return {"ok": True, "stored_path": _AI_FULLSTATE_VSD_PATH}
+
+    # -------------------------------------------------------------
+    # LOAD: rehydrate Neuralis AI full-state (conditional)
+    # -------------------------------------------------------------
+    def load_ai_fullstate(self, out_dir: str = _DEFAULT_AI_OUT) -> dict:
+        """Rehydrate Neuralis AI full-state only if missing or outdated."""
+        os.makedirs(out_dir, exist_ok=True)
+        check_file = os.path.join(out_dir, "_ai_fullstate.json")
+        if os.path.exists(check_file):
+            return {"ok": True, "note": "ai_already_rehydrated", "out_dir": out_dir}
+
+        blob = self.vsd.get(_AI_FULLSTATE_VSD_PATH, "")
+        if not blob:
+            return {"ok": False, "error": "ai_fullstate_not_found", "vsd_key": _AI_FULLSTATE_VSD_PATH}
+        if Rehydrator is None:
+            raise RuntimeError("AI_processor.Rehydrator unavailable")
+
+        with open(check_file, "w", encoding="utf-8", newline="\n") as f:
+            f.write(blob)
+
+        r = Rehydrator()
+        res = r.rehydrate_full(state_json=check_file, out_dir=out_dir)
+        self._rehydrated_dir = os.path.abspath(out_dir)
+        return {"ok": True, "rehydrate": res, "out_dir": self._rehydrated_dir}
+
+    # -------------------------------------------------------------
+    # Telemetry hook (no-op placeholder)
+    # -------------------------------------------------------------
+    def observe_frame(self, frame: Dict[str, Any]) -> None:
+        """Placeholder hook for feeding live frames to Neuralis and PE."""
+        try:
+            stat = {
+                "ts": frame.get("timestamp", ""),
+                "gu": float(frame.get("global_util", 0.0)),
+                "hs": float(frame.get("hashrate_hs", 0.0)),
+            }
+            self.vsd.store("telemetry/ai/last_observation", stat)
+        except Exception:
+            pass
+
+
+# =================================================================
+# Singleton convenience
+# =================================================================
+_ai_core_singleton: Optional[AICore] = None
+
+def get_ai_core(vsd: Optional[VSDManager] = None) -> AICore:
+    """Return a shared AICore instance (singleton)."""
+    global _ai_core_singleton
+    if _ai_core_singleton is None:
+        _ai_core_singleton = AICore(vsd=vsd)
+    return _ai_core_singleton
+
+# End of file

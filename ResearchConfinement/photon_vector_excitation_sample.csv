@@ -1,0 +1,5 @@
+// photon_vector_excitation_sample.csv
+x,y,z,vec_x,vec_y,vec_z,spin_x,spin_y,spin_z,oam_twist
+0,0,0,0.1,0.0,0.0,0.0,0.0,1.0,0.002
+0,0,1,0.0,0.1,0.0,0.0,0.1,0.99,0.0021
+...

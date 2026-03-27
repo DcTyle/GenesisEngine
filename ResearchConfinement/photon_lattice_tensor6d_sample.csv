@@ -1,0 +1,5 @@
+// photon_lattice_tensor6d_sample.csv
+x,y,z,phase_coherence,curvature,flux,inertia,freq_x,freq_y,freq_z,dtheta_dt,d2theta_dt2,oam_twist,spin_x,spin_y,spin_z,higgs_inertia
+0,0,0,0.98,0.01,0.02,0.001,0.5,0.5,0.5,0.01,0.001,0.002,0.0,0.0,1.0,0.0
+0,0,1,0.97,0.02,0.03,0.002,0.51,0.49,0.5,0.011,0.0011,0.0021,0.0,0.1,0.99,0.01
+...

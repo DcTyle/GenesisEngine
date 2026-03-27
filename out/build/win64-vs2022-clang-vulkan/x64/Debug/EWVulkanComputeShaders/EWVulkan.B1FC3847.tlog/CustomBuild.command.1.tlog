@@ -1,0 +1,78 @@
+^D:\GAMECREATION\GENESISENGINE\OUT\BUILD\WIN64-VS2022-CLANG-VULKAN\CMAKEFILES\494F13505D6FECD1F47188B7549A2BE4\CARRIER_BUNDLE.COMP.SPV.RULE
+setlocal
+C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\Bin\glslc.exe -o D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vkcompute_shaders/carrier_bundle.comp.spv D:/GameCreation/GenesisEngine/shaders/vkcompute/carrier_bundle.comp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^D:\GAMECREATION\GENESISENGINE\OUT\BUILD\WIN64-VS2022-CLANG-VULKAN\CMAKEFILES\494F13505D6FECD1F47188B7549A2BE4\GE_CANONICALIZE.COMP.SPV.RULE
+setlocal
+C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\Bin\glslc.exe -o D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vkcompute_shaders/ge_canonicalize.comp.spv D:/GameCreation/GenesisEngine/shaders/vkcompute/ge_canonicalize.comp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^D:\GAMECREATION\GENESISENGINE\OUT\BUILD\WIN64-VS2022-CLANG-VULKAN\CMAKEFILES\494F13505D6FECD1F47188B7549A2BE4\GE_OVERLAP_SCORES.COMP.SPV.RULE
+setlocal
+C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\Bin\glslc.exe -o D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vkcompute_shaders/ge_overlap_scores.comp.spv D:/GameCreation/GenesisEngine/shaders/vkcompute/ge_overlap_scores.comp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^D:\GAMECREATION\GENESISENGINE\OUT\BUILD\WIN64-VS2022-CLANG-VULKAN\CMAKEFILES\494F13505D6FECD1F47188B7549A2BE4\GE_TOPK_BLOCK.COMP.SPV.RULE
+setlocal
+C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\Bin\glslc.exe -o D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vkcompute_shaders/ge_topk_block.comp.spv D:/GameCreation/GenesisEngine/shaders/vkcompute/ge_topk_block.comp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^D:\GAMECREATION\GENESISENGINE\OUT\BUILD\WIN64-VS2022-CLANG-VULKAN\CMAKEFILES\494F13505D6FECD1F47188B7549A2BE4\GE_TOPK_MERGE.COMP.SPV.RULE
+setlocal
+C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\Bin\glslc.exe -o D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vkcompute_shaders/ge_topk_merge.comp.spv D:/GameCreation/GenesisEngine/shaders/vkcompute/ge_topk_merge.comp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^D:\GAMECREATION\GENESISENGINE\OUT\BUILD\WIN64-VS2022-CLANG-VULKAN\CMAKEFILES\494F13505D6FECD1F47188B7549A2BE4\SYMBOL_TOKENIZE.COMP.SPV.RULE
+setlocal
+C:\Users\Myke\AppData\Local\Programs\VulkanSDK\1.4.341.1\Bin\glslc.exe -o D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/vkcompute_shaders/symbol_tokenize.comp.spv D:/GameCreation/GenesisEngine/shaders/vkcompute/symbol_tokenize.comp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^D:\GAMECREATION\GENESISENGINE\OUT\BUILD\WIN64-VS2022-CLANG-VULKAN\CMAKEFILES\9483B0744B3A08C0550A148C75A0EF65\EWVULKANCOMPUTESHADERS.RULE
+setlocal
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^D:\GAMECREATION\GENESISENGINE\CMAKELISTS.TXT
+setlocal
+"D:\Program Files\CMake\bin\cmake.exe" -SD:/GameCreation/GenesisEngine -BD:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan --check-stamp-file D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

@@ -1,0 +1,113 @@
+# ============================================================================
+# Quantum Application / bios
+# File: main_runtime.py
+# Version: v4.8.2  (Corrected Imports and Header Normalization)
+# ASCII-ONLY SOURCE FILE
+# Jarvis ADA v4.8.2 Hybrid Ready
+# ============================================================================
+"""
+Purpose
+-------
+Main runtime entry for BIOS. Wires boot(), scheduler, and telemetry console.
+Provides run() for long-lived operation and shutdown() to stop all threads.
+
+Public API
+----------
+run(config: dict = None) -> dict context
+shutdown(ctx: dict) -> None
+"""
+
+from __future__ import annotations
+from typing import Dict, Any
+import time
+
+# ---------------------------------------------------------------------------
+# BIOS components (corrected imports)
+# ---------------------------------------------------------------------------
+from bios.boot import BIOSBoot
+from bios import scheduler
+
+# ---------------------------------------------------------------------------
+# Optional telemetry consoles
+# ---------------------------------------------------------------------------
+try:
+    from VHW.telemetry_console_live import LiveConsoleRunner
+    from VHW.telemetry_console import TelemetryConsole
+    CONSOLE_OK = True
+except Exception:
+    CONSOLE_OK = False
+
+    class TelemetryConsole:
+        def __init__(self, read_telemetry, refresh_s=0.5, broadcaster=None):
+            self.read_telemetry = read_telemetry
+            self.refresh_s = float(refresh_s)
+            self._stop = False
+            self._thread = None
+
+        def start(self): 
+            pass
+
+        def stop(self, timeout: float = 2.0): 
+            pass
+
+        def render(self): 
+            return self.read_telemetry() or {}
+
+# ---------------------------------------------------------------------------
+# Runtime Lifecycle
+# ---------------------------------------------------------------------------
+def run(config: Dict[str, Any] = None) -> Dict[str, Any]:
+    """
+    Boot BIOS environment, start scheduler, and optionally attach a telemetry console.
+    """
+    boot = BIOSBoot()
+    env = {"reader": boot.monitor.frame}
+    ctx = {"boot": boot, "scheduler": None, "console": None}
+
+    try:
+        boot.start()
+        scheduler.run_forever(env, allocator_factory=lambda e: boot.allocator, refresh_s=0.5)
+        ctx["scheduler"] = scheduler
+    except Exception:
+        pass
+
+    # Optionally attach console
+    try:
+        if CONSOLE_OK:
+            console = LiveConsoleRunner(env, refresh_s=0.5)
+            console.start()
+            ctx["console"] = console
+    except Exception:
+        ctx["console"] = None
+
+    ctx["started_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    return ctx
+
+
+def shutdown(ctx: Dict[str, Any]):
+    """
+    Gracefully stop scheduler, console, and boot subsystems.
+    """
+    if not isinstance(ctx, dict):
+        return
+
+    try:
+        sched = ctx.get("scheduler")
+        if sched:
+            scheduler.stop()
+    except Exception:
+        pass
+
+    try:
+        console = ctx.get("console")
+        if console:
+            console.stop()
+    except Exception:
+        pass
+
+    try:
+        boot = ctx.get("boot")
+        if boot:
+            boot.stop()
+    except Exception:
+        pass

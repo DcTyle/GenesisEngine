@@ -1,0 +1,6 @@
+// photon_tensor_gradient_sample.csv
+x,y,z,timestep,phase_coherence,curvature,flux,inertia,spin_x,spin_y,spin_z,oam_x,oam_y,oam_z,higgs_inertia
+0,0,0,0,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+0,0,0,1,0.98,0.01,0.01,0.001,0.002,0.001,0.0,0.0,0.0,0.0,0.0
+1,0,0,0,0.99,0.02,0.01,0.002,0.001,0.002,0.0,0.0,0.0,0.0,0.0
+...

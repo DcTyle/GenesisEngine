@@ -1,0 +1,400 @@
+# ASCII ONLY
+# ============================================================================
+# File: AI_processor.py
+# Role: Read/Write Decoder-Encoder, Dehydrator/Rehydrator for state vectors
+# Spec: json_statevector_v2 with ascii_floatmap_v1 encoding
+# Jarvis ADA v4.7 Hybrid compatible
+# ============================================================================
+# Features
+# --------
+# - Pack:  folder -> single JSON statevector (byte-for-byte reversible)
+# - Rehydrate (full): JSON -> files (verifies per-file SHA256)
+# - Rehydrate (minimal): write only core runtime files, store the rest as vectors
+# - Emit "compressed rest" JSON for lazy, on-demand expansion
+# - Visual Studio sync stub to help indexing restored files
+#
+# CLI
+# ---
+# python AI_processor.py pack   <source_root> <out_json> [memory_snapshot.json]
+# python AI_processor.py full   <state_json>  <out_dir>
+# python AI_processor.py minimal <state_json> <out_dir> [--rest <rest_json>]
+# python AI_processor.py expand <rest_json>   <out_dir> <path1> [<path2> ...]
+#
+# Encoding
+# --------
+# ascii_floatmap_v1:
+#   b in [0..255] -> v = (b/255)*2 - 1
+#   code = int((v + 1)*47) + 32  -> clamp to [32, 126] -> chr(code)
+# Decode is exact inverse with rounding + clamp to [0,255].
+# ============================================================================
+
+from __future__ import annotations
+import os
+import sys
+import json
+import time
+import hashlib
+
+ASCII_MIN = 32
+ASCII_MAX = 126
+
+DEFAULT_CORE_PATHS = {
+    "BIOS/bios_boot.py",
+    "BIOS/bios_scheduler.py",
+    "core/utils.py",
+    "VHW/vhw_core.py",
+    "JarvisAI/jarvis_core.py",
+    "run.py"
+}
+
+# ----------------------------------------------------------------------------
+# Small utilities
+# ----------------------------------------------------------------------------
+
+def clamp(v, lo, hi):
+    return lo if v < lo else hi if v > hi else v
+
+def sha256_bytes(b: bytes) -> str:
+    return hashlib.sha256(b).hexdigest()
+
+def sha256_str(s: str) -> str:
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+def norm_rel(rel_path: str) -> str:
+    return str(rel_path).replace("\\", "/")
+
+def ensure_dir(p: str) -> None:
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+
+# ----------------------------------------------------------------------------
+# ascii_floatmap_v1 codec
+# ----------------------------------------------------------------------------
+
+def byte_to_ascii(b: int) -> str:
+    # b in [0..255]
+    v = (float(b) / 255.0) * 2.0 - 1.0
+    code = int((v + 1.0) * 47) + 32
+    code = clamp(code, ASCII_MIN, ASCII_MAX)
+    return chr(code)
+
+def ascii_to_byte(ch: str) -> int:
+    # inverse mapping
+    code = ord(ch)
+    code = clamp(code, ASCII_MIN, ASCII_MAX)
+    v = (float(code - 32) / 47.0) - 1.0
+    b = int(round(((v + 1.0) / 2.0) * 255.0))
+    return clamp(b, 0, 255)
+
+def encode_bytes_to_ascii(b: bytes) -> str:
+    return "".join(byte_to_ascii(x) for x in b)
+
+def decode_ascii_to_bytes(s: str) -> bytes:
+    return bytes(ascii_to_byte(c) for c in s)
+
+# ----------------------------------------------------------------------------
+# Vector encoder / decoder
+# ----------------------------------------------------------------------------
+
+class VectorEncoder:
+    def __init__(self, excludes=None):
+        self.excludes = tuple(excludes or (".git", "__pycache__", ".venv", "dist", "build"))
+
+    def _skip(self, path: str) -> bool:
+        return any(x in path for x in self.excludes)
+
+    def feed_file(self, root: str, abspath: str) -> dict:
+        rel = norm_rel(os.path.relpath(abspath, root))
+        with open(abspath, "rb") as f:
+            raw = f.read()
+        rec = {
+            "path": rel,
+            "sha256": sha256_bytes(raw),
+            "size_bytes": len(raw),
+            "encoding": "ascii_floatmap_v1",
+            "vector_ascii": encode_bytes_to_ascii(raw)
+        }
+        return rec
+
+    def collect(self, root: str) -> list:
+        root = os.path.abspath(root)
+        out = []
+        for dirpath, dirnames, filenames in os.walk(root):
+            # filter dirs
+            for name in list(dirnames):
+                p = os.path.join(dirpath, name)
+                if self._skip(p):
+                    dirnames.remove(name)
+            for fn in filenames:
+                p = os.path.join(dirpath, fn)
+                if self._skip(p):
+                    continue
+                out.append(self.feed_file(root, p))
+        return out
+
+class VectorDecoder:
+    def __init__(self):
+        pass
+
+    def restore_file(self, out_dir: str, rec: dict) -> None:
+        raw = decode_ascii_to_bytes(rec["vector_ascii"])
+        h = sha256_bytes(raw)
+        if h != rec["sha256"]:
+            raise ValueError("HASH MISMATCH: %s" % rec.get("path"))
+        p = os.path.join(out_dir, rec["path"])
+        ensure_dir(p)
+        with open(p, "wb") as w:
+            w.write(raw)
+
+# ----------------------------------------------------------------------------
+# Dehydrator / Rehydrator (container level)
+# ----------------------------------------------------------------------------
+
+class Dehydrator:
+    def __init__(self, core_paths=None):
+        self.core_paths = set(core_paths or DEFAULT_CORE_PATHS)
+
+    def pack(self, source_root: str, out_json: str, memory_snapshot_path: str = "") -> dict:
+        enc = VectorEncoder()
+        files = enc.collect(source_root)
+        header = {
+            "format": "json_statevector_v2",
+            "encoding": "ascii_floatmap_v1",
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "root": os.path.abspath(source_root).replace("\\", "/"),
+            "files_count": len(files),
+            "bytes_total": sum(f["size_bytes"] for f in files),
+            "core_paths": sorted(list(self.core_paths))
+        }
+        mem_text = ""
+        if memory_snapshot_path:
+            try:
+                with open(memory_snapshot_path, "r", encoding="utf-8") as mf:
+                    mem_text = mf.read()
+            except Exception:
+                mem_text = ""
+        container = {
+            "header": header,
+            "memory_snapshot": mem_text,
+            "files": files
+        }
+        # compute container checksum
+        blob = json.dumps(container, separators=(",", ":"), ensure_ascii=True)
+        container["header"]["container_sha256"] = sha256_str(blob)
+
+        ensure_dir(out_json)
+        with open(out_json, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(container, f, indent=2, ensure_ascii=True)
+        return container
+
+class Rehydrator:
+    def __init__(self, core_paths=None):
+        self.core_paths = set(core_paths or DEFAULT_CORE_PATHS)
+
+    def vs_register(self, project_root: str, rel_path: str) -> None:
+        # Minimal VS/VSCode sync stub: record files in a manifest for indexers
+        try:
+            vs_sync_manifest = os.path.join(project_root, "rehydrated_files.txt")
+            with open(vs_sync_manifest, "a", encoding="utf-8") as mf:
+                mf.write(norm_rel(rel_path) + "\n")
+            sync_stub = os.path.join(project_root, ".slnproj.sync")
+            if not os.path.exists(sync_stub):
+                with open(sync_stub, "w", encoding="utf-8") as s:
+                    s.write("# Visual Studio sync marker\n")
+                    s.write("# Generated automatically by AI_processor.py\n")
+        except Exception:
+            # Non-fatal
+            pass
+
+    def _restore_rec(self, out_dir: str, dec: VectorDecoder, rec: dict, register_vs: bool) -> None:
+        # restore and optionally register to VS manifest
+        p_rel = rec["path"]
+        dec.restore_file(out_dir, rec)
+        if register_vs:
+            project_root = os.path.abspath(out_dir)
+            self.vs_register(project_root, p_rel)
+
+    def rehydrate_full(self, state_json: str, out_dir: str, register_vs: bool = True) -> dict:
+        with open(state_json, "r", encoding="utf-8") as f:
+            sv = json.load(f)
+        dec = VectorDecoder()
+        os.makedirs(out_dir, exist_ok=True)
+
+        files = sv.get("files", [])
+        written = 0
+        for rec in files:
+            self._restore_rec(out_dir, dec, rec, register_vs)
+            written += 1
+
+        # optional memory snapshot
+        mem = sv.get("memory_snapshot", "")
+        if mem:
+            with open(os.path.join(out_dir, "_memory_snapshot.json"), "w", encoding="utf-8", newline="\n") as f:
+                f.write(mem)
+
+        return {
+            "mode": "full",
+            "files_total": len(files),
+            "files_written": written,
+            "output": os.path.abspath(out_dir)
+        }
+
+    def rehydrate_minimal(self, state_json: str, out_dir: str, rest_json: str = "") -> dict:
+        with open(state_json, "r", encoding="utf-8") as f:
+            sv = json.load(f)
+        dec = VectorDecoder()
+        os.makedirs(out_dir, exist_ok=True)
+
+        header = sv.get("header", {})
+        core_paths = set(header.get("core_paths") or list(self.core_paths))
+        files = sv.get("files", [])
+        written = 0
+        leftovers = []
+
+        for rec in files:
+            rel = norm_rel(rec["path"])
+            if rel in core_paths:
+                self._restore_rec(out_dir, dec, rec, register_vs=True)
+                written += 1
+            else:
+                leftovers.append({
+                    "path": rel,
+                    "sha256": rec["sha256"],
+                    "encoding": rec.get("encoding", "ascii_floatmap_v1"),
+                    "vector_ascii": rec["vector_ascii"]
+                })
+
+        # emit compressed-rest container
+        if leftovers:
+            if not rest_json:
+                rest_json = os.path.join(out_dir, "_compressed_rest.json")
+            rest_container = {
+                "header": {
+                    "format": "json_statevector_v2_rest",
+                    "encoding": "ascii_floatmap_v1",
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "leftover_files": len(leftovers)
+                },
+                "files": leftovers
+            }
+            blob = json.dumps(rest_container, separators=(",", ":"), ensure_ascii=True)
+            rest_container["header"]["container_sha256"] = sha256_str(blob)
+            ensure_dir(rest_json)
+            with open(rest_json, "w", encoding="utf-8", newline="\n") as f:
+                json.dump(rest_container, f, indent=2, ensure_ascii=True)
+
+        # optional memory snapshot
+        mem = sv.get("memory_snapshot", "")
+        if mem:
+            with open(os.path.join(out_dir, "_memory_snapshot.json"), "w", encoding="utf-8", newline="\n") as f:
+                f.write(mem)
+
+        return {
+            "mode": "minimal",
+            "files_total": len(files),
+            "files_written": written,
+            "compressed_rest": os.path.abspath(rest_json) if leftovers else "",
+            "output": os.path.abspath(out_dir)
+        }
+
+# ----------------------------------------------------------------------------
+# On-demand "rest" expander
+# ----------------------------------------------------------------------------
+
+def expand_rest(rest_json: str, out_dir: str, targets: list) -> dict:
+    with open(rest_json, "r", encoding="utf-8") as f:
+        rest = json.load(f)
+    files = rest.get("files", [])
+    os.makedirs(out_dir, exist_ok=True)
+    dec = VectorDecoder()
+    target_set = set(norm_rel(p) for p in targets)
+    hits = 0
+    for rec in files:
+        if norm_rel(rec["path"]) not in target_set:
+            continue
+        # restore individual file with hash check
+        raw = decode_ascii_to_bytes(rec["vector_ascii"])
+        if sha256_bytes(raw) != rec["sha256"]:
+            raise ValueError("HASH MISMATCH: %s" % rec.get("path"))
+        p = os.path.join(out_dir, rec["path"])
+        ensure_dir(p)
+        with open(p, "wb") as w:
+            w.write(raw)
+        hits += 1
+    return {"expanded": hits, "output": os.path.abspath(out_dir)}
+
+# ----------------------------------------------------------------------------
+# CLI
+# ----------------------------------------------------------------------------
+
+def cmd_pack(argv: list) -> None:
+    if len(argv) < 2:
+        print("Usage: pack <source_root> <out_json> [memory_snapshot.json]")
+        sys.exit(1)
+    source_root = argv[0]
+    out_json = argv[1]
+    mem = argv[2] if len(argv) >= 3 else ""
+    d = Dehydrator()
+    res = d.pack(source_root, out_json, mem)
+    print("Packed:", out_json)
+    print("Files:", res["header"]["files_count"], "TotalBytes:", res["header"]["bytes_total"])
+    print("ContainerSHA256:", res["header"]["container_sha256"])
+
+def cmd_full(argv: list) -> None:
+    if len(argv) < 2:
+        print("Usage: full <state_json> <out_dir>")
+        sys.exit(1)
+    state_json = argv[0]
+    out_dir = argv[1]
+    r = Rehydrator()
+    res = r.rehydrate_full(state_json, out_dir, register_vs=True)
+    print(json.dumps(res, indent=2))
+
+def cmd_minimal(argv: list) -> None:
+    if len(argv) < 2:
+        print("Usage: minimal <state_json> <out_dir> [--rest <rest_json>]")
+        sys.exit(1)
+    state_json = argv[0]
+    out_dir = argv[1]
+    rest_json = ""
+    if "--rest" in argv:
+        i = argv.index("--rest")
+        if i + 1 < len(argv):
+            rest_json = argv[i + 1]
+    r = Rehydrator()
+    res = r.rehydrate_minimal(state_json, out_dir, rest_json)
+    print(json.dumps(res, indent=2))
+
+def cmd_expand(argv: list) -> None:
+    if len(argv) < 3:
+        print("Usage: expand <rest_json> <out_dir> <path1> [<path2> ...]")
+        sys.exit(1)
+    rest_json = argv[0]
+    out_dir = argv[1]
+    targets = argv[2:]
+    res = expand_rest(rest_json, out_dir, targets)
+    print(json.dumps(res, indent=2))
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage:")
+        print("  python AI_processor.py pack    <source_root> <out_json> [memory_snapshot.json]")
+        print("  python AI_processor.py full    <state_json>  <out_dir>")
+        print("  python AI_processor.py minimal <state_json>  <out_dir> [--rest <rest_json>]")
+        print("  python AI_processor.py expand  <rest_json>   <out_dir> <path1> [<path2> ...]")
+        sys.exit(1)
+    cmd = sys.argv[1].lower().strip()
+    args = sys.argv[2:]
+    if cmd == "pack":
+        cmd_pack(args)
+    elif cmd == "full":
+        cmd_full(args)
+    elif cmd == "minimal":
+        cmd_minimal(args)
+    elif cmd == "expand":
+        cmd_expand(args)
+    else:
+        print("Unknown command:", cmd)
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

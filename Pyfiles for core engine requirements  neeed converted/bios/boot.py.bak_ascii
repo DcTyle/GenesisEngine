@@ -1,0 +1,329 @@
+# =================================================================
+# Quantum Application / bios
+# ASCII-ONLY SOURCE FILE
+# File: boot.py
+# Version: v4.8.3 (AI-Processor snapshots; writer removed; flat imports)
+# Jarvis ADA v4.8.3 Hybrid Ready
+# =================================================================
+"""
+Purpose
+-------
+Bootstrap the VirtualMiner runtime with the v4.8.x interfaces:
+  - Monitor (smoothed canonical fields)
+  - LiveTelemetry (harmonic pulse bridge)
+  - FailsafeGovernor (difficulty-first pruning + cooldown reconnect)
+  - MinerEngine (aggregate metrics + Murphy hooks)
+  - In-memory VSD facade with AI-Processor snapshot support
+
+All keys are ASCII-only; no Unicode in strings or comments.
+
+What this script does
+---------------------
+1) Build a VSD facade (in-memory MapVSD).
+2) Start Monitor and a lightweight LivePump that stores frames under:
+     telemetry/live/current
+3) Configure compute fabric with network capacity caps
+4) Wire FailsafeGovernor and ShareAllocator.
+5) Launch MinerEngine background thread.
+6) Provide stop() and status() for supervision.
+7) On stop(), write a json_statevector_v2 snapshot if AI-Processor is available.
+
+Environment Notes
+-----------------
+- If pool stats or market data are unavailable, engine and allocator still run.
+- Share submission path is injected via ShareAllocator on_submit if supported.
+- All VSD paths omit a leading slash.
+"""
+
+from __future__ import annotations
+from typing import Dict, Any, Optional, Callable
+import threading
+import time
+
+# ---------------------------------------------------------------------------
+# Layered imports
+# ---------------------------------------------------------------------------
+from VHW.monitor import Monitor
+from VHW.live import LiveTelemetry
+from miner.pool_stats import PoolStats
+from miner.miner_engine import MinerEngine
+from VHW.share_allocator import ShareAllocator
+from VHW.failsafe import FailsafeGovernor
+from core.AI_processor import Dehydrator
+
+
+# Lane management is now handled by ComputeManager
+# ---------------------------------------------------------------------------
+# Minimal fallback components (ASCII-only)
+# ---------------------------------------------------------------------------
+
+class MapVSD:
+    """In-memory VSD fallback with get/store API."""
+    def __init__(self) -> None:
+        self._m: Dict[str, Any] = {}
+        self._lock = threading.RLock()
+    def get(self, key: str, default: Any = None) -> Any:
+        with self._lock:
+            return self._m.get(str(key), default)
+    def store(self, key: str, value: Any) -> None:
+        with self._lock:
+            self._m[str(key)] = value
+
+class MinimalShareAllocator:
+    """
+    Fallback planner if ShareAllocator is unavailable.
+    Provides compute_plan(), counters(), register_nonce_result() hooks used by the engine.
+    """
+    def __init__(self) -> None:
+        self._nets: Dict[str, Dict[str, float]] = {}
+        self.on_submit: Optional[Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]] = None
+        self._lock = threading.RLock()
+    def compute_plan(self) -> Dict[str, Any]:
+        return {"plan_ts": time.time(), "type": "minimal", "nets": list(self._nets.keys())}
+    def counters(self) -> Dict[str, Any]:
+        with self._lock:
+            return {"nets": {k: {"submitted": v.get("submitted", 0.0), "valid": v.get("valid", 0.0)} for k, v in self._nets.items()}}
+    def register_nonce_result(self, lane_id: str, network: str, header_hex: str, nonce_hex: str, is_valid: bool) -> Optional[Dict[str, Any]]:
+        net = str(network).upper()
+        with self._lock:
+            blk = self._nets.setdefault(net, {"submitted": 0.0, "valid": 0.0})
+            blk["submitted"] += 1.0
+            if is_valid:
+                blk["valid"] += 1.0
+        if callable(self.on_submit):
+            try:
+                return self.on_submit({"lane_id": lane_id, "network": net, "header": header_hex, "nonce": nonce_hex, "local_valid": bool(is_valid)})
+            except Exception:
+                return None
+        return {"ok": True, "accepted": bool(is_valid), "status": "accepted" if is_valid else "rejected"}
+
+# ---------------------------------------------------------------------------
+# Live pump to mirror Monitor/LiveTelemetry frames into the VSD
+# ---------------------------------------------------------------------------
+
+class LivePump:
+    """Samples LiveTelemetry (or Monitor.frame) and stores the last frame under telemetry/live/current."""
+    def __init__(self, vsd, reader: Callable[[], Dict[str, Any]], refresh_s: float = 0.5) -> None:
+        self.vsd = vsd
+        self.reader = reader
+        self.refresh_s = float(max(0.05, refresh_s))
+        self._thr: Optional[threading.Thread] = None
+        self._stop = False
+    def start(self) -> None:
+        if self._thr:
+            return
+        self._stop = False
+        self._thr = threading.Thread(target=self._loop, daemon=True, name="live_pump")
+        self._thr.start()
+    def stop(self, timeout: float = 2.0) -> None:
+        if not self._thr:
+            return
+        self._stop = True
+        self._thr.join(timeout=timeout)
+        self._thr = None
+    def _loop(self) -> None:
+        while not self._stop:
+            try:
+                fr = self.reader() or {}
+                self.vsd.store("telemetry/live/current", fr)
+            except Exception:
+                pass
+            time.sleep(self.refresh_s)
+
+# ---------------------------------------------------------------------------
+# BIOS bootstrap
+# ---------------------------------------------------------------------------
+
+class BIOSBoot:
+    def __init__(self) -> None:
+        self.vsd = self._build_vsd()
+        self.monitor = self._build_monitor()
+        self.live = self._build_live()
+        self.pools = self._build_pools()
+        self.allocator = self._build_allocator()
+        self.failsafe = self._build_failsafe()
+        self.share_alloc = self._build_share_allocator()
+        self.engine = self._build_engine()
+        self.pump = LivePump(self.vsd, self._live_reader, refresh_s=0.5)
+
+    # ----- builders -----
+    def _build_vsd(self):
+        # Always use in-memory VSD facade here; snapshots handled by AI-Processor on stop
+        return MapVSD()
+
+    def _build_monitor(self):
+        if Monitor is None:
+            raise RuntimeError("monitor.Monitor is required")
+        def read_telemetry() -> Dict[str, Any]:
+            return {
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "global_util": 0.42,
+                "gpu_util": 0.50,
+                "gpu_mem_util": 0.40,
+                "mem_bw_util": 0.35,
+                "cpu_util": 0.20,
+                "util_cap": 0.75,
+                "hardware": {"vram_mb": 8192, "mem_bw_gbps": 448, "cpu_ghz": 4.0},
+            }
+        return Monitor(read_telemetry=read_telemetry, util_cap=0.75)
+
+    def _build_live(self):
+        if LiveTelemetry is None:
+            raise RuntimeError("live.LiveTelemetry is required")
+        return LiveTelemetry(self.monitor.frame)
+
+    def _build_pools(self):
+        if PoolStats is None:
+            return None
+        return PoolStats(ttl_s=60)
+
+    def _network_capacity_fn(self) -> Dict[str, float]:
+        if self.pools is not None:
+            try:
+                snap = self.pools.get_all(network_cfg={}) or {}
+                out = {}
+                for net, d in snap.items():
+                    for k in ("network_hashrate_hs", "network_capacity_hs", "net_hashrate_hs"):
+                        if k in d:
+                            out[str(net).upper()] = float(d[k])
+                            break
+                if out:
+                    return out
+            except Exception:
+                pass
+        try:
+            caps = self.vsd.get("telemetry/metrics/network_capacity_hs", {}) or {}
+            return {str(k).upper(): float(v) for k, v in caps.items()}
+        except Exception:
+            return {}
+
+    def _build_allocator(self):
+        # LaneAllocator removed in favor of ComputeManager in live code.
+        # This backup builder returns None to avoid legacy coupling.
+        return None
+
+    def _build_failsafe(self):
+        if FailsafeGovernor is None:
+            raise RuntimeError("failsafe.FailsafeGovernor is required")
+        return FailsafeGovernor(allocator=self.allocator, vsd=self.vsd, cooldown_s=60.0, bias=0.005)
+
+    def _build_share_allocator(self):
+        if ShareAllocator is not None:
+            try:
+                return ShareAllocator()
+            except Exception:
+                pass
+        return MinimalShareAllocator()
+
+    def _build_engine(self):
+        if MinerEngine is None:
+            raise RuntimeError("miner_engine.MinerEngine is required")
+        if hasattr(self.share_alloc, "on_submit") and getattr(self.share_alloc, "on_submit", None) is None:
+            def _accept(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+                ok = bool(payload.get("local_valid", False))
+                return {"ok": ok, "accepted": ok, "status": "accepted" if ok else "rejected"}
+            self.share_alloc.on_submit = _accept  # type: ignore
+        return MinerEngine(
+            allocator=self.allocator,
+            share_allocator=self.share_alloc,
+            failsafe=self.failsafe,
+            read_telemetry=self.monitor.frame,
+            vsd=self.vsd,
+            tick_interval_s=0.25,
+            network_cfg={},
+        )
+
+    def _live_reader(self) -> Dict[str, Any]:
+        try:
+            return self.live.tick()
+        except Exception:
+            try:
+                return self.monitor.frame()
+            except Exception:
+                return {}
+
+    # ----- lifecycle -----
+    def start(self) -> None:
+        self.pump.start()
+        self.engine.start()
+
+    def stop(self, timeout: float = 2.0) -> None:
+        # Stop subsystems
+        try:
+            self.engine.stop(timeout=timeout)
+        except Exception:
+            pass
+        try:
+            self.pump.stop(timeout=timeout)
+        except Exception:
+            pass
+        # AI-Processor snapshot
+        try:
+            if Dehydrator is not None:
+                stamp = time.strftime("%Y%m%d_%H%M%S", time.gmtime())
+                out_root = os.path.join("VHW", "VD", "state_vectors")
+                os.makedirs(out_root, exist_ok=True)
+                out_json = os.path.join(out_root, f"bios_boot_snapshot_{stamp}.json")
+                # Optional hook: memory snapshot text
+                mem = self.vsd.get("snapshots/memory_text", "")
+                Dehydrator().pack(".", out_json, mem)
+                self.vsd.store("snapshots/last_full_state", out_json)
+        except Exception:
+            pass
+
+    def status(self) -> Dict[str, Any]:
+        try:
+            st = self.engine.stats()
+        except Exception:
+            st = {}
+        try:
+            lanes = self.allocator.list_active()
+        except Exception:
+            lanes = []
+        st["lanes_active"] = len(lanes)
+        st["vd_bound"] = True
+        try:
+            st["last_snapshot"] = self.vsd.get("snapshots/last_full_state", "")
+        except Exception:
+            st["last_snapshot"] = ""
+        return st
+
+# ---------------------------------------------------------------------------
+# Entrypoint
+# ---------------------------------------------------------------------------
+boot: Optional[BIOSBoot] = None
+
+def run() -> None:
+    global boot
+    if boot is not None:
+        return
+    boot = BIOSBoot()
+    boot.start()
+
+def stop(timeout: float = 2.0) -> None:
+    global boot
+    if boot is None:
+        return
+    try:
+        boot.stop(timeout=timeout)
+    finally:
+        boot = None
+
+def status() -> Dict[str, Any]:
+    if boot is None:
+        return {"running": False}
+    s = boot.status()
+    s["running"] = True
+    return s
+
+def warm_start() -> None:
+    """Resume BIOS session without rebuilding hardware layer."""
+    global boot
+    if boot is None:
+        boot = BIOSBoot()
+    else:
+        try:
+            boot.engine.stop(timeout=1.0)
+        except Exception:
+            pass
+    boot.start()

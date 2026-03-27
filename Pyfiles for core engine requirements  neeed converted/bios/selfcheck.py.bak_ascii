@@ -1,0 +1,77 @@
+# ============================================================================
+# Quantum Application / bios
+# File: selfcheck.py
+# Version: v4.8.3 Hybrid (AI-Processor verified import paths)
+# ============================================================================
+"""
+Purpose
+-------
+Performs system self-diagnostics on boot.  Verifies that key runtime
+components (Monitor, FailsafeGovernor, MinerEngine) are callable and
+that telemetry logging via utils is operational.
+"""
+
+from __future__ import annotations
+from typing import Dict, Any
+
+# ---------------------------------------------------------------------------
+# Flattened imports (v4.8.3 standard)
+# ---------------------------------------------------------------------------
+from core.utils import hw_snapshot, append_telemetry
+from core.constants_eq import get_effective
+from vhw.monitor import Monitor
+from miner.failsafe import FailsafeGovernor
+from miner.miner_engine import MinerEngine
+
+# ---------------------------------------------------------------------------
+# Self-check implementation
+# ---------------------------------------------------------------------------
+def run_selfcheck() -> Dict[str, Any]:
+    """Run basic hardware and module integrity checks."""
+    results: Dict[str, Any] = {}
+
+    try:
+        hw = hw_snapshot()
+        results["hardware_ok"] = True
+        results["hardware"] = hw
+    except Exception as e:
+        results["hardware_ok"] = False
+        results["hardware_err"] = str(e)
+
+    try:
+        mon = Monitor(read_telemetry=lambda: {"ok": True}, util_cap=0.75)
+        frame = mon.frame()
+        results["monitor_ok"] = bool(frame)
+    except Exception as e:
+        results["monitor_ok"] = False
+        results["monitor_err"] = str(e)
+
+    try:
+        fgov = FailsafeGovernor(allocator=None, vsd=None)
+        results["failsafe_ok"] = hasattr(fgov, "prune_network_first")
+    except Exception as e:
+        results["failsafe_ok"] = False
+        results["failsafe_err"] = str(e)
+
+    try:
+        eng = MinerEngine(
+            allocator=None,
+            share_allocator=None,
+            failsafe=None,
+            read_telemetry=lambda: {"ok": True},
+            vsd=None,
+            tick_interval_s=0.1,
+            network_cfg={},
+        )
+        results["engine_ok"] = hasattr(eng, "start")
+    except Exception as e:
+        results["engine_ok"] = False
+        results["engine_err"] = str(e)
+
+    append_telemetry("bios_selfcheck", results)
+    return results
+
+
+if __name__ == "__main__":
+    if globals().get('runtime_debugger', False):
+        print(run_selfcheck())

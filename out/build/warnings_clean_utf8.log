@@ -1,0 +1,54 @@
+﻿MSBuild version 17.14.40+3e7442088 for .NET Framework
+
+D:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Microsoft\VC\v170\Microsoft.CppClean.targets(77,5): warning : Access to the path 'd:\gamecreation\genesisengine\out\build\win64-vs2022-clang-vulkan\eigenwarecore.dir\release\ge_learning_automation-eab69983.obj.tmp' is denied. [D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.vcxproj]
+MSBuild version 17.14.40+3e7442088 for .NET Framework
+
+  1>Checking Build System
+  Generating shaders/cam_hist.comp.spv
+  Generating shaders/cam_median.comp.spv
+  Generating shaders/instanced.frag.spv
+  Generating shaders/instanced.vert.spv
+  Building Custom Rule D:/GameCreation/GenesisEngine/vulkan_app/CMakeLists.txt
+  Generating vkcompute_shaders/carrier_bundle.comp.spv
+  Generating vkcompute_shaders/ge_canonicalize.comp.spv
+  Generating vkcompute_shaders/ge_overlap_scores.comp.spv
+  Generating vkcompute_shaders/ge_topk_block.comp.spv
+  Generating vkcompute_shaders/ge_topk_merge.comp.spv
+  Generating vkcompute_shaders/symbol_tokenize.comp.spv
+  Building Custom Rule D:/GameCreation/GenesisEngine/CMakeLists.txt
+  Building Custom Rule D:/GameCreation/GenesisEngine/CMakeLists.txt
+  anchorize_files.vcxproj -> D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\Release\anchorize_files.exe
+  Generating generated/anchor_pack_blobs.cpp
+  Generated anchor pack: "D:\\GameCreation\\GenesisEngine\\out\\build\\win64-vs2022-clang-vulkan\\generated\\anchor_pack_blobs.cpp" (72 files)
+  Building Custom Rule D:/GameCreation/GenesisEngine/CMakeLists.txt
+D:\GameCreation\GenesisEngine\src\GE_runtime.cpp(1709,14): warning : variable 'line_no' set but not used [-Wunused-but-set-variable] [D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.vcxproj]
+D:\GameCreation\GenesisEngine\src\GE_runtime.cpp(7367,21): warning : unused variable 'n16' [-Wunused-variable] [D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.vcxproj]
+D:\GameCreation\GenesisEngine\src\GE_runtime.cpp(9739,26): warning : unused variable 'kind_from_path' [-Wunused-variable] [D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.vcxproj]
+D:\GameCreation\GenesisEngine\src\GE_runtime.cpp(339,23): warning : unused function 'ew_mul_q63_local' [-Wunused-function] [D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.vcxproj]
+D:\GameCreation\GenesisEngine\src\GE_runtime.cpp(439,20): warning : unused function 'ew_pick_explicit_path_or_empty' [-Wunused-function] [D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.vcxproj]
+D:\GameCreation\GenesisEngine\src\GE_runtime.cpp(580,13): warning : unused function 'ew_synth_query_best' [-Wunused-function] [D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.vcxproj]
+D:\GameCreation\GenesisEngine\src\GE_runtime.cpp(988,23): warning : unused function 'q32_32_from_double' [-Wunused-function] [D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.vcxproj]
+D:\GameCreation\GenesisEngine\src\GE_runtime.cpp(6263,20): warning : unused function 'ew_is_domain_char' [-Wunused-function] [D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.vcxproj]
+D:\GameCreation\GenesisEngine\src\GE_runtime.cpp(7119,23): warning : unused function 'ew_read_i64_le' [-Wunused-function] [D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.vcxproj]
+D:\GameCreation\GenesisEngine\src\GE_runtime.cpp(7147,19): warning : unused function 'ew_lane_id9_cmp' [-Wunused-function] [D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.vcxproj]
+D:\GameCreation\GenesisEngine\src\GE_g2p_english.cpp(9,20): warning : unused function 'ge_upper' [-Wunused-function] [D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.vcxproj]
+D:\GameCreation\GenesisEngine\src\GE_fourier_fanout.cpp(142,23): warning : unused function 'ew_band_from_q15_dup' [-Wunused-function] [D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.vcxproj]
+D:\GameCreation\GenesisEngine\src\GE_fourier_fanout.cpp(169,23): warning : unused function 'ew_i64_from_u64' [-Wunused-function] [D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.vcxproj]
+D:\GameCreation\GenesisEngine\src\GE_nbody.cpp(146,28): warning : unused variable 'one_q64_64' [-Wunused-variable] [D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.vcxproj]
+D:\GameCreation\GenesisEngine\src\text_encoder.cpp(12,20): warning : unused function 'is_ascii_space' [-Wunused-function] [D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.vcxproj]
+D:\GameCreation\GenesisEngine\src\GE_object_memory.cpp(264,20): warning : unused function '_lt_by_id' [-Wunused-function] [D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.vcxproj]
+D:\GameCreation\GenesisEngine\src\GE_object_ancilla.cpp(16,24): warning : unused function 'clamp_q15_u16' [-Wunused-function] [D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.vcxproj]
+D:\GameCreation\GenesisEngine\src\ew_gpu_compute.cpp(22,19): warning : unused variable 'kGeTopkSentinelScore' [-Wunused-const-variable] [D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.vcxproj]
+  EigenWareCore.vcxproj -> D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\Release\EigenWareCore.lib
+  Building Custom Rule D:/GameCreation/GenesisEngine/vulkan_app/CMakeLists.txt
+  genesis_app.vcxproj -> D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\GenesisEngineState\Binaries\Win64\Editor\Release\GenesisEngine.exe
+MSBuild version 17.14.40+3e7442088 for .NET Framework
+
+  anchorize_files.vcxproj -> D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\Release\anchorize_files.exe
+D:\GameCreation\GenesisEngine\src\GE_runtime.cpp(65,23): error : implicit instantiation of undefined template 'std::basic_ofstream<char>' [D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.vcxproj]
+D:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.38.33130\include\iosfwd(213,7): message : template is declared here [D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.vcxproj]
+D:\GameCreation\GenesisEngine\src\GE_runtime.cpp(70,23): error : implicit instantiation of undefined template 'std::basic_ifstream<char>' [D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.vcxproj]
+D:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.38.33130\include\iosfwd(211,7): message : template is declared here [D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.vcxproj]
+D:\GameCreation\GenesisEngine\src\GE_runtime.cpp(1823,14): warning : variable 'line_no' set but not used [-Wunused-but-set-variable] [D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.vcxproj]
+D:\GameCreation\GenesisEngine\src\GE_runtime.cpp(7481,21): warning : unused variable 'n16' [-Wunused-variable] [D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.vcxproj]
+D:\GameCreation\GenesisEngine\src\GE_runtime.cpp(9853,26): warning : unused variable 'kind_from_path' [-Wunused-variable] [D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\EigenWareCore.vcxproj]

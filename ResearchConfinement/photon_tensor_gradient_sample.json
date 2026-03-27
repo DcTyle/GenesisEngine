@@ -1,0 +1,17 @@
+// photon_tensor_gradient_sample.json
+[
+  {
+    "x": 0, "y": 0, "z": 0, "timestep": 0,
+    "phase_coherence": 1.0, "curvature": 0.0, "flux": 0.0, "inertia": 0.0,
+    "spin_x": 0.0, "spin_y": 0.0, "spin_z": 0.0,
+    "oam_x": 0.0, "oam_y": 0.0, "oam_z": 0.0,
+    "higgs_inertia": 0.0
+  },
+  {
+    "x": 0, "y": 0, "z": 0, "timestep": 1,
+    "phase_coherence": 0.98, "curvature": 0.01, "flux": 0.01, "inertia": 0.001,
+    "spin_x": 0.002, "spin_y": 0.001, "spin_z": 0.0,
+    "oam_x": 0.0, "oam_y": 0.0, "oam_z": 0.0,
+    "higgs_inertia": 0.0
+  }
+]

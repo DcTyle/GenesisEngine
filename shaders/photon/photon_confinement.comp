@@ -1,0 +1,33 @@
+#version 450
+// Minimal photon confinement compute shader for DMT simulation
+layout(local_size_x = 64) in;
+
+struct PhotonState {
+    float x, y, z;
+    float px, py, pz;
+    float energy;
+    float time;
+};
+
+layout(std430, binding = 0) buffer PhotonBuffer {
+    PhotonState photons[];
+};
+
+layout(push_constant) uniform SimParams {
+    float dt;
+    float field_strength;
+    int steps;
+} params;
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    // Simple update: move photon by momentum, apply field
+    for (int i = 0; i < params.steps; ++i) {
+        photons[idx].x += photons[idx].px * params.dt;
+        photons[idx].y += photons[idx].py * params.dt;
+        photons[idx].z += photons[idx].pz * params.dt;
+        // Example: apply field to px
+        photons[idx].px += params.field_strength * params.dt;
+        photons[idx].time += params.dt;
+    }
+}

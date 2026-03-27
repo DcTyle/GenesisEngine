@@ -1,0 +1,88 @@
+# ============================================================================
+# VirtualMiner / BIOS
+# File: diagnostic_report.py
+# Directory: /BIOS/
+# ASCII-ONLY SOURCE FILE
+# Note: This file avoids any non-ASCII characters. Jarvis ADA v4.7 Hybrid ready.
+# ============================================================================
+
+\"\"\"
+Purpose
+-------
+Produce ASCII-only diagnostic reports for the running BIOS/VHW system. The
+report consolidates telemetry, scheduler status, and allocator summaries
+into a structured text block suitable for logs or support bundles.
+
+Public API
+---------
+generate_report(env: dict, status: dict = None, plan_summary: dict = None) -> str
+  Returns a single multi-line ASCII string.
+\"\"\"
+
+from __future__ import annotations
+from typing import Dict, Any, Optional
+import time
+
+def _fmt_pct(x: float) -> str:
+    if x is None: return "  0.00%"
+    v = max(0.0, min(1.0, float(x))) * 100.0
+    return f"{v:6.2f}%"
+
+def _fmt_f(x: float, digs: int = 3) -> str:
+    try:
+        return f"{float(x):.{digs}f}"
+    except Exception:
+        return "0.000"
+
+def generate_report(env: Dict[str, Any], status: Optional[Dict[str, Any]] = None, plan_summary: Optional[Dict[str, Any]] = None) -> str:
+    reader = env.get("reader")
+    telemetry = {}
+    try:
+        telemetry = reader() or {}
+    except Exception:
+        telemetry = {}
+
+    status = status or {}
+    plan_summary = plan_summary or {}
+
+    lines = []
+    lines.append("VirtualMiner Diagnostic Report")
+    lines.append("================================")
+    lines.append(f"Generated: {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}")
+    lines.append("")
+    lines.append("[Telemetry]")
+    lines.append(f"  Time            : {telemetry.get('timestamp')}")
+    lines.append(f"  Global Util     : {_fmt_pct(telemetry.get('global_util', 0.0))}")
+    lines.append(f"  GPU Util        : {_fmt_pct(telemetry.get('gpu_util', 0.0))}")
+    lines.append(f"  GPU Memory Util : {_fmt_pct(telemetry.get('gpu_mem_util', 0.0))}")
+    lines.append(f"  Mem BW Util     : {_fmt_pct(telemetry.get('mem_bw_util', 0.0))}")
+    lines.append(f"  CPU Util        : {_fmt_pct(telemetry.get('cpu_util', 0.0))}")
+    hw = telemetry.get("hardware", {})
+    lines.append(f"  Hardware        : VRAM={hw.get('vram_mb','?')}MB, MemBW={_fmt_f(hw.get('mem_bw_gbps',0.0),1)}Gbps, CPU={_fmt_f(hw.get('cpu_ghz',0.0),2)}GHz")
+    lines.append(f"  Caps            : util_cap={_fmt_f(telemetry.get('util_cap', 0.75),2)}, headroom={_fmt_f(telemetry.get('group_headroom', 0.10),2)}")
+    lines.append("")
+
+    lines.append("[Scheduler]")
+    lines.append(f"  Started         : {status.get('started','')}")
+    lines.append(f"  Iterations      : {status.get('iterations',0)}")
+    lines.append(f"  Running         : {status.get('running',False)}")
+    lines.append("  Keys (plan)     : " + ", ".join(status.get("last_plan_keys", [])))
+    lines.append("  Keys (frame)    : " + ", ".join(status.get("last_frame_keys", [])))
+    lines.append("")
+
+    lines.append("[Allocator Summary]")
+    if plan_summary:
+        caps = plan_summary.get("capacity_caps", {})
+        nets = plan_summary.get("net_weights", {})
+        lines.append("  Capacities (20 percent cap applied):")
+        for k in sorted(caps.keys()):
+            lines.append(f"    - {k:6s} cap_abs={_fmt_f(caps.get(k,0.0),6)}")
+        lines.append("  Network weights:")
+        for k in sorted(nets.keys()):
+            lines.append(f"    - {k:6s} w={_fmt_f(nets.get(k,0.0),6)}")
+    else:
+        lines.append("  No plan summary available.")
+    lines.append("")
+    lines.append("[Notes]")
+    lines.append("  This report is ASCII-only and suitable for inclusion in VSD logs.")
+    return "\n".join(lines)

@@ -1,0 +1,20 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project>
+  <ProjectOutputs>
+    <ProjectOutput>
+      <FullPath>D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\x64\Release\ZERO_CHECK</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\x64\Release\EWVulkanComputeShaders</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\Release\anchorize_files.exe</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>D:\GameCreation\GenesisEngine\out\build\win64-vs2022-clang-vulkan\Release\ge_tts_speak.exe</FullPath>
+    </ProjectOutput>
+  </ProjectOutputs>
+  <ContentFiles />
+  <SatelliteDlls />
+  <NonRecipeFileRefs />
+</Project>

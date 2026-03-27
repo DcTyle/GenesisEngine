@@ -1,0 +1,24 @@
+from __future__ import annotations
+from collections import defaultdict
+from typing import Callable, Dict, Any, List
+
+EVENT = {
+    "TICK_START": "bios.tick.start",
+    "TICK_END": "bios.tick.end",
+    "WARN": "bios.warn",
+    "ERROR": "bios.error",
+}
+
+class EventBus:
+    def __init__(self):
+        self._subs: Dict[str, List[Callable[[str, Dict[str, Any]], None]]] = defaultdict(list)
+
+    def subscribe(self, event: str, handler: Callable[[str, Dict[str, Any]], None]) -> None:
+        self._subs[event].append(handler)
+
+    def publish(self, event: str, payload: Dict[str, Any] | None = None) -> None:
+        for h in self._subs.get(event, []):
+            try:
+                h(event, payload or {})
+            except Exception:
+                pass

@@ -1,0 +1,37 @@
+// photon_packet_trajectory_sample.json
+[
+  {
+    "packet_id": 1,
+    "timestep": 0,
+    "x": 0.0,
+    "y": 0.0,
+    "z": 0.0,
+    "theta": 0.0,
+    "amplitude": 1.0,
+    "freq_x": 0.5,
+    "freq_y": 0.5,
+    "freq_z": 0.5,
+    "phase_coupling": 0.0,
+    "temporal_inertia": 0.0,
+    "curvature": 0.0,
+    "coherence": 1.0,
+    "flux": 0.0
+  },
+  {
+    "packet_id": 1,
+    "timestep": 1,
+    "x": 0.1,
+    "y": 0.0,
+    "z": 0.0,
+    "theta": 0.05,
+    "amplitude": 0.98,
+    "freq_x": 0.51,
+    "freq_y": 0.49,
+    "freq_z": 0.5,
+    "phase_coupling": 0.01,
+    "temporal_inertia": 0.001,
+    "curvature": 0.002,
+    "coherence": 0.99,
+    "flux": 0.01
+  }
+]

@@ -1,0 +1,182 @@
+#version 460
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct PulseInput {
+    float frequencyNorm;
+    float amplitudeNorm;
+    float voltageNorm;
+    float currentNorm;
+    float phaseRad;
+    float pad0;
+    float pad1;
+    float pad2;
+};
+
+struct FeedbackInput {
+    float sentSignal;
+    float measuredSignal;
+    float integratedFeedback;
+    float derivativeSignal;
+};
+
+struct EnvironmentInput {
+    float latticeClosure;
+    float phaseClosure;
+    float recurrenceAlignment;
+    float conservationAlignment;
+    float thermalNoise;
+    float fieldNoise;
+    float pad0;
+    float pad1;
+};
+
+struct CalibrationOutput {
+    float environmentCoupling;
+    float trackingAffinity;
+    float accumulationAffinity;
+    float smoothingAffinity;
+
+    float calibratedFrequency;
+    float calibratedAmplitude;
+    float calibratedVoltage;
+    float calibratedCurrent;
+
+    float persistence;
+    float leakage;
+    float actuationGain;
+    float pulseSignal;
+};
+
+layout(std430, set = 0, binding = 0) readonly buffer PulseInputBuffer {
+    PulseInput pulseIn[];
+};
+
+layout(std430, set = 0, binding = 1) readonly buffer FeedbackInputBuffer {
+    FeedbackInput feedbackIn[];
+};
+
+layout(std430, set = 0, binding = 2) readonly buffer EnvironmentInputBuffer {
+    EnvironmentInput envIn[];
+};
+
+layout(std430, set = 0, binding = 3) writeonly buffer CalibrationOutputBuffer {
+    CalibrationOutput calOut[];
+};
+
+layout(push_constant) uniform DispatchConfig {
+    uint taskMode;
+    uint elementCount;
+    float dt;
+    float phaseScale;
+} pc;
+
+float clamp01(float x) {
+    return clamp(x, 0.0, 1.0);
+}
+
+float gauss(float x, float mu, float sigma) {
+    float d = (x - mu) / sigma;
+    return exp(-0.5 * d * d);
+}
+
+vec4 basinCenter(uint mode) {
+    if (mode == 0u) {
+        return vec4(0.2450, 0.18, 0.36, 0.36);
+    }
+    if (mode == 1u) {
+        return vec4(0.1775, 0.18, 0.36, 0.44);
+    }
+    return vec4(0.1750, 0.18, 0.36, 0.36);
+}
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.elementCount) {
+        return;
+    }
+
+    PulseInput p = pulseIn[i];
+    FeedbackInput f = feedbackIn[i];
+    EnvironmentInput e = envIn[i];
+
+    float fbErr = f.measuredSignal - f.sentSignal;
+    float fbMag = abs(fbErr);
+
+    float environmentCoupling = clamp01(
+        e.latticeClosure *
+        e.phaseClosure *
+        e.recurrenceAlignment *
+        e.conservationAlignment *
+        (1.0 - 0.5 * e.thermalNoise) *
+        (1.0 - 0.5 * e.fieldNoise)
+    );
+
+    float trackingAffinity =
+        gauss(p.frequencyNorm, 0.2450, 0.010) *
+        gauss(p.amplitudeNorm, 0.18, 0.020) *
+        gauss(p.voltageNorm,   0.36, 0.030) *
+        gauss(p.currentNorm,   0.36, 0.030);
+
+    float accumulationAffinity =
+        gauss(p.frequencyNorm, 0.1775, 0.010) *
+        gauss(p.amplitudeNorm, 0.18, 0.020) *
+        gauss(p.voltageNorm,   0.36, 0.030) *
+        gauss(p.currentNorm,   0.44, 0.030);
+
+    float smoothingAffinity =
+        gauss(p.frequencyNorm, 0.1750, 0.010) *
+        gauss(p.amplitudeNorm, 0.18, 0.020) *
+        gauss(p.voltageNorm,   0.36, 0.030) *
+        gauss(p.currentNorm,   0.36, 0.030);
+
+    float taskAffinity = (pc.taskMode == 0u) ? trackingAffinity : ((pc.taskMode == 1u) ? accumulationAffinity : smoothingAffinity);
+
+    vec4 center = basinCenter(pc.taskMode);
+    float pull = 0.15 * environmentCoupling;
+
+    float calibratedFrequency = clamp01(p.frequencyNorm + pull * (center.x - p.frequencyNorm));
+    float calibratedAmplitude = clamp01(p.amplitudeNorm + pull * (center.y - p.amplitudeNorm));
+    float calibratedVoltage   = clamp01(p.voltageNorm   + pull * (center.z - p.voltageNorm));
+    float calibratedCurrent   = clamp01(p.currentNorm   + pull * (center.w - p.currentNorm));
+
+    float persistence = clamp01(
+        0.45 +
+        0.20 * environmentCoupling +
+        0.15 * taskAffinity +
+        0.10 * e.phaseClosure +
+        0.10 * e.latticeClosure -
+        0.08 * fbMag
+    );
+
+    float leakage = clamp01(
+        0.06 +
+        0.18 * (1.0 - e.phaseClosure) +
+        0.16 * (1.0 - e.latticeClosure) +
+        0.10 * e.thermalNoise +
+        0.10 * e.fieldNoise +
+        0.08 * fbMag
+    );
+
+    float drive = calibratedAmplitude * calibratedVoltage * calibratedCurrent;
+    float actuationGain = clamp01(drive * persistence * environmentCoupling * taskAffinity * (1.0 - leakage));
+    float pulseSignal = actuationGain * sin(6.28318530718 * calibratedFrequency * pc.phaseScale + p.phaseRad);
+
+    CalibrationOutput outv;
+    outv.environmentCoupling = environmentCoupling;
+    outv.trackingAffinity = trackingAffinity;
+    outv.accumulationAffinity = accumulationAffinity;
+    outv.smoothingAffinity = smoothingAffinity;
+
+    outv.calibratedFrequency = calibratedFrequency;
+    outv.calibratedAmplitude = calibratedAmplitude;
+    outv.calibratedVoltage = calibratedVoltage;
+    outv.calibratedCurrent = calibratedCurrent;
+
+    outv.persistence = persistence;
+    outv.leakage = leakage;
+    outv.actuationGain = actuationGain;
+    outv.pulseSignal = pulseSignal;
+
+    calOut[i] = outv;
+}

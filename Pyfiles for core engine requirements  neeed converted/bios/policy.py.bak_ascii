@@ -1,0 +1,65 @@
+# ============================================================================
+# VirtualMiner / BIOS
+# File: policy.py
+# Directory: /BIOS/
+# ASCII-ONLY SOURCE FILE
+# Note: This file avoids any non-ASCII characters. Jarvis ADA v4.7 Hybrid ready.
+# ============================================================================
+""" Purpose
+ -------
+ Policy helpers enforcing global duty caps, network share density rules,
+ and confidence thresholds. This module centralizes BIOS policy so that
+ allocators and schedulers can consult a single source of truth.
+
+ Public API
+ ---------
+DutyCap(cap=0.75, headroom=0.10)
+  .target() -> float
+  .over(util) -> bool
+
+NetworkCap(per_network_ratio=0.20)
+  .cap_abs(network_capacity: dict, key: str) -> float
+
+Confidence(threshold=0.80)
+  .allow_trade(direction: str, conf: float) -> bool
+"""
+
+from __future__ import annotations
+from typing import Dict, Any
+
+def _clamp(v: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, v))
+
+class DutyCap:
+    def __init__(self, cap: float = 0.75, headroom: float = 0.10):
+        self.cap = _clamp(float(cap), 0.10, 0.95)
+        self.headroom = _clamp(float(headroom), 0.0, 0.50)
+
+    def target(self) -> float:
+        return max(0.0, self.cap - self.headroom)
+
+    def over(self, util: float) -> bool:
+        return float(util) > self.target()
+
+class NetworkCap:
+    def __init__(self, per_network_ratio: float = 0.20):
+        self.r = _clamp(float(per_network_ratio), 0.0, 1.0)
+
+    def cap_abs(self, network_capacity: Dict[str, float], key: str) -> float:
+        try:
+            cap = float(network_capacity.get(key, 0.0))
+        except Exception:
+            cap = 0.0
+        return max(0.0, self.r * cap)
+
+class Confidence:
+    def __init__(self, threshold: float = 0.80):
+        self.t = _clamp(float(threshold), 0.0, 1.0)
+
+    def allow_trade(self, direction: str, conf: float) -> bool:
+        if direction not in ("up", "down"):
+            return False
+        # Only apply high-confidence rule to "up" trends (per user directive).
+        if direction == "down":
+            return False
+        return float(conf) >= self.t

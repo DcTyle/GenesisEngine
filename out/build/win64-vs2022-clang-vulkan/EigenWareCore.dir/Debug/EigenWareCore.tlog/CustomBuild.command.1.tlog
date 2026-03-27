@@ -1,0 +1,20 @@
+^D:\GAMECREATION\GENESISENGINE\OUT\BUILD\WIN64-VS2022-CLANG-VULKAN\CMAKEFILES\CFC47BC8163D49F746C57DF1356878B0\ANCHOR_PACK_BLOBS.CPP.RULE
+setlocal
+Debug\anchorize_files.exe --root D:/GameCreation/GenesisEngine --list D:/GameCreation/GenesisEngine/scripts/anchor_pack_list.txt --out D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/generated/anchor_pack_blobs.cpp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^D:\GAMECREATION\GENESISENGINE\CMAKELISTS.TXT
+setlocal
+"D:\Program Files\CMake\bin\cmake.exe" -SD:/GameCreation/GenesisEngine -BD:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan --check-stamp-file D:/GameCreation/GenesisEngine/out/build/win64-vs2022-clang-vulkan/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

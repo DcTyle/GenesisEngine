@@ -1,0 +1,5 @@
+// photon_shader_texture_sample.json
+[
+  {"x": 0, "y": 0, "z": 0, "rgb": [0.8, 0.2, 0.5]},
+  {"x": 0, "y": 0, "z": 1, "rgb": [0.7, 0.3, 0.6]}
+]

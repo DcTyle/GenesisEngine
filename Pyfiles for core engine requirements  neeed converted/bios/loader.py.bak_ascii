@@ -1,0 +1,70 @@
+# ============================================================================
+# Quantum Application / bios
+# File: loader.py
+# Version: v4.8.3 Hybrid (AI-Processor verified imports)
+# ============================================================================
+"""
+Purpose
+-------
+Handles BIOS runtime loading and shutdown operations for VirtualMiner.
+Responsible for persisting BIOS state to VSD and invoking failsafe logic
+when system restart is requested.
+"""
+
+from __future__ import annotations
+from typing import Dict, Any
+import time
+import threading
+
+# ---------------------------------------------------------------------------
+# Flattened imports (v4.8.3 standard)
+# ---------------------------------------------------------------------------
+from core.utils import get, store, delete
+from VHW.failsafe import FailsafeGovernor
+from miner.miner_engine import MinerEngine
+
+# ---------------------------------------------------------------------------
+# BIOS loader runtime
+# ---------------------------------------------------------------------------
+class BIOSLoader:
+    def __init__(self, vsd: Any):
+        self.vsd = vsd
+        self.failsafe = FailsafeGovernor(allocator=None, vsd=vsd)
+        self._lock = threading.RLock()
+        self._loaded: bool = False
+
+    def load(self) -> bool:
+        """Load system state from VSD and initialize components."""
+        with self._lock:
+            state = get(self.vsd, "bios/state", {})
+            if not state:
+                store(self.vsd, "bios/state", {"boot_ts": time.time()})
+                self._loaded = True
+                return True
+
+            # simulate re-initialization
+            state["reload_ts"] = time.time()
+            store(self.vsd, "bios/state", state)
+            self._loaded = True
+            return True
+
+    def shutdown(self) -> bool:
+        """Persist shutdown metadata to VSD and invoke failsafe."""
+        with self._lock:
+            try:
+                meta = {"shutdown_ts": time.time(), "reason": "normal"}
+                store(self.vsd, "bios/shutdown", meta)
+                self.failsafe.invoke_shutdown_protocol()
+                delete(self.vsd, "bios/state")
+                self._loaded = False
+                return True
+            except Exception:
+                return False
+
+    def status(self) -> Dict[str, Any]:
+        return {"loaded": self._loaded}
+
+
+if __name__ == "__main__":
+    if globals().get('runtime_debugger', False):
+        print("[BIOSLoader] diagnostic run")

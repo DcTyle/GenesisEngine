@@ -1,0 +1,89 @@
+# ============================================================================
+# VirtualMiner / BIOS
+# File: runtime.py
+# Directory: /BIOS/
+# ASCII-ONLY SOURCE FILE
+# Note: This file avoids any non-ASCII characters. Jarvis ADA v4.7 Hybrid ready.
+# ============================================================================
+
+"""
+Purpose
+-------
+BIOS runtime helpers: start/stop guards, health snapshots, and a simple
+service registry for composing the VirtualMiner runtime in test rigs.
+
+Public API
+---------
+ServiceRegistry()
+  .register(name, start_fn, stop_fn) -> None
+  .start_all() -> None
+  .stop_all() -> None
+  .status() -> dict
+
+health_snapshot(reader) -> dict
+"""
+
+from __future__ import annotations
+from typing import Dict, Any, Optional
+import time
+import threading
+
+# ---------------------------------------------------------------------------
+# Layered imports
+# ---------------------------------------------------------------------------
+from miner.miner_engine import MinerEngine
+from miner.failsafe import FailsafeGovernor
+from VHW.compute_manager import ComputeManager
+
+
+class ServiceRegistry:
+    def __init__(self):
+        self._items = []
+        self._lock = threading.RLock()
+        self._running = False
+
+    def register(self, name: str, start_fn: Callable[[], None], stop_fn: Callable[[], None]):
+        with self._lock:
+            self._items.append((str(name), start_fn, stop_fn))
+
+    def start_all(self):
+        with self._lock:
+            if self._running: 
+                return
+            for name, start_fn, _ in self._items:
+                try:
+                    start_fn()
+                except Exception:
+                    pass
+            self._running = True
+
+    def stop_all(self, timeout: float = 2.0):
+        with self._lock:
+            if not self._running:
+                return
+            for name, _, stop_fn in reversed(self._items):
+                try:
+                    stop_fn()
+                except Exception:
+                    pass
+            self._running = False
+
+    def status(self) -> Dict[str, Any]:
+        with self._lock:
+            return {"services": [name for name, _, _ in self._items], "running": self._running}
+
+def health_snapshot(reader: Callable[[], Dict[str, Any]]) -> Dict[str, Any]:
+    try:
+        d = reader() or {}
+    except Exception:
+        d = {}
+    return {
+        "timestamp": d.get("timestamp"),
+        "global_util": float(d.get("global_util", 0.0)),
+        "gpu_util": float(d.get("gpu_util", 0.0)),
+        "gpu_mem_util": float(d.get("gpu_mem_util", 0.0)),
+        "mem_bw_util": float(d.get("mem_bw_util", 0.0)),
+        "cpu_util": float(d.get("cpu_util", 0.0)),
+        "util_cap": float(d.get("util_cap", 0.75)),
+        "headroom": float(d.get("group_headroom", 0.10))
+    }

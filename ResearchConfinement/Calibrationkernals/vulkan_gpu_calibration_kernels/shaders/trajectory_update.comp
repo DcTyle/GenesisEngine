@@ -1,0 +1,68 @@
+#version 460
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct CalibrationOutput {
+    float environmentCoupling;
+    float trackingAffinity;
+    float accumulationAffinity;
+    float smoothingAffinity;
+
+    float calibratedFrequency;
+    float calibratedAmplitude;
+    float calibratedVoltage;
+    float calibratedCurrent;
+
+    float persistence;
+    float leakage;
+    float actuationGain;
+    float pulseSignal;
+};
+
+struct TrajectoryState {
+    vec4 position;
+    vec4 velocity;
+};
+
+layout(std430, set = 0, binding = 3) readonly buffer CalibrationOutputBuffer {
+    CalibrationOutput calIn[];
+};
+
+layout(std430, set = 0, binding = 4) buffer TrajectoryStateBuffer {
+    TrajectoryState states[];
+};
+
+layout(push_constant) uniform DispatchConfig {
+    uint taskMode;
+    uint elementCount;
+    float dt;
+    float phaseScale;
+} pc;
+
+vec3 actuationDirection(float phaseRad) {
+    return vec3(cos(phaseRad), sin(phaseRad), cos(phaseRad + 0.6283185307));
+}
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.elementCount) {
+        return;
+    }
+
+    CalibrationOutput c = calIn[i];
+    TrajectoryState s = states[i];
+
+    // Phase estimate from current position.w if desired; fallback to position length.
+    float phaseRad = s.position.w;
+    vec3 dir = actuationDirection(phaseRad);
+    vec3 accel = dir * (0.001 * c.pulseSignal);
+
+    s.velocity.xyz = s.velocity.xyz * c.persistence + accel;
+    s.velocity.xyz = s.velocity.xyz * (1.0 - c.leakage);
+    s.position.xyz += s.velocity.xyz * pc.dt;
+
+    // Store a simple rolling phase in w for the next step.
+    s.position.w = phaseRad + 6.28318530718 * c.calibratedFrequency * pc.phaseScale * pc.dt;
+
+    states[i] = s;
+}

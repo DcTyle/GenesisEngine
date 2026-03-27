@@ -1,0 +1,6 @@
+// photon_packet_path_classification_sample.csv
+packet_id,classification,group_id,phase_lock_score,curvature_depth,coherence_score
+1,shared,0,0.99,0.02,0.98
+2,individual,1,0.10,0.01,0.95
+3,shared,0,0.97,0.03,0.97
+...

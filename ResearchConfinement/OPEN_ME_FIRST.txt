@@ -1,0 +1,22 @@
+Research continuation entrypoints:
+
+1. docs_v4/README_CONTINUATION_V4.md
+	Primary handoff overview for the accessible V4 continuation package.
+
+2. docs_v4/LAB_NOTEBOOK_AND_LOG_SEQUENCE_V4.md
+	Sequential research notebook linking each run note to its durable CSV and JSON artifacts.
+
+3. docs_v4/ENGINE_BUILD_RUNTIME_LAB_NOTEBOOK.md
+	Append-only engine build, install, package, and runtime/editor notebook.
+
+4. docs_v4/CONTINUATION_PROMPT_V4.txt
+	Continuation framing prompt for the next research pass.
+
+5. ../docs/CONTEXT_CLASSIFICATION_INDEX.md
+	Repo-wide routing index for research, specs, physics references, logs, and notebooks.
+
+Suggested reading order:
+- Start with the V4 README.
+- Read the lab notebook and experiment archive together.
+- Use the engine notebook for operational build/runtime chronology.
+- Use the context classification index when routing into the broader repo.

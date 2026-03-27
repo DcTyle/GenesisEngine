@@ -1,0 +1,600 @@
+﻿# Path: core/utils.py
+# Description:
+#   Live-mode utility layer for the VirtualMiner stack.
+#   - VSD I/O (get/store/delete) with ALWAYS-PERSIST policy in live mode.
+#   - Live hardware metrics bridge with adaptive providers (psutil/GPUtil/env/VSD).
+#   - Atomic VSD locks for parallel lanes (CAS via owner tokens + TTL).
+#   - Tokenized full-state vector codec (text + decipher tokens) for byte-true rehydration.
+#   - Telemetry helpers and integrity hashing.
+#   - NO simulation, debug, or dry-run branches. All operations assume system/mode == "live".
+#
+#   External deps:
+#     - Optional: psutil, GPUtil (graceful fallback if not present).
+#
+#   VSD keys touched (examples):
+#     system/mode                       : "live"
+#     vsd/kv/<key>                      : stored values (via vhw_vsd_manager)
+#     locks/<name>                      : {owner, expires_s}
+#     telemetry/*                       : snapshots and console frames
+#     hw/*                              : live metrics mirror
+#
+#   Exports (selected):
+#     confirm_live_mode() -> None
+#     get(key, default=None) -> Any
+#     store(key, value, persist=True) -> None
+#     delete(key) -> None
+#     exists(key) -> bool
+#     now_s() -> float
+#     sha256_text(x) -> str
+#     vsd_lock_acquire(name, ttl_s=5.0, owner=None) -> bool
+#     vsd_lock_release(name, owner) -> bool
+#     hw_snapshot() -> dict
+#     serialize_vector_with_tokens(vec: List[complex]) -> dict
+#     deserialize_vector_with_tokens(blob: dict|str) -> List[complex]
+#     append_telemetry(path: str, payload: dict) -> None
+#
+#   Notes:
+#     - All data written through store() is persisted; no ephemeral buffers in live mode.
+#     - Token codec: maps complex -> ascii via float?printable ascii with token dictionary
+#       for repeated substrings; ensures byte-for-byte deterministic roundtrip.
+
+# ================================================================
+# Path: core/utils.py
+# Description:
+#   Live-mode utility layer for the VirtualMiner stack.
+#   - VSD I/O (get/store/delete) with ALWAYS-PERSIST policy in live mode.
+#   - Live hardware metrics bridge with adaptive providers (psutil/GPUtil/env/VSD).
+#   - Atomic VSD locks for parallel lanes (CAS via owner tokens + TTL).
+#   - Tokenized full-state vector codec (text + decipher tokens) for byte-true rehydration.
+#   - Telemetry helpers and integrity hashing.
+#   - HTTP / JSON + numeric helpers for live market and pool data.
+#   - NO simulation, debug, or dry-run branches. All operations assume system/mode == "live".
+#
+#   External deps:
+#     - Optional: psutil, GPUtil (graceful fallback if not present).
+#     - Required: requests (for fetch_json)
+# ================================================================
+
+from __future__ import annotations
+from typing import Any, Dict, List, Optional, Tuple
+import time, os, json, math, hashlib, threading, random, requests
+# ---------------------------------------------------------------------------
+# VSD Manager Import (fixed to avoid circular dependency)
+# ---------------------------------------------------------------------------
+try:
+    from VHW.vsd_manager import VSDManager
+except Exception:
+    VSDManager = None  # type: ignore
+
+# ---------------------------------------------------------------------------
+# Hashrate Unit Conversion Helpers
+# ---------------------------------------------------------------------------
+
+# multipliers in hashes per second
+_HASH_MULTIPLIERS = {
+    "H/S": 1.0,
+    "KH/S": 1e3,
+    "MH/S": 1e6,
+    "GH/S": 1e9,
+    "TH/S": 1e12,
+    "PH/S": 1e15,
+}
+
+def to_hs(value: float, unit: str) -> float:
+    """Convert any hash rate unit to base H/s."""
+    key = str(unit).upper().replace("/S", "H/S")
+    mult = _HASH_MULTIPLIERS.get(key, 1.0)
+    return float(value) * mult
+
+
+def unit_to_multiplier(unit: str) -> float:
+    """Return numeric multiplier for the given unit string."""
+    key = str(unit).upper().replace("/S", "H/S")
+    return _HASH_MULTIPLIERS.get(key, 1.0)
+
+
+def hs_to_best_unit(hs_value: float) -> tuple[str, float]:
+    """Convert a raw H/s value to the largest readable unit not exceeding it."""
+    for u, m in reversed(_HASH_MULTIPLIERS.items()):
+        if hs_value >= m:
+            return (u, hs_value / m)
+    return ("H/S", hs_value)
+
+def to_hs(value: float, unit: str) -> float:
+    """Convert any hash rate unit to base H/s."""
+    mult = _HASH_MULTIPLIERS.get(str(unit).upper().replace("/S", "H/S"), 1.0)
+    return float(value) * mult
+
+def unit_to_multiplier(unit: str) -> float:
+    """Return numeric multiplier for the given unit string."""
+    return _HASH_MULTIPLIERS.get(str(unit).upper().replace("/S", "H/S"), 1.0)
+
+def hs_to_best_unit(hs_value: float) -> tuple[str, float]:
+    """
+    Convert a raw H/s value to the largest readable unit ≤ the value.
+    Example: 9.4e12 → ('TH/s', 9.4)
+    """
+    for u, m in reversed(_HASH_MULTIPLIERS.items()):
+        if hs_value >= m:
+            return (u, hs_value / m)
+    return ("H/s", hs_value)
+
+
+def to_hs(value: float, unit: str) -> float:
+    """Convert any hash rate unit to base H/s."""
+    mult = _HASH_MULTIPLIERS.get(str(unit).upper().replace("/S", "H/S"), 1.0)
+    return float(value) * mult
+
+def unit_to_multiplier(unit: str) -> float:
+    """Return numeric multiplier for the given unit string."""
+    return _HASH_MULTIPLIERS.get(str(unit).upper().replace("/S", "H/S"), 1.0)
+
+def hs_to_best_unit(hs_value: float) -> tuple[str, float]:
+    """
+    Convert a raw H/s value to the largest readable unit ≤ the value.
+    Example: 9.4e12 → ('TH/s', 9.4)
+    """
+    for u, m in reversed(_HASH_MULTIPLIERS.items()):
+        if hs_value >= m:
+            return (u, hs_value / m)
+    return ("H/s", hs_value)
+
+def confirm_live_mode() -> None:
+    """
+    Enforce live mode globally. This raises if system/mode is not 'live'.
+    """
+    mode = vhw_vsd_manager.get("system/mode", "live")
+    if mode != "live":
+        # Hard-switch to live; this code never runs in sim.
+        vhw_vsd_manager.set("system/mode", "live")
+        vhw_vsd_manager.set("system/simulate", False)
+        vhw_vsd_manager.set("system/sandbox", False)
+
+# ---------- Integrity helpers ----------
+
+def sha256_text(x: Any) -> str:
+    """Return SHA-256 hex digest of text representation of x."""
+    return hashlib.sha256(str(x).encode("utf-8")).hexdigest()
+
+def clamp(value: float, lo: float, hi: float) -> float:
+    """Clamp numeric value into [lo, hi]."""
+    return max(lo, min(hi, value))
+
+# ---------- VSD I/O (always persistent in live mode) ----------
+
+def get(key: str, default: Any = None) -> Any:
+    confirm_live_mode()
+    return vhw_vsd_manager.get(str(key), default)
+
+def store(key: str, value: Any, persist: bool = True) -> None:
+    """
+    Always persist in live mode (persist flag kept for api compatibility).
+    """
+    confirm_live_mode()
+    vhw_vsd_manager.set(str(key), value)
+
+def delete(key: str) -> None:
+    confirm_live_mode()
+    vhw_vsd_manager.delete(str(key))
+
+def exists(key: str) -> bool:
+    return get(key, None) is not None
+
+# ---------- Atomic VSD locks (CAS over VSD keys) ----------
+
+_lock_local = threading.RLock()
+
+def _lock_key(name: str) -> str:
+    return f"locks/{str(name)}"
+
+def vsd_lock_acquire(name: str, ttl_s: float = 5.0, owner: Optional[str] = None) -> bool:
+    """
+    Acquire an atomic lock using VSD. Returns True on success.
+    Lock record: {owner, expires_s}. Expired locks are stealable.
+    """
+    confirm_live_mode()
+    owner = owner or f"pid-{os.getpid()}-{random.randint(100000,999999)}"
+    key = _lock_key(name)
+    with _lock_local:
+        rec = get(key, None)
+        t = now_s()
+        if isinstance(rec, dict):
+            exp = float(rec.get("expires_s", 0.0))
+            if exp > t and str(rec.get("owner", "")) != owner:
+                return False  # held by someone else
+        store(key, {"owner": owner, "expires_s": t + max(0.1, float(ttl_s))})
+        return True
+
+def vsd_lock_release(name: str, owner: Optional[str] = None) -> bool:
+    """
+    Release the lock only if owner matches (or lock is expired).
+    """
+    confirm_live_mode()
+    key = _lock_key(name)
+    with _lock_local:
+        rec = get(key, None)
+        if not isinstance(rec, dict):
+            return True
+        if owner is None or str(rec.get("owner", "")) == str(owner) or float(rec.get("expires_s", 0.0)) <= now_s():
+            delete(key)
+            return True
+        return False
+
+# ---------- Hardware metrics (live adapters with graceful fallback) ----------
+
+def _try_psutil() -> Dict[str, float]:
+    try:
+        import psutil  # optional
+        cpu = float(psutil.cpu_percent(interval=None)) / 100.0
+        vm = psutil.virtual_memory()
+        ram_used = float(vm.used) / (1024**3)
+        ram_total = float(vm.total) / (1024**3)
+        return {"cpu_util": cpu, "ram_used_gb": ram_used, "ram_total_gb": ram_total}
+    except Exception:
+        return {}
+
+def _try_gputil() -> Dict[str, float]:
+    try:
+        import GPUtil  # optional
+        gpus = GPUtil.getGPUs()
+        if not gpus:
+            return {}
+        g = gpus[0]
+        util = float(g.load)
+        vram_used = float(g.memoryUsed)  # MB
+        vram_total = float(g.memoryTotal)  # MB
+        return {"gpu_util": util, "vram_used_gb": vram_used / 1024.0, "vram_total_gb": vram_total / 1024.0}
+    except Exception:
+        return {}
+
+def hw_snapshot() -> Dict[str, float]:
+    """
+    Live hardware snapshot. Priority:
+      1) Native providers (psutil/GPUtil)
+      2) Vendor/driver mirrors in VSD (hw/* keys)
+      3) Safe zeros
+    Also emits derived envelopes used by VHW (compute_tops, mem_bandwidth_gbps).
+    """
+    confirm_live_mode()
+    out: Dict[str, float] = {}
+    out.update(_try_psutil())
+    out.update(_try_gputil())
+
+    mirrors = get("hw/mirrors", {})
+    if isinstance(mirrors, dict):
+        for k, v in mirrors.items():
+            if k not in out and isinstance(v, (int, float)):
+                out[k] = float(v)
+
+    vram_total = float(out.get("vram_total_gb", get("hw/vram_total_gb", 0.0)))
+    mem_bw = float(get("hw/mem_bandwidth_gbps", 0.0))
+    compute = float(get("hw/compute_throughput_tops", 0.0))
+
+    out["mem_bandwidth_gbps"] = mem_bw
+    out["compute_throughput_tops"] = compute
+    store("hw/snapshot/last", out)
+    return out
+
+# ---------- Telemetry ----------
+
+def append_telemetry(path: str, payload: Dict[str, Any]) -> None:
+    """
+    Append a telemetry record to a VSD list at telemetry/<path>.
+    """
+    confirm_live_mode()
+    key = f"telemetry/{str(path)}"
+    arr = get(key, [])
+    if not isinstance(arr, list):
+        arr = []
+    arr.append({"t_s": now_s(), **(payload if isinstance(payload, dict) else {"value": str(payload)})})
+    store(key, arr)
+
+# ---------- Tokenized full-state vector codec ----------
+
+def _codec_params() -> Dict[str, Any]:
+    cfg = get("codec/config", None)
+    if isinstance(cfg, dict):
+        return cfg
+    cfg = {
+        "scale": 47.0,
+        "offset": 32.0,
+        "float_range": [-1.0, 1.0],
+        "dict_seed": "0xJARVIS-SIM-V200K",
+        "token_table": {}
+    }
+    store("codec/config", cfg)
+    return cfg
+
+def _float_to_char(v: float, scale: float, offset: float) -> str:
+    x = int((float(v) + 1.0) * float(scale)) + int(offset)
+    if x < 32: x = 32
+    if x > 126: x = 126
+    return chr(x)
+
+def _char_to_float(c: str, scale: float, offset: float) -> float:
+    x = ord(c)
+    x = max(32, min(126, x))
+    return (float(x - int(offset)) / float(scale)) - 1.0
+
+def _pack_complex(z: complex, scale: float, offset: float) -> str:
+    return _float_to_char(z.real, scale, offset) + _float_to_char(z.imag, scale, offset)
+
+def _unpack_complex(chars: str, i: int, scale: float, offset: float) -> Tuple[complex, int]:
+    a = _char_to_float(chars[i], scale, offset)
+    b = _char_to_float(chars[i + 1], scale, offset)
+    return complex(a, b), i + 2
+
+def _tokenize(text: str) -> Dict[str, Any]:
+    if not text:
+        return {"text": "", "dict": {}}
+    step = 4
+    counts: Dict[str, int] = {}
+    for i in range(0, len(text) - step + 1, step):
+        s = text[i:i + step]
+        counts[s] = counts.get(s, 0) + 1
+    keep = {k: i for i, (k, _) in enumerate(sorted(counts.items(), key=lambda kv: -kv[1])[:64])}
+    out = []
+    i = 0
+    while i < len(text):
+        chunk = text[i:i + step]
+        if chunk in keep:
+            out.append(f"@{keep[chunk]:02d}")
+            i += step
+        else:
+            out.append(text[i])
+            i += 1
+    return {"text": "".join(out), "dict": {f"{i:02d}": k for k, i in keep.items()}}
+
+def _detokenize(text: str, dct: Dict[str, str]) -> str:
+    if not text:
+        return ""
+    out = []
+    i = 0
+    while i < len(text):
+        if i + 3 <= len(text) and text[i] == "@" and text[i+1:i+3].isdigit():
+            key = text[i+1:i+3]
+            rep = dct.get(key, "")
+            if rep:
+                out.append(rep)
+            i += 3
+        else:
+            out.append(text[i])
+            i += 1
+    return "".join(out)
+
+def serialize_vector_with_tokens(vec: List[complex]) -> Dict[str, Any]:
+    cfg = _codec_params()
+    scale = float(cfg["scale"])
+    offset = float(cfg["offset"])
+    raw = []
+    for z in vec:
+        raw.append(_pack_complex(z, scale, offset))
+    raw_text = "".join(raw)
+    tok = _tokenize(raw_text)
+    payload = {"text": tok["text"], "dict": tok["dict"], "hash": sha256_text(tok["text"])}
+    return payload
+
+def deserialize_vector_with_tokens(blob: Any) -> List[complex]:
+    cfg = _codec_params()
+    scale = float(cfg["scale"])
+    offset = float(cfg["offset"])
+
+    if isinstance(blob, dict):
+        text = str(blob.get("text", ""))
+        dct = blob.get("dict", {})
+        if isinstance(dct, dict):
+            text = _detokenize(text, {k: str(v) for k, v in dct.items()})
+    else:
+        text = str(blob)
+
+    out: List[complex] = []
+    i = 0
+    while i + 1 < len(text):
+        z, i = _unpack_complex(text, i, scale, offset)
+        out.append(z)
+    return out
+
+# ---------- HTTP / JSON utilities for market_data and pool_stats ----------
+
+def fetch_json(url: str, timeout: float = 10.0) -> dict:
+    """
+    Lightweight HTTP GET returning parsed JSON or {} on failure.
+    Used by miner/market_data.py and miner/pool_stats.py.
+    """
+    try:
+        r = requests.get(url, timeout=timeout)
+        if r.status_code != 200:
+            return {}
+        return r.json()
+    except Exception:
+        return {}
+
+# =================================================================
+# Section 7 — Hashrate Recognition & Conversion
+# Version: v4.8.3
+# -----------------------------------------------------------------
+#  - Universal H/s parsing and conversion used across BIOS, Miner, VHW
+# =================================================================
+from typing import Dict, Any, Union
+import re
+
+# Canonical unit map (ordered largest -> smallest)
+_HASH_UNITS = [
+    ("YH/s", 1e24), ("ZH/s", 1e21), ("EH/s", 1e18),
+    ("PH/s", 1e15), ("TH/s", 1e12), ("GH/s", 1e9),
+    ("MH/s", 1e6), ("kH/s", 1e3), ("H/s", 1.0)
+]
+_HASHRATE_UNITS = {u.upper(): s for u, s in _HASH_UNITS}
+
+# In-memory per-network display selector
+_display_unit_selector: Dict[str, str] = {}
+
+def recognize_hashrate(value: Union[str, float, int]) -> Dict[str, Any]:
+    """
+    Parse any hash-rate notation into a structured object:
+        { 'value': float, 'unit': str, 'scale': float, 'canonical': str }
+    Accepts forms like:
+        '4.29 TH/s', '4.29T', '4.29E12', 4290000000000
+    """
+    try:
+        if isinstance(value, (int, float)):
+            v = float(value)
+            return {"value": v, "unit": "H/s", "scale": 1.0, "canonical": f"{v} H/s"}
+
+        s = str(value).strip().upper().replace("x10^", "E").replace(" ", "")
+        if re.fullmatch(r"[0-9.+\\-E]+", s):
+            v = float(s)
+            return {"value": v, "unit": "H/s", "scale": 1.0, "canonical": f"{v} H/s"}
+
+        num = re.findall(r"[0-9.+\\-E]+", s)
+        unit = re.sub(r"[0-9.+\\-E]", "", s)
+        num = num[0] if num else "0"
+
+        if "H" not in unit:
+            unit = unit + "H/S" if unit else "H/S"
+        if not unit.endswith("/S"):
+            unit = unit.replace("HS", "H/S")
+        if unit not in _HASHRATE_UNITS:
+            unit = "H/S"
+
+        v = float(num)
+        return {"value": v, "unit": unit, "scale": _HASHRATE_UNITS[unit],
+                "canonical": f"{v} {unit}"}
+    except Exception:
+        return {"value": 0.0, "unit": "H/s", "scale": 1.0, "canonical": "0 H/s"}
+
+def to_hs(value: Union[str, float, int]) -> float:
+    """Return numeric H/s float from any notation."""
+    h = recognize_hashrate(value)
+    return h["value"] * h["scale"]
+
+# =================================================================
+# Section 8 — Display Scaling / Per-Network Selector
+# Version: v4.8.3-U  (User-Controlled Up/Down Mode)
+# -----------------------------------------------------------------
+#  - Default: down-convert (use smaller units if <1)
+#  - Optional: user can enable up-conversion for readability
+# =================================================================
+_ALLOW_UPCONVERT: bool = False  # global default = down-convert only
+
+def set_upconvert_mode(enable: bool) -> None:
+    """
+    Toggle whether sub-unit values may be up-converted for display.
+    Example:
+        set_upconvert_mode(True)  -> allows 0.09 PH/s -> 90 TH/s
+        set_upconvert_mode(False) -> strict down-convert only
+    """
+    global _ALLOW_UPCONVERT
+    _ALLOW_UPCONVERT = bool(enable)
+
+def set_display_unit(network: str, unit: str) -> None:
+    """Store preferred display unit for a network (AUTO = auto-scale)."""
+    _display_unit_selector[str(network).upper()] = unit.upper()
+
+def get_display_unit(network: str) -> str:
+    """Return chosen display unit or 'AUTO'."""
+    return _display_unit_selector.get(str(network).upper(), "AUTO")
+
+def _fmt_hs_value(val: float, unit: str) -> str:
+    """Format value, trimming trailing .00 only when whole."""
+    s = f"{val:.2f}"
+    if s.endswith(".00"):
+        s = s[:-3]
+    return f"{s} {unit}"
+
+def auto_format_hs(value_hs: float) -> str:
+    """
+    Auto-scale H/s to the most readable unit.
+    Default: choose the largest unit where value >= 1.
+    If _ALLOW_UPCONVERT is True, 0.1 <= value < 1 may be up-converted
+    to the next smaller unit for readability.
+    """
+    v = float(value_hs)
+    for idx, (unit, scale) in enumerate(_HASH_UNITS):
+        scaled = v / scale
+        if scaled >= 1.0:
+            return _fmt_hs_value(scaled, unit)
+        if _ALLOW_UPCONVERT and 0.1 <= scaled < 1.0 and idx + 1 < len(_HASH_UNITS):
+            next_unit, next_scale = _HASH_UNITS[idx + 1]
+            val = v / next_scale
+            return _fmt_hs_value(val, next_unit)
+        if idx == len(_HASH_UNITS) - 1:
+            return _fmt_hs_value(v, "H/s")
+    return _fmt_hs_value(v, "H/s")
+
+def display_hs(value_hs: float, network: str) -> str:
+    """
+    Render hashrate in network's preferred display unit,
+    respecting user up-convert mode when AUTO.
+    """
+    unit = get_display_unit(network)
+    v = float(value_hs)
+    if unit == "AUTO":
+        return auto_format_hs(v)
+    for u, scale in _HASH_UNITS:
+        if u.upper() == unit:
+            val = v / scale
+            return _fmt_hs_value(val, u)
+    return auto_format_hs(v)
+
+# =================================================================
+# Section 9 — Profit Computation (Live-Math Core)
+# Version: v4.8.3
+# -----------------------------------------------------------------
+#  - Pure math: converts canonical H/s and network stats -> USD/time
+#  - No API or VSD calls; safe for BIOS, Miner, or Prediction Engine
+# =================================================================
+def compute_profit(
+    h_local_hs: float,
+    h_net_hs: float,
+    block_time_s: float,
+    block_reward_coin: float,
+    price_usd: float
+) -> Dict[str, Any]:
+    """
+    Deterministic profit computation.
+    Returns USD per block/day/hour/minute/second + share ratio.
+    """
+    try:
+        H_net = float(h_net_hs)
+        H_local = float(h_local_hs)
+        T_blk = float(block_time_s)
+        R_coin = float(block_reward_coin)
+        P_usd = float(price_usd)
+
+        if H_net <= 0.0 or T_blk <= 0.0:
+            return {"ok": False, "reason": "invalid_inputs"}
+
+        p = H_local / H_net
+        usd_per_block = p * R_coin * P_usd
+        blocks_per_day = 86400.0 / T_blk
+        usd_day = usd_per_block * blocks_per_day
+
+        return {
+            "ok": True,
+            "share_ratio": round(p, 8),
+            "usd_per_block": usd_per_block,
+            "blocks_per_day": blocks_per_day,
+            "usd_day": usd_day,
+            "usd_hour": usd_day / 24.0,
+            "usd_min": usd_day / 1440.0,
+            "usd_sec": usd_day / 86400.0,
+        }
+    except Exception:
+        return {"ok": False, "reason": "exception"}
+
+def profit_nocut(h_local_hs: float, pool_snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Convenience wrapper using a pool snapshot dict that already contains:
+      'network_hashrate_hs', 'block_time_s', 'block_reward_coin', 'price_usd'
+    """
+    try:
+        return compute_profit(
+            h_local_hs=h_local_hs,
+            h_net_hs=pool_snapshot.get("network_hashrate_hs", 0.0),
+            block_time_s=pool_snapshot.get("block_time_s", 0.0),
+            block_reward_coin=pool_snapshot.get("block_reward_coin", 0.0),
+            price_usd=pool_snapshot.get("price_usd", 0.0)
+        )
+    except Exception:
+        return {"ok": False, "reason": "exception"}
