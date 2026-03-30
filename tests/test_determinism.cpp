@@ -1,9 +1,9 @@
-\
 #include <cstdio>
 #include <cstdint>
 #include <vector>
 #include <cstring>
 #include <iostream>
+#include <memory>
 #include "GE_runtime.hpp"
 
 static void append_bytes(std::vector<uint8_t>& out, const void* ptr, size_t n) {
@@ -12,23 +12,25 @@ static void append_bytes(std::vector<uint8_t>& out, const void* ptr, size_t n) {
 }
 
 static std::vector<uint8_t> run_trace(uint64_t seed, int ticks, int anchor_count) {
-    SubstrateManager s((size_t)anchor_count);
-    s.projection_seed = seed;
+    // SubstrateManager is large; keep it off the thread stack to avoid
+    // platform-dependent stack overflows in deterministic tests.
+    auto s = std::make_unique<SubstrateManager>((size_t)anchor_count);
+    s->projection_seed = seed;
 
     std::vector<uint8_t> bytes;
     bytes.reserve((size_t)ticks * (size_t)anchor_count * sizeof(Pulse));
 
     for (int t = 0; t < ticks; ++t) {
-        s.tick();
-        if (!s.check_invariants()) {
-            std::cerr << "Invariant failure at tick " << (unsigned long long)s.canonical_tick << "\n";
+        s->tick();
+        if (!s->check_invariants()) {
+            std::cerr << "Invariant failure at tick " << (unsigned long long)s->canonical_tick << "\n";
             std::abort();
         }
-        for (size_t i = 0; i < s.outbound.size(); ++i) {
-            const Pulse& p = s.outbound[i];
+        for (size_t i = 0; i < s->outbound.size(); ++i) {
+            const Pulse& p = s->outbound[i];
             append_bytes(bytes, &p, sizeof(Pulse));
         }
-        s.outbound.clear();
+        s->outbound.clear();
     }
     return bytes;
 }

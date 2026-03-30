@@ -1,0 +1,20 @@
+﻿path,kind,purpose
+sim_output,data,raw simulation payloads from photon_frequency_domain_sim.exe
+run_042_execution.log,log,simulator terminal output capture
+run_042_generation.log,log,run42 artifact generation tool output
+run_042_summary.json,summary,top-level run metadata and best cases
+run_042_encoded_data.json,data,encoded quartet and certainty payload
+run_042_equation_stack.md,documentation,equations used for encoding and collapse calculus
+run_042_collapse_calculus_timeseries.csv,data,collapse gate and calculus product time-series
+run_042_notes.md,documentation,run overview and task list
+run_042_lab_notes.md,documentation,lab-style execution and metrics note
+run_042_experiment_notes.md,documentation,experiment framing and deviations
+run_042_observation_diagram.md,diagram,formal observation flow diagram
+run_042_formal_review.md,review,formal review table and conclusions
+all_task_frequency_domain_summary.csv,data,aggregate per-task summary table
+D_track_frequency_domain_summary.csv,data,D_track summary
+I_accum_frequency_domain_summary.csv,data,I_accum summary
+L_smooth_frequency_domain_summary.csv,data,L_smooth summary
+D_track_best_history_sampled.csv,data,D_track sampled history
+I_accum_best_history_sampled.csv,data,I_accum sampled history
+L_smooth_best_history_sampled.csv,data,L_smooth sampled history

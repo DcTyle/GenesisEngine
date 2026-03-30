@@ -8,10 +8,10 @@ int64_t GE_overlap_score_q32_32(const GE_CorpusAnchorRecord& a, const GE_CorpusA
     const int64_t base = (int64_t(1) << 32);
     const int64_t df = ge_abs_i64(a.carrier.f_carrier_turns_q32_32 - b.carrier.f_carrier_turns_q32_32);
     const int64_t dphi = ge_abs_i64(a.carrier.phi_carrier_turns_q32_32 - b.carrier.phi_carrier_turns_q32_32);
-    const int64_t da = ge_abs_i64(a.carrier.a_carrier_turns_q32_32 - b.carrier.a_carrier_turns_q32_32);
-    const int64_t dv = ge_abs_i64(a.carrier.v_carrier_turns_q32_32 - b.carrier.v_carrier_turns_q32_32);
+    const int64_t dA = ge_abs_i64(a.carrier.A_carrier_q32_32 - b.carrier.A_carrier_q32_32);
+    const int64_t dcount_q32_32 = ge_abs_i64((int64_t)a.carrier.component_count_u32 - (int64_t)b.carrier.component_count_u32) << 32;
 
-    int64_t penalty = (df >> 2) + (dphi >> 2) + (da >> 3) + (dv >> 3);
+    int64_t penalty = (df >> 2) + (dphi >> 2) + (dA >> 3) + (dcount_q32_32 >> 5);
     int64_t score = base - penalty;
     if (score < 0) score = 0;
     return score;

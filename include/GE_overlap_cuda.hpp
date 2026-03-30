@@ -3,6 +3,7 @@
 #include <vector>
 
 #include "GE_corpus_anchor_store.hpp"
+#include "GE_overlap_router.hpp"
 
 // GPU overlap retrieval (score + top-k selection) for the hot path.
 // Returns hits ordered by descending score then ascending record_index.

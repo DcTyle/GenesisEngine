@@ -3,12 +3,30 @@
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
+#include <string>
 
 #include "GE_app.hpp"
 
 static bool ew_wstr_has_flag(const wchar_t* cmd, const wchar_t* flag) {
     if (!cmd || !flag) return false;
     return (wcsstr(cmd, flag) != nullptr);
+}
+
+static std::string ew_wstr_parse_utf8_opt(const wchar_t* cmd, const wchar_t* key, const std::string& defv) {
+    if (!cmd || !key) return defv;
+    const wchar_t* p = wcsstr(cmd, key);
+    if (!p) return defv;
+    p += wcslen(key);
+    if (*p == L'=' || *p == L':') p++;
+    const wchar_t* e = p;
+    while (*e != 0 && *e != L' ' && *e != L'\t') ++e;
+    if (e == p) return defv;
+    const int wn = (int)(e - p);
+    int n = WideCharToMultiByte(CP_UTF8, 0, p, wn, nullptr, 0, nullptr, nullptr);
+    if (n <= 0) return defv;
+    std::string out((size_t)n, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, p, wn, out.data(), n, nullptr, nullptr);
+    return out;
 }
 
 static uint32_t ew_wstr_parse_u32_opt(const wchar_t* cmd, const wchar_t* key, uint32_t defv) {
@@ -267,6 +285,9 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
 #endif
     cfg.initial_width = 1600;
     cfg.initial_height = 900;
+    cfg.stov_mode = ew_wstr_has_flag(cmd, L"--stov") || ew_wstr_has_flag(cmd, L"--stov_mode=1");
+    cfg.stov_data_log_path_utf8 = ew_wstr_parse_utf8_opt(cmd, L"--stov_data_log", "");
+    cfg.stov_audio_out_path_utf8 = ew_wstr_parse_utf8_opt(cmd, L"--stov_audio_out", "");
 
     ewv::App app(cfg);
     return app.Run(hInst);

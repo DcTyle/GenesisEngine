@@ -14,7 +14,7 @@ static inline int64_t q32_32_mul_local(int64_t a_q32_32, int64_t b_q32_32) {
     return (int64_t)(p >> 32);
 }
 
-static inline uint32_t clamp_u32(uint32_t x, uint32_t lo, uint32_t hi) {
+static inline uint32_t clamp_u32_local(uint32_t x, uint32_t lo, uint32_t hi) {
     if (x < lo) return lo;
     if (x > hi) return hi;
     return x;
@@ -39,7 +39,7 @@ uint32_t ew_compute_lane_count(const std::vector<Pulse>& inbound, const EwLanePo
     lanes += amp_bucket;
     lanes += tier * 4u;
     lanes += band * 2u;
-    return clamp_u32(lanes, pol.min_lanes, pol.max_lanes);
+    return clamp_u32_local(lanes, pol.min_lanes, pol.max_lanes);
 }
 
 void ew_update_qubit_lanes(std::vector<EwQubitLane>& lanes,

@@ -21,6 +21,11 @@ layout(location=11) in float vLeak;
 layout(location=12) in float vHarmMean;
 layout(location=13) in float vFluxGrad;
 layout(location=14) in float vDensity;
+layout(location=15) flat in uint vInstanceIndex;
+
+layout(std430, set=0, binding=3) readonly buffer PhotonColors {
+    vec4 colors[];
+} photon_colors;
 
 // Virtual texturing (production): atlas texture + page table SSBO.
 // Atlas is a packed tile cache. Page table maps (mip,tile_x,tile_y) -> atlas tile coord.
@@ -59,6 +64,45 @@ void main(){
         vec3 c = vAlbedo.rgb * soft;
         c *= (0.25 + vEmissive);
         oColor = vec4(c, 1.0);
+        return;
+    }
+
+    if (vKind >= 3u) {
+        float r2 = dot(vUV, vUV);
+        if (r2 > 1.0) discard;
+
+        float radial = clamp(1.0 - r2, 0.0, 1.0);
+        float core = pow(radial, 1.5);
+        float halo = pow(radial, 0.35);
+        float coupling = clamp(vLeak, 0.0, 1.0);
+        float phase_shift = 0.5 + 0.5 * clamp(vDopplerK, -1.0, 1.0);
+        float curvature = clamp(vFluxGrad, 0.0, 1.0);
+        float harm = clamp(vHarmMean, 0.0, 1.0);
+        float streak = tri((vUV.x - vUV.y) * (8.0 + 12.0 * curvature) + 7.0 * harm);
+        vec3 base = vAlbedo.rgb;
+        // Photon-native compute override. The compute path streams frequency-domain
+        // colors into this buffer at runtime; we blend it with the legacy class tint
+        // so research entities remain visible even when compute output is sparse.
+        vec4 computed = photon_colors.colors[vInstanceIndex];
+        base = mix(base, computed.rgb, clamp(computed.a, 0.0, 1.0));
+        vec3 col = base * (0.20 + 1.80 * core);
+
+        if (vKind == 4u) {
+            float arrow = clamp(1.0 - abs(vUV.y) * (3.0 + 3.0 * coupling), 0.0, 1.0);
+            col += base * arrow * (0.35 + 1.75 * phase_shift);
+            col += vec3(1.0, 0.95, 0.80) * streak * 0.25;
+        } else if (vKind == 5u) {
+            float rim = pow(clamp(abs(vUV.x * vUV.y) * 4.0, 0.0, 1.0), 0.45);
+            col += base * rim * (0.55 + 1.35 * curvature);
+            col += vec3(0.90, 0.95, 1.00) * halo * 0.18;
+        } else if (vKind == 6u) {
+            col += base * halo * (0.60 + 1.40 * harm);
+        } else {
+            col += base * streak * (0.25 + 1.25 * coupling);
+        }
+
+        float alpha = clamp(0.20 + 0.80 * halo, 0.0, 1.0);
+        oColor = vec4(col, alpha);
         return;
     }
 

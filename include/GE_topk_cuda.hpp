@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "GE_corpus_anchor_store.hpp"
+#include "GE_overlap_router.hpp"
 
 // GPU top-K selector from a device score array (score_q32_32, 0 means filtered).
 // Deterministic: scalar scan per block + deterministic pairwise merges on GPU.

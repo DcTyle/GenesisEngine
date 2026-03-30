@@ -1,0 +1,19 @@
+// packet_frequency_debug.json
+[
+  {"packet_id":0,"cohort":"D_track","dominant_bin":18,"bin10_mag":0.191041,"bin10_phase_rad":0.586714,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":1,"cohort":"I_accum","dominant_bin":15,"bin10_mag":0.193927,"bin10_phase_rad":0.381554,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":2,"cohort":"L_smooth","dominant_bin":15,"bin10_mag":0.215366,"bin10_phase_rad":-0.199532,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":3,"cohort":"D_track","dominant_bin":19,"bin10_mag":0.181771,"bin10_phase_rad":-0.775018,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":4,"cohort":"I_accum","dominant_bin":16,"bin10_mag":0.186287,"bin10_phase_rad":-0.404795,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":5,"cohort":"L_smooth","dominant_bin":16,"bin10_mag":0.206666,"bin10_phase_rad":0.87754,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":6,"cohort":"D_track","dominant_bin":19,"bin10_mag":0.172524,"bin10_phase_rad":-0.758455,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":7,"cohort":"I_accum","dominant_bin":17,"bin10_mag":0.178568,"bin10_phase_rad":-1.7514,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":8,"cohort":"L_smooth","dominant_bin":17,"bin10_mag":0.197847,"bin10_phase_rad":0.620273,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":9,"cohort":"D_track","dominant_bin":20,"bin10_mag":0.163344,"bin10_phase_rad":-0.724016,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":10,"cohort":"I_accum","dominant_bin":17,"bin10_mag":0.170803,"bin10_phase_rad":0.867948,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":11,"cohort":"L_smooth","dominant_bin":18,"bin10_mag":0.188956,"bin10_phase_rad":-0.723416,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":12,"cohort":"D_track","dominant_bin":20,"bin10_mag":0.154269,"bin10_phase_rad":-0.461482,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":13,"cohort":"I_accum","dominant_bin":18,"bin10_mag":0.163025,"bin10_phase_rad":-0.148453,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":14,"cohort":"L_smooth","dominant_bin":18,"bin10_mag":0.180034,"bin10_phase_rad":0.321381,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":15,"cohort":"D_track","dominant_bin":21,"bin10_mag":0.145338,"bin10_phase_rad":0.271353,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]}
+]

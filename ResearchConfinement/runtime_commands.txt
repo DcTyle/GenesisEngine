@@ -1,0 +1,24 @@
+/research_status
+/sim_mode frequency
+/stov_mode=1
+/sim_stream_hz=360
+/sim_lattice_edge=1024
+/sim_param=A:0.25 F:0.35 I:0.45 V:0.55
+/sim_mode vector
+/stov_mode=1
+/sim_stream_hz=300
+/sim_lattice_edge=2304
+/sim_param=A:0.31 F:0.27 I:0.42 V:0.61
+/sim_mode frequency
+/stov_mode=0
+/sim_stream_hz=360
+/sim_lattice_edge=4096
+/sim_param=A:0.22 F:0.33 I:0.44 V:0.55
+/sim_mode vector
+/stov_mode=1
+/sim_stream_hz=300
+/sim_lattice_edge=2304
+/sim_param=A:0.3 F:0.2 I:0.5 V:0.6
+/research_status
+/sim_param=A:0.24 F:0.28 I:0.41 V:0.52
+/sim_freq_run

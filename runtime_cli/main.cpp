@@ -1,74 +1,151 @@
-#include <cstdio>
+#include <algorithm>
 #include <cstdint>
+#include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
-#include "GE_runtime.hpp"
 #include "ew_cli_args.hpp"
 
-static void print_u64_hex(const char* label, uint64_t v) {
-    std::printf("%s=0x%016llx\n", label, (unsigned long long)v);
+static bool ew_append_runtime_commands(const std::filesystem::path& research_root,
+                                       const std::vector<std::string>& commands,
+                                       std::string* out_error) {
+    if (commands.empty()) return true;
+    std::error_code ec;
+    std::filesystem::create_directories(research_root, ec);
+    if (ec) {
+        if (out_error) *out_error = "unable to create research root directory";
+        return false;
+    }
+    const std::filesystem::path command_path = research_root / "runtime_commands.txt";
+    std::ofstream file(command_path, std::ios::out | std::ios::app | std::ios::binary);
+    if (!file.is_open()) {
+        if (out_error) *out_error = "unable to open runtime command file";
+        return false;
+    }
+    for (const std::string& cmd : commands) {
+        file << cmd << "\n";
+    }
+    if (!file.good()) {
+        if (out_error) *out_error = "unable to append runtime commands";
+        return false;
+    }
+    return true;
+}
+
+static std::string ew_lower_ascii(std::string v) {
+    std::transform(v.begin(), v.end(), v.begin(), [](unsigned char c) {
+        return (char)std::tolower(c);
+    });
+    return v;
 }
 
 int main(int argc, char** argv) {
-    const ew::EwCliArgs args = ew::ew_cli_parse_kv_ascii(argc, argv);
-
-    std::string lang_dir;
-    std::string export_dir;
-    uint64_t export_object_id_u64 = 0;
-    uint32_t ticks = 600;
-
-    if (const char* v = ew::ew_cli_get_str(args, "lang-bootstrap")) lang_dir = v;
-    if (lang_dir.empty()) {
-        if (const char* v2 = ew::ew_cli_get_str(args, "lang_bootstrap")) lang_dir = v2;
-    }
-    (void)ew::ew_cli_get_u32(args, "ticks", ticks);
-    if (const char* od = ew::ew_cli_get_str(args, "export_dir")) export_dir = od;
-    if (const char* od2 = ew::ew_cli_get_str(args, "export-dir")) export_dir = od2;
-    (void)ew::ew_cli_get_u64(args, "export_object_id", export_object_id_u64);
-    (void)ew::ew_cli_get_u64(args, "export-object-id", export_object_id_u64);
-
-    SubstrateManager sm(64);
-    sm.set_projection_seed(0xC0FFEE1234ULL);
-
-    // Configure tick dt deterministically (360 Hz).
-    const double dt_s = 1.0 / 360.0;
-    const int64_t dt_q32_32 = (int64_t)(dt_s * 4294967296.0);
-    const int64_t h0_ref_q32_32 = hubble_h0_ref_default_q32_32();
-    sm.configure_cosmic_expansion(h0_ref_q32_32, dt_q32_32);
-
-    if (!lang_dir.empty()) {
-        const bool ok = sm.language_bootstrap_from_dir(lang_dir);
-        std::printf("lang_bootstrap=%s\n", ok ? "true" : "false");
-        // Language tasks require full window per task; run enough ticks to complete
-        // all enqueued language checkpoints (4 * 360 = 1440).
-        if (ticks < 1500u) ticks = 1500u;
+    ew::CliArgsKV args;
+    if (!ew::ew_cli_parse_kv_ascii(argc, argv, args)) {
+        std::fprintf(stderr, "ERR: invalid CLI args; expected --key value or key=value forms\n");
+        return 2;
     }
 
-    for (uint32_t t = 0; t < ticks; ++t) {
-        sm.tick();
-        // Drain and print UI lines deterministically (bounded).
-        std::string out;
-        uint32_t printed = 0;
-        while (printed < 8u && sm.ui_pop_output_text(out)) {
-            std::printf("UI:%s\n", out.c_str());
-            printed++;
+    std::string research_root = "ResearchConfinement";
+    (void)ew::ew_cli_get_str(args, "research_root", research_root);
+    (void)ew::ew_cli_get_str(args, "research-root", research_root);
+
+    std::vector<std::string> runtime_cmds;
+
+    std::string custom_command;
+    if (ew::ew_cli_get_str(args, "runtime_command", custom_command) ||
+        ew::ew_cli_get_str(args, "runtime-command", custom_command) ||
+        ew::ew_cli_get_str(args, "cmd", custom_command)) {
+        if (!custom_command.empty()) {
+            runtime_cmds.push_back(custom_command);
         }
     }
 
-    if (!export_dir.empty() && export_object_id_u64 != 0) {
-        std::string rep;
-        const bool ok = sm.export_object_bundle(export_object_id_u64, export_dir, &rep);
-        std::printf("export_bundle=%s\n", ok ? "true" : "false");
-        std::printf("export_report=\n%s\n", rep.c_str());
+    bool status = false;
+    if (ew::ew_cli_get_bool(args, "research_status", status) ||
+        ew::ew_cli_get_bool(args, "research-status", status)) {
+        if (status) runtime_cmds.push_back("/research_status");
     }
 
-    print_u64_hex("tick_u64", sm.canonical_tick_u64());
-    std::printf("curriculum_stage_u32=%u\n", sm.learning_curriculum_stage_u32);
-    const genesis::LangLexiconStats st = sm.language_foundation.stats();
-    std::printf("lex_words=%u pron=%u senses=%u rel=%u concepts=%u speech_utt=%u\n",
-                st.word_count_u32, st.pron_count_u32, st.senses_count_u32, st.relations_count_u32,
-                st.concept_count_u32, st.speech_utt_count_u32);
+    bool reload = false;
+    if (ew::ew_cli_get_bool(args, "research_reload", reload) ||
+        ew::ew_cli_get_bool(args, "research-reload", reload)) {
+        if (reload) runtime_cmds.push_back("/research_reload");
+    }
 
+    std::string sim_mode;
+    if (ew::ew_cli_get_str(args, "sim_mode", sim_mode) ||
+        ew::ew_cli_get_str(args, "sim-mode", sim_mode)) {
+        const std::string mode_lc = ew_lower_ascii(sim_mode);
+        runtime_cmds.push_back((mode_lc == "vector") ? "/sim_mode vector" : "/sim_mode frequency");
+    }
+
+    bool stov_mode = false;
+    if (ew::ew_cli_get_bool(args, "stov_mode", stov_mode) ||
+        ew::ew_cli_get_bool(args, "stov-mode", stov_mode)) {
+        runtime_cmds.push_back(stov_mode ? "/stov_mode=1" : "/stov_mode=0");
+    }
+
+    uint32_t stream_hz = 0;
+    if (ew::ew_cli_get_u32(args, "sim_stream_hz", stream_hz) ||
+        ew::ew_cli_get_u32(args, "sim-stream-hz", stream_hz)) {
+        runtime_cmds.push_back("/sim_stream_hz=" + std::to_string(stream_hz));
+    }
+
+    uint32_t lattice_edge = 0;
+    if (ew::ew_cli_get_u32(args, "sim_lattice_edge", lattice_edge) ||
+        ew::ew_cli_get_u32(args, "sim-lattice-edge", lattice_edge)) {
+        runtime_cmds.push_back("/sim_lattice_edge=" + std::to_string(lattice_edge));
+    }
+
+    std::string sim_param;
+    if (ew::ew_cli_get_str(args, "sim_param", sim_param) ||
+        ew::ew_cli_get_str(args, "sim-param", sim_param)) {
+        if (!sim_param.empty()) {
+            runtime_cmds.push_back("/sim_param=" + sim_param);
+        }
+    } else {
+        bool has_a = false, has_f = false, has_i = false, has_v = false;
+        std::string a, f, i, v;
+        has_a = ew::ew_cli_get_str(args, "sim_a", a) || ew::ew_cli_get_str(args, "sim-a", a);
+        has_f = ew::ew_cli_get_str(args, "sim_f", f) || ew::ew_cli_get_str(args, "sim-f", f);
+        has_i = ew::ew_cli_get_str(args, "sim_i", i) || ew::ew_cli_get_str(args, "sim-i", i);
+        has_v = ew::ew_cli_get_str(args, "sim_v", v) || ew::ew_cli_get_str(args, "sim-v", v);
+        if (has_a || has_f || has_i || has_v) {
+            std::ostringstream oss;
+            oss << "/sim_param=";
+            bool first = true;
+            auto append = [&](const char* k, const std::string& val) {
+                if (!first) oss << " ";
+                first = false;
+                oss << k << ":" << val;
+            };
+            if (has_a) append("A", a);
+            if (has_f) append("F", f);
+            if (has_i) append("I", i);
+            if (has_v) append("V", v);
+            runtime_cmds.push_back(oss.str());
+        }
+    }
+
+    if (!runtime_cmds.empty()) {
+        std::string err;
+        if (!ew_append_runtime_commands(std::filesystem::path(research_root), runtime_cmds, &err)) {
+            std::fprintf(stderr, "ERR: %s\n", err.c_str());
+            return 3;
+        }
+        std::printf("runtime_cmd_file=%s\n",
+                    (std::filesystem::path(research_root) / "runtime_commands.txt").string().c_str());
+        for (const std::string& cmd : runtime_cmds) {
+            std::printf("queued_cmd=%s\n", cmd.c_str());
+        }
+        return 0;
+    }
+
+    std::printf("No runtime command arguments provided.\n");
+    std::printf("Use --sim-mode, --stov-mode, --sim-stream-hz, --sim-lattice-edge, --sim-param, or --runtime-command.\n");
     return 0;
 }

@@ -1,17 +1,27 @@
 // photon_tensor_gradient_sample.json
 [
-  {
-    "x": 0, "y": 0, "z": 0, "timestep": 0,
-    "phase_coherence": 1.0, "curvature": 0.0, "flux": 0.0, "inertia": 0.0,
-    "spin_x": 0.0, "spin_y": 0.0, "spin_z": 0.0,
-    "oam_x": 0.0, "oam_y": 0.0, "oam_z": 0.0,
-    "higgs_inertia": 0.0
-  },
-  {
-    "x": 0, "y": 0, "z": 0, "timestep": 1,
-    "phase_coherence": 0.98, "curvature": 0.01, "flux": 0.01, "inertia": 0.001,
-    "spin_x": 0.002, "spin_y": 0.001, "spin_z": 0.0,
-    "oam_x": 0.0, "oam_y": 0.0, "oam_z": 0.0,
-    "higgs_inertia": 0.0
-  }
+  {"packet_id":0,"bin_center":26,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[-0.0551274,-0.0551274,-0.0551274],"amplitude_gradient":[-0.000820694,-0.000820694,-0.000820694],"oam_twist":-0.99883,"temporal_inertia":0.000555036},
+  {"packet_id":1,"bin_center":22,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[-0.0441585,-0.0441585,-0.0441585],"amplitude_gradient":[-0.00119417,-0.00119417,-0.00119417],"oam_twist":-0.499028,"temporal_inertia":0.000434241},
+  {"packet_id":2,"bin_center":22,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[0.0319579,0.0319579,0.0319579],"amplitude_gradient":[-0.00122062,-0.00122062,-0.00122062],"oam_twist":0.493926,"temporal_inertia":0.000584697},
+  {"packet_id":3,"bin_center":26,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[0.0373722,0.0373722,0.0373722],"amplitude_gradient":[-0.000756229,-0.000756229,-0.000756229],"oam_twist":0.998842,"temporal_inertia":0.000538074},
+  {"packet_id":4,"bin_center":23,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[0.0150618,0.0150618,0.0150618],"amplitude_gradient":[-0.0011192,-0.0011192,-0.0011192],"oam_twist":-0.998063,"temporal_inertia":0.00050117},
+  {"packet_id":5,"bin_center":23,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[-0.0426321,-0.0426321,-0.0426321],"amplitude_gradient":[-0.00113713,-0.00113713,-0.00113713],"oam_twist":-0.499028,"temporal_inertia":0.000539531},
+  {"packet_id":6,"bin_center":27,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[0.0258876,0.0258876,0.0258876],"amplitude_gradient":[-0.000695643,-0.000695643,-0.000695643],"oam_twist":0.499352,"temporal_inertia":0.000550316},
+  {"packet_id":7,"bin_center":23,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[-0.0239994,-0.0239994,-0.0239994],"amplitude_gradient":[-0.00104721,-0.00104721,-0.00104721],"oam_twist":0.998069,"temporal_inertia":0.000500231},
+  {"packet_id":8,"bin_center":24,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[0.0164457,0.0164457,0.0164457],"amplitude_gradient":[-0.00105742,-0.00105742,-0.00105742],"oam_twist":-0.998063,"temporal_inertia":0.000593533},
+  {"packet_id":9,"bin_center":27,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[0.0165964,0.0165964,0.0165964],"amplitude_gradient":[-0.000638852,-0.000638852,-0.000638852],"oam_twist":-0.493455,"temporal_inertia":0.000721681},
+  {"packet_id":10,"bin_center":24,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[0.0306311,0.0306311,0.0306311],"amplitude_gradient":[-0.000978259,-0.000978259,-0.000978259],"oam_twist":0.499034,"temporal_inertia":0.000558242},
+  {"packet_id":11,"bin_center":24,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[-0.0226381,-0.0226381,-0.0226381],"amplitude_gradient":[-0.000981528,-0.000981528,-0.000981528],"oam_twist":0.998069,"temporal_inertia":0.000635127},
+  {"packet_id":12,"bin_center":28,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[-0.0551065,-0.0551065,-0.0551065],"amplitude_gradient":[-0.000585754,-0.000585754,-0.000585754],"oam_twist":-0.986908,"temporal_inertia":0.000637569},
+  {"packet_id":13,"bin_center":25,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[0.0214606,0.0214606,0.0214606],"amplitude_gradient":[-0.000912379,-0.000912379,-0.000912379],"oam_twist":-0.499034,"temporal_inertia":0.000461018},
+  {"packet_id":14,"bin_center":25,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[-0.03341,-0.03341,-0.03341],"amplitude_gradient":[-0.000909467,-0.000909467,-0.000909467],"oam_twist":0.499034,"temporal_inertia":0.00064817},
+  {"packet_id":15,"bin_center":29,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[0.038128,0.038128,0.038128],"amplitude_gradient":[-0.000536237,-0.000536237,-0.000536237],"oam_twist":0.986367,"temporal_inertia":0.000562295},
+  {"packet_id":16,"bin_center":25,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[0.0151107,0.0151107,0.0151107],"amplitude_gradient":[-0.000849589,-0.000849589,-0.000849589],"oam_twist":-0.998787,"temporal_inertia":0.000553678},
+  {"packet_id":17,"bin_center":25,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[0.023035,0.023035,0.023035],"amplitude_gradient":[-0.000841226,-0.000841226,-0.000841226],"oam_twist":-0.499034,"temporal_inertia":0.000617611},
+  {"packet_id":18,"bin_center":29,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[-0.0395262,-0.0395262,-0.0395262],"amplitude_gradient":[-0.000490176,-0.000490176,-0.000490176],"oam_twist":0.492325,"temporal_inertia":0.00061279},
+  {"packet_id":19,"bin_center":26,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[-0.0233165,-0.0233165,-0.0233165],"amplitude_gradient":[-0.000789888,-0.000789888,-0.000789888],"oam_twist":0.998769,"temporal_inertia":0.000560564},
+  {"packet_id":20,"bin_center":26,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[0.0165172,0.0165172,0.0165172],"amplitude_gradient":[-0.000776772,-0.000776772,-0.000776772],"oam_twist":-0.998472,"temporal_inertia":0.000669464},
+  {"packet_id":21,"bin_center":30,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[0.0167267,0.0167267,0.0167267],"amplitude_gradient":[-0.000447435,-0.000447435,-0.000447435],"oam_twist":-0.488873,"temporal_inertia":0.00076548},
+  {"packet_id":22,"bin_center":27,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[-0.0348074,-0.0348074,-0.0348074],"amplitude_gradient":[-0.000733259,-0.000733259,-0.000733259],"oam_twist":0.499352,"temporal_inertia":0.000592606},
+  {"packet_id":23,"bin_center":27,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[-0.0239917,-0.0239917,-0.0239917],"amplitude_gradient":[-0.000716054,-0.000716054,-0.000716054],"oam_twist":0.998444,"temporal_inertia":0.000683365}
 ]

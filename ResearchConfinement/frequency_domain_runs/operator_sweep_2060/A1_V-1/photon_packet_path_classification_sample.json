@@ -1,0 +1,27 @@
+// photon_packet_path_classification_sample.json
+[
+  {"packet_id":0,"classification":"shared","group_id":0,"phase_lock_score":0.998947,"curvature_depth":9.11455,"coherence_score":0.998863},
+  {"packet_id":1,"classification":"individual","group_id":1,"phase_lock_score":0.998234,"curvature_depth":19.6368,"coherence_score":0.99783},
+  {"packet_id":2,"classification":"individual","group_id":2,"phase_lock_score":0.990907,"curvature_depth":7.07463,"coherence_score":0.986911},
+  {"packet_id":3,"classification":"shared","group_id":1,"phase_lock_score":0.998895,"curvature_depth":22.4882,"coherence_score":0.998819},
+  {"packet_id":4,"classification":"individual","group_id":4,"phase_lock_score":0.998248,"curvature_depth":36.4133,"coherence_score":0.997835},
+  {"packet_id":5,"classification":"individual","group_id":5,"phase_lock_score":0.998234,"curvature_depth":7.85918,"coherence_score":0.99783},
+  {"packet_id":6,"classification":"shared","group_id":0,"phase_lock_score":0.99863,"curvature_depth":20.9992,"coherence_score":0.998738},
+  {"packet_id":7,"classification":"shared","group_id":1,"phase_lock_score":0.998267,"curvature_depth":6.63957,"coherence_score":0.997843},
+  {"packet_id":8,"classification":"individual","group_id":8,"phase_lock_score":0.998248,"curvature_depth":8.28606,"coherence_score":0.997835},
+  {"packet_id":9,"classification":"individual","group_id":9,"phase_lock_score":0.989525,"curvature_depth":95.4206,"coherence_score":0.987108},
+  {"packet_id":10,"classification":"shared","group_id":0,"phase_lock_score":0.998257,"curvature_depth":32.3803,"coherence_score":0.99784},
+  {"packet_id":11,"classification":"shared","group_id":1,"phase_lock_score":0.998267,"curvature_depth":21.7643,"coherence_score":0.997843},
+  {"packet_id":12,"classification":"individual","group_id":12,"phase_lock_score":0.989525,"curvature_depth":8.91725,"coherence_score":0.987101},
+  {"packet_id":13,"classification":"individual","group_id":13,"phase_lock_score":0.998253,"curvature_depth":12.0943,"coherence_score":0.997839},
+  {"packet_id":14,"classification":"shared","group_id":0,"phase_lock_score":0.998257,"curvature_depth":7.58152,"coherence_score":0.99784},
+  {"packet_id":15,"classification":"individual","group_id":15,"phase_lock_score":0.98911,"curvature_depth":14.5614,"coherence_score":0.986369},
+  {"packet_id":16,"classification":"shared","group_id":0,"phase_lock_score":0.998701,"curvature_depth":80.328,"coherence_score":0.998793},
+  {"packet_id":17,"classification":"individual","group_id":17,"phase_lock_score":0.998253,"curvature_depth":13.8377,"coherence_score":0.997839},
+  {"packet_id":18,"classification":"individual","group_id":18,"phase_lock_score":0.986749,"curvature_depth":12.1933,"coherence_score":0.98498},
+  {"packet_id":19,"classification":"shared","group_id":1,"phase_lock_score":0.998708,"curvature_depth":9.86295,"coherence_score":0.99877},
+  {"packet_id":20,"classification":"shared","group_id":0,"phase_lock_score":0.99872,"curvature_depth":17.7315,"coherence_score":0.998345},
+  {"packet_id":21,"classification":"individual","group_id":21,"phase_lock_score":0.983033,"curvature_depth":81.8209,"coherence_score":0.975725},
+  {"packet_id":22,"classification":"shared","group_id":0,"phase_lock_score":0.99863,"curvature_depth":17.5641,"coherence_score":0.998738},
+  {"packet_id":23,"classification":"shared","group_id":1,"phase_lock_score":0.998627,"curvature_depth":15.6028,"coherence_score":0.99824}
+]

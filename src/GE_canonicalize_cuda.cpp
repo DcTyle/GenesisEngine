@@ -1,5 +1,6 @@
 #include "GE_canonicalize_cuda.hpp"
 
+#if defined(EW_ENABLE_CUDA) && (EW_ENABLE_CUDA==1)
 #include <cuda_runtime.h>
 #include <vector>
 
@@ -98,3 +99,13 @@ bool GE_canonicalize_utf8_strict_cuda(const uint8_t* bytes_host, size_t len,
     stats.bytes_out_u64 += uint64_t(out.size());
     return true;
 }
+#else
+bool GE_canonicalize_utf8_strict_cuda(const uint8_t* bytes_host, size_t len,
+                                     std::string& out_canon_utf8,
+                                     GE_CorpusCanonicalizeStats& stats) {
+    (void)bytes_host;
+    stats.bytes_in_u64 += uint64_t(len);
+    out_canon_utf8.clear();
+    return false;
+}
+#endif

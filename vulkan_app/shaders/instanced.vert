@@ -7,13 +7,13 @@ layout(push_constant) uniform Push {
 } pc;
 
 struct Inst {
-    uint64_t object_id_u64;
-    uint32_t anchor_id_u32;
-    uint32_t kind_u32;
-    uint32_t albedo_rgba8;
-    uint32_t atmosphere_rgba8;
-    uint32_t _pad_a0_u32;
-    uint32_t _pad_a1_u32;
+    uvec2 object_id_u64_words;
+    uint anchor_id_u32;
+    uint kind_u32;
+    uint albedo_rgba8;
+    uint atmosphere_rgba8;
+    uint _pad_a0_u32;
+    uint _pad_a1_u32;
     ivec4 rel_pos_q16_16;
     int radius_q16_16;
     int emissive_q16_16;
@@ -24,7 +24,7 @@ struct Inst {
     uint carrier_x_u32;
     uint carrier_y_u32;
     uint carrier_z_u32;
-    uint64_t tick_u64;
+    uvec2 tick_u64_words;
 };
 
 layout(set=0, binding=0, std430) readonly buffer Instances {
@@ -46,6 +46,7 @@ layout(location=11) out float vLeak;
 layout(location=12) out float vHarmMean;
 layout(location=13) out float vFluxGrad;
 layout(location=14) out float vDensity;
+layout(location=15) flat out uint vInstanceIndex;
 
 vec3 q16_16_to_f3(ivec3 v){
     return vec3(v) / 65536.0;
@@ -104,4 +105,5 @@ void main(){
     // This preserves the existing carrier meaning while enabling deterministic
     // priority of dense objects in energy flux visuals.
     vDensity = clamp(vLeak, 0.0, 1.0);
+    vInstanceIndex = uint(gl_InstanceIndex);
 }

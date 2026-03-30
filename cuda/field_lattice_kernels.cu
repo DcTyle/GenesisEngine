@@ -1,5 +1,165 @@
+#if STOV_MODE
+// --- STOV: OAM, Winding Number, and Data Logging ---
+// Utility: Compute phase angle from float2 (real, imag)
+__device__ __forceinline__ float stov_phase(float2 E) {
+    return atan2f(E.y, E.x);
+}
+
+// Utility: Compute phase difference, wrapped to [-pi, pi]
+__device__ __forceinline__ float stov_phase_diff(float a, float b) {
+    float d = a - b;
+    while (d > M_PI) d -= 2.0f * M_PI;
+    while (d < -M_PI) d += 2.0f * M_PI;
+    return d;
+}
+
+// Compute transverse OAM density and winding number per cell
+extern "C" __global__ void stov_kernel_oam_winding(
+    const float2* E,
+    float* oam_density,
+    int* winding_number,
+    int gx, int gy, int gz)
+{
+    int tid = (int)(blockIdx.x * blockDim.x + threadIdx.x);
+    const int n = gx * gy * gz;
+    if (tid >= n) return;
+
+    // Lattice coordinates
+    const int xy = gx * gy;
+    const int z = tid / xy;
+    const int rem = tid - z * xy;
+    const int y = rem / gx;
+    const int x = rem - y * gx;
+
+    // Phase at center
+    float theta_c = stov_phase(E[tid]);
+    // Phase at neighbors
+    const int xm = (x > 0) ? (x - 1) : x;
+    const int xp = (x + 1 < gx) ? (x + 1) : x;
+    const int ym = (y > 0) ? (y - 1) : y;
+    const int yp = (y + 1 < gy) ? (y + 1) : y;
+    const int iXm = idx3(xm, y, z, gx, gy);
+    const int iXp = idx3(xp, y, z, gx, gy);
+    const int iYm = idx3(x, ym, z, gx, gy);
+    const int iYp = idx3(x, yp, z, gx, gy);
+    float dtheta_dx = stov_phase_diff(stov_phase(E[iXp]), stov_phase(E[iXm])) * 0.5f;
+    float dtheta_dy = stov_phase_diff(stov_phase(E[iYp]), stov_phase(E[iYm])) * 0.5f;
+
+    // OAM density: (x dtheta_dy - y dtheta_dx)
+    float oam = ((float)x * dtheta_dy - (float)y * dtheta_dx);
+    oam_density[tid] = oam;
+
+    // Winding number: sum phase differences around a closed loop (plaquette)
+    float dphi = 0.0f;
+    dphi += stov_phase_diff(stov_phase(E[iXp]), theta_c);
+    dphi += stov_phase_diff(stov_phase(E[iYp]), stov_phase(E[iXp]));
+    dphi += stov_phase_diff(stov_phase(E[iXm]), stov_phase(E[iYp]));
+    dphi += stov_phase_diff(stov_phase(E[iYm]), stov_phase(E[iXm]));
+    dphi += stov_phase_diff(theta_c, stov_phase(E[iYm]));
+    int winding = (int)roundf(dphi / (2.0f * M_PI));
+    winding_number[tid] = winding;
+}
+
+// --- STOV: Data Logging Kernel ---
+// Log per-cell: (x, y, z, phase, oam_density, winding_number)
+extern "C" __global__ void stov_kernel_log_data(
+    const float2* E,
+    const float* oam_density,
+    const int* winding_number,
+    float* out_log, // [n * 6]: x, y, z, phase, oam, winding
+    int gx, int gy, int gz)
+{
+    int tid = (int)(blockIdx.x * blockDim.x + threadIdx.x);
+    const int n = gx * gy * gz;
+    if (tid >= n) return;
+    const int xy = gx * gy;
+    const int z = tid / xy;
+    const int rem = tid - z * xy;
+    const int y = rem / gx;
+    const int x = rem - y * gx;
+    float phase = stov_phase(E[tid]);
+    float oam = oam_density[tid];
+    int winding = winding_number[tid];
+    int idx = tid * 6;
+    out_log[idx + 0] = (float)x;
+    out_log[idx + 1] = (float)y;
+    out_log[idx + 2] = (float)z;
+    out_log[idx + 3] = phase;
+    out_log[idx + 4] = oam;
+    out_log[idx + 5] = (float)winding;
+}
+#endif
+
 #include <cuda_runtime.h>
 #include <stdint.h>
+#include <math.h>
+
+// --- STOV MODE FLAG ---
+#ifndef STOV_MODE
+#define STOV_MODE 0
+#endif
+// --- STOV: Paraxial Propagation Kernel ---
+#if STOV_MODE
+// Paraxial wave equation: 2i k ∂E/∂z + ∇_⊥² E = 0
+// E: complex field (float2), k: wavenumber, ∇_⊥²: transverse Laplacian
+// This kernel assumes E is stored as float2 (real, imag) per lattice cell.
+extern "C" __global__ void stov_kernel_paraxial_step(
+    float2* E_curr, float2* E_next,
+    const float* freq_x, const float* freq_y, const float* freq_z,
+    int gx, int gy, int gz, float k, float dz, float dt)
+{
+    int tid = (int)(blockIdx.x * blockDim.x + threadIdx.x);
+    const int n = gx * gy * gz;
+    if (tid >= n) return;
+
+    // Lattice coordinates
+    const int xy = gx * gy;
+    const int z = tid / xy;
+    const int rem = tid - z * xy;
+    const int y = rem / gx;
+    const int x = rem - y * gx;
+
+    // --- Helical Phase Injection ---
+    // φ = arctan(y/x), l = topological charge (from freq asymmetry)
+    float phi = atan2f((float)y - gy/2, (float)x - gx/2);
+    float fx = freq_x ? freq_x[tid] : 0.0f;
+    float fy = freq_y ? freq_y[tid] : 0.0f;
+    float fz = freq_z ? freq_z[tid] : 0.0f;
+    // Example: l = sign(fx - fy), can be improved to use phase asymmetry
+    int l = (fx - fy > 0.0f) ? 1 : ((fx - fy < 0.0f) ? -1 : 0);
+    float helical_re = cosf(l * phi);
+    float helical_im = sinf(l * phi);
+
+    // Apply helical phase ramp to E_curr
+    float2 E = E_curr[tid];
+    float2 E_hel;
+    E_hel.x = E.x * helical_re - E.y * helical_im;
+    E_hel.y = E.x * helical_im + E.y * helical_re;
+
+    // --- Paraxial Step (finite-difference transverse Laplacian) ---
+    const int xm = (x > 0) ? (x - 1) : x;
+    const int xp = (x + 1 < gx) ? (x + 1) : x;
+    const int ym = (y > 0) ? (y - 1) : y;
+    const int yp = (y + 1 < gy) ? (y + 1) : y;
+    const int iC = tid;
+    const int iXm = idx3(xm, y, z, gx, gy);
+    const int iXp = idx3(xp, y, z, gx, gy);
+    const int iYm = idx3(x, ym, z, gx, gy);
+    const int iYp = idx3(x, yp, z, gx, gy);
+
+    float2 lap;
+    lap.x = (E_curr[iXm].x + E_curr[iXp].x + E_curr[iYm].x + E_curr[iYp].x - 4.0f * E_hel.x);
+    lap.y = (E_curr[iXm].y + E_curr[iXp].y + E_curr[iYm].y + E_curr[iYp].y - 4.0f * E_hel.y);
+
+    // Paraxial update: E_next = E_hel + (i dz / 2k) * lap
+    float inv2k = 1.0f / (2.0f * k);
+    float2 dE;
+    dE.x = -lap.y * dz * inv2k;
+    dE.y =  lap.x * dz * inv2k;
+    E_next[tid].x = E_hel.x + dE.x;
+    E_next[tid].y = E_hel.y + dE.y;
+}
+#endif
 
 // ---------------------------------------------------------------------------
 // Scalar-factor snap grid (fixed-point-like quantization)

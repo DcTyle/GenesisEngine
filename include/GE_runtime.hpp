@@ -421,6 +421,7 @@ class SubstrateManager {
 public:
     uint64_t canonical_tick = 0;
     int64_t reservoir = 0;
+    genesis::EwNBodyState nbody_state;
 
     // -----------------------------------------------------------------
     // Project settings (loaded at boot, deterministic, snapshot-included)

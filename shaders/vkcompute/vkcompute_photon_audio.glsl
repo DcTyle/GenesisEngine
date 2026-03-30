@@ -1,19 +1,37 @@
-// vkcompute_photon_audio.glsl
-// Vulkan compute shader for mapping lattice temporal dynamics to audio waveform buffer
 #version 450
-layout(local_size_x = 64) in;
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
-layout(binding = 0, rgba32f) readonly buffer LatticeTemporal {
-    float temporal_coupling[];
-};
-layout(binding = 1, std430) writeonly buffer AudioBuffer {
-    float audio_waveform[];
-};
+layout(push_constant) uniform PhotonAudioPc {
+    uint count;
+} pc;
+
+layout(std430, binding = 0) readonly buffer LatticeTemporal {
+    float temporal_phase[];
+} temporal_in;
+
+layout(std430, binding = 1) readonly buffer LatticeCirculation {
+    float oam_circulation[];
+} circulation_in;
+
+layout(std430, binding = 2) writeonly buffer AudioBuffer {
+    vec4 audio_waveform[];
+} audio_out;
 
 void main() {
     uint idx = gl_GlobalInvocationID.x;
-    // Map temporal coupling to audio amplitude (simple sum for now)
-    float amp = temporal_coupling[idx];
-    // Optionally apply windowing, normalization, or spatialization here
-    audio_waveform[idx] = amp;
+    if (idx >= pc.count) return;
+
+    float phase = temporal_in.temporal_phase[idx];
+    float circulation = circulation_in.oam_circulation[idx];
+
+    float dry = sin(phase);
+    float wet = sin(phase + circulation * 1.5707963);
+    float spread = clamp(abs(circulation), 0.0, 1.0);
+
+    audio_out.audio_waveform[idx] = vec4(
+        dry,
+        mix(dry, wet, spread),
+        mix(dry, -wet, spread),
+        wet
+    );
 }

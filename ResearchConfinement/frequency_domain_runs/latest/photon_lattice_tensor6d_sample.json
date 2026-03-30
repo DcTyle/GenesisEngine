@@ -1,0 +1,19 @@
+// photon_lattice_tensor6d_sample.json
+[
+  {"x":0,"y":15,"z":18,"phase_coherence":0.996132,"curvature":11.7873,"flux":0.104911,"inertia":0.00193597,"freq_x":16,"freq_y":19,"freq_z":22,"dtheta_dt":0.0,"d2theta_dt2":0.0,"oam_twist":-0.996132,"spin_vector":[0,0,1],"higgs_inertia":0},
+  {"x":1,"y":12,"z":16,"phase_coherence":0.997755,"curvature":12.7172,"flux":0.0959974,"inertia":0.00197913,"freq_x":13,"freq_y":17,"freq_z":20,"dtheta_dt":0.0,"d2theta_dt2":0.0,"oam_twist":-0.498877,"spin_vector":[0,0,1],"higgs_inertia":0},
+  {"x":2,"y":12,"z":16,"phase_coherence":0.986647,"curvature":9.1872,"flux":0.104435,"inertia":0.00171044,"freq_x":13,"freq_y":17,"freq_z":20,"dtheta_dt":0.0,"d2theta_dt2":0.0,"oam_twist":0.493324,"spin_vector":[0,0,1],"higgs_inertia":0},
+  {"x":3,"y":16,"z":19,"phase_coherence":0.996063,"curvature":18.2537,"flux":0.104058,"inertia":0.00263111,"freq_x":17,"freq_y":20,"freq_z":23,"dtheta_dt":0.0,"d2theta_dt2":0.0,"oam_twist":0.996063,"spin_vector":[0,0,1],"higgs_inertia":0},
+  {"x":4,"y":13,"z":16,"phase_coherence":0.997762,"curvature":12.3751,"flux":0.0952263,"inertia":0.00164099,"freq_x":14,"freq_y":17,"freq_z":21,"dtheta_dt":0.0,"d2theta_dt2":0.0,"oam_twist":-0.997762,"spin_vector":[0,0,1],"higgs_inertia":0},
+  {"x":5,"y":13,"z":17,"phase_coherence":0.997755,"curvature":9.20977,"flux":0.104514,"inertia":0.00233784,"freq_x":14,"freq_y":18,"freq_z":21,"dtheta_dt":0.0,"d2theta_dt2":0.0,"oam_twist":-0.498877,"spin_vector":[0,0,1],"higgs_inertia":0},
+  {"x":6,"y":16,"z":19,"phase_coherence":0.996038,"curvature":17.5811,"flux":0.103179,"inertia":0.00289282,"freq_x":17,"freq_y":20,"freq_z":23,"dtheta_dt":0.0,"d2theta_dt2":0.0,"oam_twist":0.498019,"spin_vector":[0,0,1],"higgs_inertia":0},
+  {"x":7,"y":14,"z":17,"phase_coherence":0.997768,"curvature":19.0855,"flux":0.0944342,"inertia":0.00222396,"freq_x":15,"freq_y":18,"freq_z":21,"dtheta_dt":0.0,"d2theta_dt2":0.0,"oam_twist":0.997768,"spin_vector":[0,0,1],"higgs_inertia":0},
+  {"x":8,"y":14,"z":17,"phase_coherence":0.997762,"curvature":11.7905,"flux":0.103716,"inertia":0.00180824,"freq_x":15,"freq_y":18,"freq_z":21,"dtheta_dt":0.0,"d2theta_dt2":0.0,"oam_twist":-0.997762,"spin_vector":[0,0,1],"higgs_inertia":0},
+  {"x":9,"y":17,"z":20,"phase_coherence":0.988949,"curvature":15.2052,"flux":0.101727,"inertia":0.00237779,"freq_x":18,"freq_y":21,"freq_z":24,"dtheta_dt":0.0,"d2theta_dt2":0.0,"oam_twist":-0.494474,"spin_vector":[0,0,1],"higgs_inertia":0},
+  {"x":10,"y":14,"z":18,"phase_coherence":0.997771,"curvature":6.24062,"flux":0.093623,"inertia":0.00169988,"freq_x":15,"freq_y":19,"freq_z":22,"dtheta_dt":0.0,"d2theta_dt2":0.0,"oam_twist":0.498885,"spin_vector":[0,0,1],"higgs_inertia":0},
+  {"x":11,"y":15,"z":18,"phase_coherence":0.997768,"curvature":20.1072,"flux":0.102895,"inertia":0.00248233,"freq_x":16,"freq_y":19,"freq_z":22,"dtheta_dt":0.0,"d2theta_dt2":0.0,"oam_twist":0.997768,"spin_vector":[0,0,1],"higgs_inertia":0},
+  {"x":12,"y":17,"z":21,"phase_coherence":0.979217,"curvature":14.2198,"flux":0.0999287,"inertia":0.00194708,"freq_x":18,"freq_y":22,"freq_z":25,"dtheta_dt":0.0,"d2theta_dt2":0.0,"oam_twist":-0.979217,"spin_vector":[0,0,1],"higgs_inertia":0},
+  {"x":13,"y":15,"z":18,"phase_coherence":0.990164,"curvature":9.4377,"flux":0.092198,"inertia":0.00229494,"freq_x":16,"freq_y":19,"freq_z":22,"dtheta_dt":0.0,"d2theta_dt2":0.0,"oam_twist":-0.495082,"spin_vector":[0,0,1],"higgs_inertia":0},
+  {"x":14,"y":15,"z":18,"phase_coherence":0.997771,"curvature":17.9439,"flux":0.102051,"inertia":0.00273889,"freq_x":16,"freq_y":19,"freq_z":23,"dtheta_dt":0.0,"d2theta_dt2":0.0,"oam_twist":0.498885,"spin_vector":[0,0,1],"higgs_inertia":0},
+  {"x":15,"y":18,"z":21,"phase_coherence":0.974898,"curvature":8.80818,"flux":0.0988785,"inertia":0.00255643,"freq_x":19,"freq_y":22,"freq_z":25,"dtheta_dt":0.0,"d2theta_dt2":0.0,"oam_twist":0.974898,"spin_vector":[0,0,1],"higgs_inertia":0}
+]

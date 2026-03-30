@@ -41,9 +41,18 @@ int main() {
     if (archive.run041_d_track.size() < 6u || archive.run041_i_accum.size() < 6u || archive.run041_l_smooth.size() < 6u) {
         return fail("sampled Run41 trajectories are too short");
     }
+    if (archive.packet_path_classes.empty()) return fail("packet path classifications did not load");
+    if (archive.tensor6d_cells.empty()) return fail("tensor6d cells did not load");
+    if (archive.vector_excitations.empty()) return fail("vector excitation samples did not load");
+    if (archive.tensor_glyphs.empty()) return fail("tensor glyph samples did not load");
+    if (archive.shader_texture.empty()) return fail("shader texture samples did not load");
+    if (archive.audio_waveform.empty()) return fail("audio waveform samples did not load");
+    if (!genesis::ge_has_research_realtime_outputs(archive)) {
+        return fail("realtime output helper reported missing data");
+    }
 
     std::vector<genesis::GeResearchParticleVizPoint> points;
-    genesis::ge_build_research_particle_viz(archive, 24u, 64u, 0.5f, 0.75f, points);
+    genesis::ge_build_research_particle_viz(archive, 24u, 128u, 0.5f, 0.75f, points);
     if (points.empty()) return fail("research replay emitted no points");
 
     bool saw_photon = false;
@@ -62,6 +71,8 @@ int main() {
         if (!(point.occlusion >= 0.0f && point.occlusion <= 1.0f)) return fail("point occlusion out of range");
         if (!(point.phase_bias >= -1.0f && point.phase_bias <= 1.0f)) return fail("point phase bias out of range");
         if (!(point.amplitude >= 0.0f && point.amplitude <= 1.0f)) return fail("point amplitude out of range");
+        if (!(point.radius_m > 0.0f)) return fail("point radius is not positive");
+        if (!(point.emissive >= 0.0f)) return fail("point emissive is negative");
         switch (point.particle_class) {
             case genesis::GeResearchParticleClass::Photon:   saw_photon = true; break;
             case genesis::GeResearchParticleClass::Weighted: saw_weighted = true; break;
@@ -73,6 +84,12 @@ int main() {
     if (!saw_photon || !saw_weighted || !saw_flavor || !saw_charged) {
         return fail("replay did not emit all particle classes");
     }
+
+    genesis::GeResearchAudioFrame audio_frame{};
+    genesis::ge_build_research_audio_frame(archive, 12u, 16u, audio_frame);
+    if (audio_frame.channel_count_u32 != 4u) return fail("unexpected research audio channel count");
+    if (audio_frame.interleaved_pcm16.size() != 64u) return fail("unexpected research audio sample count");
+    if (!(audio_frame.peak_abs_amplitude > 0.0f)) return fail("research audio peak amplitude is zero");
 
     std::cout << "PASS: research confinement archive parsed and replayed\n";
     return 0;

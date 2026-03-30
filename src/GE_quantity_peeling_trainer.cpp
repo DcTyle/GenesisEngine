@@ -103,6 +103,5 @@ bool GE_trainer_epoch(GE_CorpusAnchorStore& store,
         }
     }
 
-    graph.sort_and_compact(params.max_degree_u32);
     return true;
 }

@@ -1,0 +1,19 @@
+// photon_tensor_gradient_sample.json
+[
+  {"packet_id":0,"bin_center":18,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[0.0203021,0.0203021,0.0203021],"amplitude_gradient":[-0.00254537,-0.00254537,-0.00254537],"oam_twist":-0.996132,"temporal_inertia":0.00193597},
+  {"packet_id":1,"bin_center":15,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[-0.0613462,-0.0613462,-0.0613462],"amplitude_gradient":[-0.00308593,-0.00308593,-0.00308593],"oam_twist":-0.498877,"temporal_inertia":0.00197913},
+  {"packet_id":2,"bin_center":15,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[-0.0455495,-0.0455495,-0.0455495],"amplitude_gradient":[-0.00326533,-0.00326533,-0.00326533],"oam_twist":0.493324,"temporal_inertia":0.00171044},
+  {"packet_id":3,"bin_center":19,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[0.0615226,0.0615226,0.0615226],"amplitude_gradient":[-0.00233754,-0.00233754,-0.00233754],"oam_twist":0.996063,"temporal_inertia":0.00263111},
+  {"packet_id":4,"bin_center":16,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[0.0271808,0.0271808,0.0271808],"amplitude_gradient":[-0.00287688,-0.00287688,-0.00287688],"oam_twist":-0.997762,"temporal_inertia":0.00164099},
+  {"packet_id":5,"bin_center":16,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[0.0379403,0.0379403,0.0379403],"amplitude_gradient":[-0.00303219,-0.00303219,-0.00303219],"oam_twist":-0.498877,"temporal_inertia":0.00233784},
+  {"packet_id":6,"bin_center":19,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[0.0449719,0.0449719,0.0449719],"amplitude_gradient":[-0.00214055,-0.00214055,-0.00214055],"oam_twist":0.498019,"temporal_inertia":0.00289282},
+  {"packet_id":7,"bin_center":17,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[-0.0304773,-0.0304773,-0.0304773],"amplitude_gradient":[-0.00267488,-0.00267488,-0.00267488],"oam_twist":0.997768,"temporal_inertia":0.00222396},
+  {"packet_id":8,"bin_center":17,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[-0.119225,-0.119225,-0.119225],"amplitude_gradient":[-0.00280746,-0.00280746,-0.00280746],"oam_twist":-0.997762,"temporal_inertia":0.00180824},
+  {"packet_id":9,"bin_center":20,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[0.0300746,0.0300746,0.0300746],"amplitude_gradient":[-0.00195464,-0.00195464,-0.00195464],"oam_twist":-0.494474,"temporal_inertia":0.00237779},
+  {"packet_id":10,"bin_center":17,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[0.0518545,0.0518545,0.0518545],"amplitude_gradient":[-0.00248058,-0.00248058,-0.00248058],"oam_twist":0.498885,"temporal_inertia":0.00169988},
+  {"packet_id":11,"bin_center":18,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[0.0684188,0.0684188,0.0684188],"amplitude_gradient":[-0.00259192,-0.00259192,-0.00259192],"oam_twist":0.997768,"temporal_inertia":0.00248233},
+  {"packet_id":12,"bin_center":20,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[0.0203485,0.0203485,0.0203485],"amplitude_gradient":[-0.00177991,-0.00177991,-0.00177991],"oam_twist":-0.979217,"temporal_inertia":0.00194708},
+  {"packet_id":13,"bin_center":18,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[-0.0610482,-0.0610482,-0.0610482],"amplitude_gradient":[-0.00229444,-0.00229444,-0.00229444],"oam_twist":-0.495082,"temporal_inertia":0.00229494},
+  {"packet_id":14,"bin_center":18,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[-0.0454246,-0.0454246,-0.0454246],"amplitude_gradient":[-0.00238616,-0.00238616,-0.00238616],"oam_twist":0.498885,"temporal_inertia":0.00273889},
+  {"packet_id":15,"bin_center":21,"tensor":[[1,0,0],[0,1,0],[0,0,1]],"phase_gradient":[-0.0366138,-0.0366138,-0.0366138],"amplitude_gradient":[-0.00161633,-0.00161633,-0.00161633],"oam_twist":0.974898,"temporal_inertia":0.00255643}
+]

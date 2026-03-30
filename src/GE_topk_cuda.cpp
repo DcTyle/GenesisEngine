@@ -1,5 +1,6 @@
 #include "GE_topk_cuda.hpp"
 
+#if defined(EW_ENABLE_CUDA) && (EW_ENABLE_CUDA==1)
 #include <cuda_runtime.h>
 #include <vector>
 
@@ -118,3 +119,14 @@ bool GE_select_topk_cuda(const int64_t* d_scores_q32_32, size_t n_scores,
     // Device->host copies synchronize the default stream.
     return ge_copy_hits(final_idx, final_score, k, out_hits);
 }
+#else
+bool GE_select_topk_cuda(const int64_t* d_scores_q32_32, size_t n_scores,
+                         size_t k_in,
+                         std::vector<GE_OverlapHit>& out_hits) {
+    (void)d_scores_q32_32;
+    (void)n_scores;
+    (void)k_in;
+    out_hits.clear();
+    return false;
+}
+#endif

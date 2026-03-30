@@ -18,6 +18,7 @@
 #include "crawler_encode_cuda.hpp"
 #include "symbol_tokenize_cuda.hpp"
 #include "code_artifact_ops.hpp"
+#include "ew_eq_exec.h"
 #include <map>
 #include "substrate_alu.hpp"
 #include "substrate_harmonics.hpp"
@@ -1014,9 +1015,8 @@ void SubstrateManager::ensure_lattice_gpu_() {
     if (!gpu_lattice_authoritative) return;
     if (lattice_gpu_) return;
     // Deterministic default lattice dimensions for the authoritative substrate.
-    // This is a prototype-scale grid; higher resolutions are configured by the
-    // viewport app and must remain bounded by hardware.
-    const uint32_t gx = 64, gy = 64, gz = 64;
+    // Photon-confinement simulation now defaults to a full 256^3 3D lattice.
+    const uint32_t gx = 256, gy = 256, gz = 256;
     lattice_gpu_.reset(new EwFieldLatticeGpu(gx, gy, gz));
     lattice_gpu_->init(projection_seed);
     // Default density is empty space (no black hole exclusion).
@@ -2939,7 +2939,7 @@ bool SubstrateManager::sim_save_to_file(const std::string& name_ascii) {
     st.ancilla = ancilla;
     st.lanes = lanes;
     st.object_store = object_store;
-    st.nbody_state = nbody;
+    st.nbody_state = nbody_state;
     st.materials_calib_done = materials_calib_done;
     sim_snapshot = st;
     sim_snapshot_valid = true;
@@ -3225,7 +3225,7 @@ if (!in.good()) return false;
     lanes = st.lanes;
     object_store = st.object_store;
     materials_calib_done = st.materials_calib_done;
-    nbody = st.nbody_state;
+    nbody_state = st.nbody_state;
     // Ensure topology vectors are sized.
     const uint32_t need = (uint32_t)anchors.size();
     if (redirect_to.size() < need) redirect_to.resize(need, 0u);
@@ -4363,6 +4363,23 @@ static inline uint32_t ew_read_u32_le(const uint8_t* p) {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
+static inline void ge_wr_u32_le(uint8_t* b, uint32_t off, uint32_t v) {
+    b[off + 0u] = (uint8_t)(v & 0xFFu);
+    b[off + 1u] = (uint8_t)((v >> 8u) & 0xFFu);
+    b[off + 2u] = (uint8_t)((v >> 16u) & 0xFFu);
+    b[off + 3u] = (uint8_t)((v >> 24u) & 0xFFu);
+}
+
+static inline void ge_wr_i32_le(uint8_t* b, uint32_t off, int32_t v) {
+    ge_wr_u32_le(b, off, (uint32_t)v);
+}
+
+static inline void ge_wr_u64_le(uint8_t* b, uint32_t off, uint64_t v) {
+    for (uint32_t k = 0u; k < 8u; ++k) {
+        b[off + k] = (uint8_t)((v >> (8u * k)) & 0xFFu);
+    }
+}
+
 static inline int64_t ew_read_i64_le(const uint8_t* p) {
     uint64_t u = 0;
     for (int i = 0; i < 8; ++i) u |= ((uint64_t)p[i] << (8 * i));
@@ -5239,27 +5256,25 @@ void SubstrateManager::tick() {
             return; // fail closed deterministically
         }
 
-        // Map to 4 freq components and collapse.
-        EwFrequencyComponentQ32_32 fc[4];
-        fc[0].f_hz_q32_32 = (int64_t)sc.f_code * (1LL<<16);
-        fc[0].A_q32_32 = (int64_t)sc.a_code * (1LL<<16);
-        fc[0].phi_turns_q32_32 = (int64_t)sc.v_code * (1LL<<16);
-        fc[0].count_u32 = 1;
-        fc[1].f_hz_q32_32 = (int64_t)sc.v_code * (1LL<<16);
-        fc[1].A_q32_32 = (int64_t)sc.i_code * (1LL<<16);
-        fc[1].phi_turns_q32_32 = (int64_t)sc.f_code * (1LL<<16);
-        fc[1].count_u32 = 1;
-        fc[2].f_hz_q32_32 = (int64_t)sc.i_code * (1LL<<16);
-        fc[2].A_q32_32 = (int64_t)sc.f_code * (1LL<<16);
-        fc[2].phi_turns_q32_32 = (int64_t)sc.a_code * (1LL<<16);
-        fc[2].count_u32 = 1;
-        fc[3].f_hz_q32_32 = (int64_t)sc.a_code * (1LL<<16);
-        fc[3].A_q32_32 = (int64_t)sc.v_code * (1LL<<16);
-        fc[3].phi_turns_q32_32 = (int64_t)sc.i_code * (1LL<<16);
-        fc[3].count_u32 = 1;
+        // Map to 4 frequency components and collapse.
+        std::vector<EwFreqComponentQ32_32> comps;
+        comps.reserve(4u);
+        auto push_comp = [&](int32_t f_code, int32_t a_code, int32_t phi_code) {
+            EwFreqComponentQ32_32 c{};
+            c.f_turns_q32_32 = (int64_t)f_code << 16;
+            c.a_q32_32 = (int64_t)a_code << 16;
+            c.phi_turns_q32_32 = (int64_t)phi_code << 16;
+            comps.push_back(c);
+        };
+        push_comp(sc.f_code, (int32_t)sc.a_code, (int32_t)sc.v_code);
+        push_comp((int32_t)sc.v_code, (int32_t)sc.i_code, sc.f_code);
+        push_comp((int32_t)sc.i_code, sc.f_code, (int32_t)sc.a_code);
+        push_comp((int32_t)sc.a_code, (int32_t)sc.v_code, (int32_t)sc.i_code);
 
         EwCarrierWaveQ32_32 carrier{};
-        ew_collapse_frequency_components_q32_32(fc, 4, &carrier);
+        if (!ew_collapse_frequency_components_q32_32(comps, carrier)) {
+            return;
+        }
 
         uint8_t payload72[72];
         for (int i=0;i<72;++i) payload72[i]=0;
@@ -5290,7 +5305,7 @@ void SubstrateManager::tick() {
         boundary_scale_q32_32 = sim_snapshot.boundary_scale_q32_32;
         anchors = sim_snapshot.anchors;
         ancilla = sim_snapshot.ancilla;
-        nbody = sim_snapshot.nbody_state;
+        nbody_state = sim_snapshot.nbody_state;
         lanes = sim_snapshot.lanes;
         object_store = sim_snapshot.object_store;
         materials_calib_done = sim_snapshot.materials_calib_done;
@@ -5395,7 +5410,7 @@ void SubstrateManager::tick() {
                 if (found < anchors.size()) {
                     Anchor& a = anchors[found];
                     for (int i = 0; i < 3; ++i) a.object_state.pos_q16_16[i] = p.payload.object_register.pos_q16_16[i];
-                    for (int i = 0; i < 4; ++i) a.object_state.rot_q16_16[i] = p.payload.object_register.rot_quat_q16_16[i];
+                    for (int i = 0; i < 4; ++i) a.object_state.rot_quat_q16_16[i] = p.payload.object_register.rot_quat_q16_16[i];
                 }
             } else if (p.kind == EwControlPacketKind::ObjectSetTransform) {
                 const uint64_t obj_id = p.payload.object_xform.object_id_u64;
@@ -5403,7 +5418,7 @@ void SubstrateManager::tick() {
                     if (anchors[ai].kind_u32 == EW_ANCHOR_KIND_OBJECT && anchors[ai].object_id_u64 == obj_id) {
                         Anchor& a = anchors[ai];
                         for (int i = 0; i < 3; ++i) a.object_state.pos_q16_16[i] = p.payload.object_xform.pos_q16_16[i];
-                        for (int i = 0; i < 4; ++i) a.object_state.rot_q16_16[i] = p.payload.object_xform.rot_quat_q16_16[i];
+                        for (int i = 0; i < 4; ++i) a.object_state.rot_quat_q16_16[i] = p.payload.object_xform.rot_quat_q16_16[i];
                         break;
                     }
                 }
@@ -5508,6 +5523,8 @@ if (p.kind == EwControlPacketKind::EditorSetSelection) {
                 }
             }
         }
+    }
+    }
     }
 
     // Planet ancilla update (cosmological bodies). Must run inside substrate.
@@ -7776,7 +7793,7 @@ if (ap && ap->object_id_u64 != 0u) {
                         for (uint32_t i = 0u; i < (uint32_t)anchors.size(); ++i) {
                             const Anchor& a = anchors[i];
                             if (a.kind_u32 != EW_ANCHOR_KIND_SPECTRAL_FIELD) continue;
-                            const int32_t* rc = a.spectral_state.region_center_q16_16;
+                            const int32_t* rc = a.spectral_field_state.region_center_q16_16;
                             const __int128 dx = (__int128)ox - (__int128)rc[0];
                             const __int128 dy = (__int128)oy - (__int128)rc[1];
                             const __int128 dz = (__int128)oz - (__int128)rc[2];
@@ -7803,7 +7820,7 @@ if (ap && ap->object_id_u64 != 0u) {
                     };
 
                     if (sp) {
-                        const EwSpectralFieldAnchorState& ss = sp->spectral_state;
+                        const EwSpectralFieldAnchorState& ss = sp->spectral_field_state;
 
                         // Budget clamp: derived probes must respect the spectral fanout budget
                         // and HOLD behavior (no probe spam during HOLD ticks).
@@ -7878,7 +7895,7 @@ if (ap && ap->object_id_u64 != 0u) {
                     if (vox) {
                         // Respect HOLD: if nearest spectral anchor is holding, suppress
                         // derived boundary probes to avoid misleading overlays.
-                        const bool hold = (sp && sp->spectral_state.hold_tick_u8 != 0u);
+                        const bool hold = (sp && sp->spectral_field_state.hold_tick_u8 != 0u);
                         if (hold) {
                             ed.boundary_viz_count_u32 = 0u;
                         } else {
@@ -7887,7 +7904,7 @@ if (ap && ap->object_id_u64 != 0u) {
                         // Budget clamp: boundary probes share the same fanout budget envelope.
                         uint32_t max_b = EW_EDITOR_BOUNDARY_VIZ_SAMPLES;
                         if (sp) {
-                            const uint32_t b = (sp->spectral_state.fanout_budget_u32 > 0u) ? sp->spectral_state.fanout_budget_u32 : 1u;
+                            const uint32_t b = (sp->spectral_field_state.fanout_budget_u32 > 0u) ? sp->spectral_field_state.fanout_budget_u32 : 1u;
                             const uint32_t cap = (b >= 8u) ? (b / 2u) : 4u;
                             if (cap < max_b) max_b = cap;
                         }
@@ -7896,7 +7913,7 @@ if (ap && ap->object_id_u64 != 0u) {
                         for (int iz = -2; iz < 2 && outb < EW_EDITOR_BOUNDARY_VIZ_SAMPLES; ++iz) {
                             for (int ix = -2; ix < 2 && outb < EW_EDITOR_BOUNDARY_VIZ_SAMPLES; ++ix) {
                                 if (outb >= max_b) break;
-                                int32_t p[3] = { sel_pos_q16_16[0] + ix*step, sel_pos_q16_16[1], sel_pos_q16_16[2] + iz*step };
+                                int32_t p[3] = { cx + ix*step, cy, cz + iz*step };
 
                                 // Map point to voxel index.
                                 const EwVoxelCouplingAnchorState& vs = vox->voxel_coupling_state;
@@ -8283,6 +8300,7 @@ if (ap && ap->object_id_u64 != 0u) {
     // Refresh carrier ring for the next tick. Keep the ring bounded and
     // deterministic (one pulse per anchor).
     carrier_ring = outbound;
+}
 }
 
 void SubstrateManager::inject_text_utf8(const char* utf8) {

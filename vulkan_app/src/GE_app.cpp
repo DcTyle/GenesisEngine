@@ -1,20 +1,12 @@
-#include
+#include "GE_app.hpp"
 
-    // Snap controls (editor-side convenience; still emits packets only).
-        hwnd_xform_snap_ = CreateWindowW(L"BUTTON", L"Snap",
-                                         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                                         10, 312, 60, 20,
-                                         hwnd_panel_, (HMENU)2020, GetModuleHandleW(nullptr), nullptr);
-        hwnd_xform_step_label_ = CreateWindowW(L"STATIC", L"Step (m):",
-                                               WS_CHILD | WS_VISIBLE,
-                                               80, 314, 60, 18,
-                                               hwnd_panel_, (HMENU)2021, GetModuleHandleW(nullptr), nullptr);
-    
- "GE_app.hpp"
-
+#ifndef VK_USE_PLATFORM_WIN32_KHR
+#define VK_USE_PLATFORM_WIN32_KHR 1
+#endif
 #include <vulkan/vulkan.h>
 #include <shellscalingapi.h>
 #include <commdlg.h>
+#include <windowsx.h>
 
 #include <algorithm>
 #include <cassert>
@@ -26,6 +18,7 @@
 #include <cstdlib>
 
 #include "GE_runtime.hpp" // SubstrateManager
+#include "GE_research_confinement.hpp"
 #include "ew_runtime.h"      // ew_runtime_project_points
 #include "GE_object_memory.hpp"
 #include "field_lattice_cpu.hpp"
@@ -34,6 +27,7 @@
 #include "ewmesh_voxelizer.hpp"
 #include "carrier_bundle_cuda.hpp"
 #include "GE_control_packets.hpp"
+#include "VirtualStateDrive.hpp"
 
 #include <fstream>
 
@@ -44,6 +38,15 @@
 #pragma comment(lib, "Shcore.lib")
 
 namespace ewv {
+
+extern "C" {
+// Hint hybrid-GPU systems to prefer the high-performance adapter.
+__declspec(dllexport) DWORD NvOptimusEnablement = 0x00000001;
+__declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+}
+
+static std::wstring utf8_to_wide(const std::string& s);
+static std::string wide_to_utf8(const std::wstring& s);
 
 // -----------------------------------------------------------------------------
 // Win32 Input Bindings Editor (minimal)
@@ -58,7 +61,7 @@ struct EwBindingsEditorWin32 {
     HWND edit = nullptr;
     HWND btn_save = nullptr;
     std::string path_utf8;
-    EigenWare::SubstrateManager* sm = nullptr;
+    SubstrateManager* sm = nullptr;
 };
 
 static EwBindingsEditorWin32 g_bind_editor;
@@ -147,7 +150,7 @@ static LRESULT CALLBACK EwBindingsEditorProc(HWND h, UINT msg, WPARAM w, LPARAM 
     return DefWindowProcW(h, msg, w, l);
 }
 
-static void ew_open_bindings_editor(EigenWare::SubstrateManager* sm, const std::string& path_utf8) {
+static void ew_open_bindings_editor(SubstrateManager* sm, const std::string& path_utf8) {
     if (g_bind_editor.hwnd) {
         SetForegroundWindow(g_bind_editor.hwnd);
         return;
@@ -234,7 +237,7 @@ static bool write_ewmesh_v1(const std::string& out_path_utf8, const EwObjMesh& m
 }
 
 struct App::Scene {
-    EigenWare::SubstrateManager sm;
+    SubstrateManager sm;
     uint64_t next_object_id_u64 = 1;
 
     // Default solar-system demo state (Earth orbit).
@@ -278,6 +281,317 @@ void refresh_fixed_cache() {
 
     // Shader-facing instance payload updated each frame.
     std::vector<EwRenderInstance> instances;
+    genesis::GeResearchConfinementArchive research_archive;
+    genesis::GeResearchAudioFrame research_audio_frame;
+    std::vector<genesis::GeResearchParticleVizPoint> research_points;
+    std::vector<std::string> local_output_lines;
+    std::filesystem::path research_watch_file;
+    std::filesystem::path research_cmd_file;
+    std::filesystem::file_time_type research_cmd_write_time{};
+    std::filesystem::file_time_type research_watch_write_time{};
+    uint64_t research_cmd_read_offset_u64 = 0u;
+    uint64_t research_reload_probe_tick_u64 = 0u;
+    uint64_t research_cmd_probe_tick_u64 = 0u;
+    bool research_visual_stream_enabled = true;
+    bool research_use_compute_audio = true;
+    uint32_t research_visual_stream_hz_u32 = 360u;
+    size_t research_visual_max_points = 20000u;
+    uint64_t research_visual_last_tick_u64 = 0u;
+    uint8_t research_output_mode_u8 = 1u; // 1=frequency/all, 2=vector-only extrapolation
+    bool research_stov_mode = false;
+    float research_param_a = 0.19f;
+    float research_param_f = 0.245f;
+    float research_param_i = 0.35f;
+    float research_param_v = 0.35f;
+    uint32_t research_lattice_edge_u32 = 256u;
+    genesis::VirtualStateDrive research_runtime_vsd;
+
+    void PushLocalUiLine(const std::string& line_utf8) {
+        if (line_utf8.empty()) return;
+        if (local_output_lines.size() >= 64u) {
+            local_output_lines.erase(local_output_lines.begin());
+        }
+        local_output_lines.push_back(line_utf8);
+    }
+
+    static uint32_t ClampLatticeEdge(uint32_t edge_u32) {
+        if (edge_u32 < 256u) return 256u;
+        if (edge_u32 > 20000u) return 20000u;
+        return edge_u32;
+    }
+
+    static uint32_t LatticeEdgeFromScaleStep(uint32_t step_u32) {
+        // Requested policy: 3((D1)n^2) growth; we model this as 256*n^2 for isotropic 3D scaling.
+        const uint64_t n = (uint64_t)std::max<uint32_t>(step_u32, 1u);
+        const uint64_t edge = 256ull * n * n;
+        return ClampLatticeEdge((uint32_t)std::min<uint64_t>(edge, 20000ull));
+    }
+
+    void PersistResearchRuntimeState() {
+        (void)research_runtime_vsd.put_u64("photon/runtime/lattice_edge",
+                                           "runtime lattice edge",
+                                           (uint64_t)research_lattice_edge_u32);
+        (void)research_runtime_vsd.put_f64("photon/runtime/param_a",
+                                           "a_code amplitude driver",
+                                           (double)research_param_a);
+        (void)research_runtime_vsd.put_f64("photon/runtime/param_f",
+                                           "f_code frequency driver",
+                                           (double)research_param_f);
+        (void)research_runtime_vsd.put_f64("photon/runtime/param_i",
+                                           "i_code amperage compression",
+                                           (double)research_param_i);
+        (void)research_runtime_vsd.put_f64("photon/runtime/param_v",
+                                           "v_code voltage phase tilt",
+                                           (double)research_param_v);
+        (void)research_runtime_vsd.put_u64("photon/runtime/output_mode",
+                                           "1=freq 2=vector",
+                                           (uint64_t)research_output_mode_u8);
+        (void)research_runtime_vsd.put_u64("photon/runtime/stov_mode",
+                                           "runtime stov toggle",
+                                           research_stov_mode ? 1u : 0u);
+        (void)research_runtime_vsd.put_u64("photon/runtime/stream_hz",
+                                           "visual stream hz",
+                                           (uint64_t)research_visual_stream_hz_u32);
+
+        std::vector<uint8_t> blob;
+        if (!research_runtime_vsd.serialize_binary(blob)) return;
+        std::filesystem::path root = research_archive.root_dir;
+        if (root.empty()) root = std::filesystem::current_path() / "ResearchConfinement";
+        std::error_code ec;
+        std::filesystem::create_directories(root, ec);
+        const std::filesystem::path out = root / "photon_volume_expansion.gevsd";
+        std::ofstream f(out, std::ios::binary | std::ios::trunc);
+        if (!f.good()) return;
+        f.write(reinterpret_cast<const char*>(blob.data()), (std::streamsize)blob.size());
+    }
+
+    void SetResearchOutputMode(uint8_t mode_u8, bool announce = true) {
+        research_output_mode_u8 = (mode_u8 == 2u) ? 2u : 1u;
+        PersistResearchRuntimeState();
+        if (announce) {
+            PushLocalUiLine(research_output_mode_u8 == 2u
+                                ? "RESEARCH_FREQ:mode=vector"
+                                : "RESEARCH_FREQ:mode=frequency");
+        }
+    }
+
+    void SetResearchStovMode(bool enable, bool announce = true) {
+        research_stov_mode = enable;
+        PersistResearchRuntimeState();
+        if (announce) {
+            PushLocalUiLine(research_stov_mode ? "RESEARCH_FREQ:stov=on" : "RESEARCH_FREQ:stov=off");
+        }
+    }
+
+    void SetResearchParams(float a, float f, float i, float v, bool announce = true) {
+        research_param_a = std::max(0.0f, a);
+        research_param_f = std::max(0.0f, f);
+        research_param_i = std::max(0.0f, i);
+        research_param_v = std::max(0.0f, v);
+        PersistResearchRuntimeState();
+        if (announce) {
+            std::ostringstream oss;
+            oss << "RESEARCH_FREQ:params A=" << research_param_a
+                << " F=" << research_param_f
+                << " I=" << research_param_i
+                << " V=" << research_param_v;
+            PushLocalUiLine(oss.str());
+        }
+    }
+
+    void SetResearchLatticeEdge(uint32_t edge_u32, bool announce = true) {
+        research_lattice_edge_u32 = ClampLatticeEdge(edge_u32);
+        research_visual_max_points = (size_t)std::max<uint32_t>(256u, std::min<uint32_t>(20000u, research_lattice_edge_u32));
+        PersistResearchRuntimeState();
+        if (announce) {
+            std::ostringstream oss;
+            oss << "RESEARCH_FREQ:lattice_edge=" << research_lattice_edge_u32
+                << " max_points=" << research_visual_max_points;
+            PushLocalUiLine(oss.str());
+        }
+    }
+
+    void ScaleResearchLatticeByStepDelta(int32_t step_delta_i32, bool announce = true) {
+        const uint32_t current_step =
+            (uint32_t)std::max<int32_t>(1, (int32_t)std::lround(std::sqrt((double)research_lattice_edge_u32 / 256.0)));
+        const int32_t next_step_i32 = std::max<int32_t>(1, current_step + step_delta_i32);
+        const uint32_t next_edge = LatticeEdgeFromScaleStep((uint32_t)next_step_i32);
+        SetResearchLatticeEdge(next_edge, announce);
+    }
+
+    void SetResearchStreamHz(uint32_t hz_u32, bool announce = true) {
+        research_visual_stream_hz_u32 = std::max<uint32_t>(60u, std::min<uint32_t>(hz_u32, 360u));
+        PersistResearchRuntimeState();
+        if (announce) {
+            std::ostringstream oss;
+            oss << "RESEARCH_FREQ:stream_hz=" << research_visual_stream_hz_u32;
+            PushLocalUiLine(oss.str());
+        }
+    }
+
+    void SyncResearchWatchState() {
+        research_watch_file.clear();
+        research_cmd_file.clear();
+        std::error_code ec;
+        if (research_archive.root_dir.empty()) return;
+        const std::filesystem::path probe = research_archive.root_dir / "photon_packet_trajectory_sample.json";
+        if (!std::filesystem::exists(probe, ec) || !std::filesystem::is_regular_file(probe, ec)) return;
+        research_watch_file = probe;
+        research_cmd_file = research_archive.root_dir / "runtime_commands.txt";
+        ec.clear();
+        const auto write_time = std::filesystem::last_write_time(research_watch_file, ec);
+        if (!ec) {
+            research_watch_write_time = write_time;
+        }
+        ec.clear();
+        const auto cmd_write_time = std::filesystem::last_write_time(research_cmd_file, ec);
+        if (!ec) {
+            research_cmd_write_time = cmd_write_time;
+            const uint64_t cmd_size = (uint64_t)std::filesystem::file_size(research_cmd_file, ec);
+            if (!ec) research_cmd_read_offset_u64 = cmd_size;
+        }
+    }
+
+    void ReloadResearchArchive(bool announce) {
+        genesis::GeResearchConfinementArchive next_archive = genesis::ge_load_research_confinement_archive();
+        if (next_archive.loaded) {
+            research_archive = std::move(next_archive);
+            research_points.clear();
+            research_audio_frame = genesis::GeResearchAudioFrame{};
+            SyncResearchWatchState();
+            if (announce) {
+                std::ostringstream oss;
+                oss << "RESEARCH_FREQ:reloaded packets="
+                    << research_archive.packet_path_classes.size()
+                    << " tensor=" << research_archive.tensor6d_cells.size()
+                    << " vectors=" << research_archive.vector_excitations.size();
+                PushLocalUiLine(oss.str());
+            }
+        } else if (announce) {
+            const std::string msg = next_archive.load_error_utf8.empty()
+                ? std::string("unknown_error")
+                : next_archive.load_error_utf8;
+            PushLocalUiLine(std::string("RESEARCH_FREQ:reload_failed reason=") + msg);
+        }
+    }
+
+    void PollResearchArchiveHotReload() {
+        const uint64_t tick_u64 = sm.canonical_tick;
+        if (tick_u64 < research_reload_probe_tick_u64 + 120u) return;
+        research_reload_probe_tick_u64 = tick_u64;
+
+        if (research_watch_file.empty()) {
+            SyncResearchWatchState();
+            return;
+        }
+
+        std::error_code ec;
+        const auto write_time = std::filesystem::last_write_time(research_watch_file, ec);
+        if (ec) return;
+        if (write_time != research_watch_write_time) {
+            research_watch_write_time = write_time;
+            ReloadResearchArchive(true);
+        }
+    }
+
+    void PollResearchCommandFile() {
+        const uint64_t tick_u64 = sm.canonical_tick;
+        if (tick_u64 < research_cmd_probe_tick_u64 + 45u) return;
+        research_cmd_probe_tick_u64 = tick_u64;
+        if (research_cmd_file.empty()) return;
+
+        std::error_code ec;
+        const auto write_time = std::filesystem::last_write_time(research_cmd_file, ec);
+        if (ec) return;
+        if (write_time == research_cmd_write_time) return;
+        research_cmd_write_time = write_time;
+
+        std::ifstream f(research_cmd_file, std::ios::in | std::ios::binary);
+        if (!f.good()) return;
+        const uint64_t file_size = (uint64_t)std::filesystem::file_size(research_cmd_file, ec);
+        if (ec) return;
+        if (file_size < research_cmd_read_offset_u64) {
+            // File rotated/truncated; restart from beginning.
+            research_cmd_read_offset_u64 = 0u;
+        }
+        if (research_cmd_read_offset_u64 > 0u) {
+            f.seekg((std::streamoff)research_cmd_read_offset_u64, std::ios::beg);
+            if (!f.good()) {
+                f.clear();
+                f.seekg(0, std::ios::beg);
+                research_cmd_read_offset_u64 = 0u;
+            }
+        }
+        std::string line;
+        while (std::getline(f, line)) {
+            if (line.empty()) continue;
+            SubmitUiLine(line);
+        }
+        std::streampos end_pos = f.tellg();
+        if (end_pos < (std::streampos)0) {
+            research_cmd_read_offset_u64 = file_size;
+        } else {
+            research_cmd_read_offset_u64 = (uint64_t)end_pos;
+        }
+    }
+
+    void RunFrequencySimulator(bool write_root_samples) {
+        std::filesystem::path repo_root = std::filesystem::current_path();
+        const std::vector<std::filesystem::path> candidates = {
+            repo_root / "out" / "build" / "win64-vs2022-clang-vulkan" / "Release" / "photon_frequency_domain_sim.exe",
+            repo_root / "out" / "build" / "win64-vs2022-clang-vulkan" / "Debug" / "photon_frequency_domain_sim.exe",
+            repo_root / "photon_frequency_domain_sim.exe"
+        };
+        std::filesystem::path exe;
+        for (const auto& path : candidates) {
+            std::error_code ec;
+            if (std::filesystem::exists(path, ec) && std::filesystem::is_regular_file(path, ec)) {
+                exe = path;
+                break;
+            }
+        }
+        if (exe.empty()) {
+            PushLocalUiLine("RESEARCH_FREQ:run_failed reason=sim_exe_not_found");
+            return;
+        }
+
+        std::ostringstream cmd;
+        cmd << "\"" << exe.string() << "\"";
+        if (write_root_samples) cmd << " --write-root-samples";
+        cmd << " --equivalent-grid-linear " << research_lattice_edge_u32;
+        // Map runtime A/F/I/V control into simulator axes.
+        const int bin_count = (int)std::max(64.0f, std::min(128.0f, 64.0f + 64.0f * research_param_f));
+        const int packet_count = (int)std::max(10.0f, std::min(50.0f, 10.0f + 40.0f * research_param_a));
+        const int steps = (int)std::max(24.0f, std::min(160.0f, 24.0f + 136.0f * research_param_i));
+        const int recon_samples = (int)std::max(128.0f, std::min(1024.0f, 128.0f + 896.0f * research_param_v));
+        cmd << " --bin-count " << bin_count;
+        cmd << " --packet-count " << packet_count;
+        cmd << " --steps " << steps;
+        cmd << " --recon-samples " << recon_samples;
+        cmd << " --pulse-frequency " << std::max(0.0f, std::min(1.0f, research_param_f));
+        cmd << " --pulse-amplitude " << std::max(0.0f, std::min(1.0f, research_param_a));
+        cmd << " --pulse-amperage " << std::max(0.0f, std::min(1.0f, research_param_i));
+        cmd << " --pulse-voltage " << std::max(0.0f, std::min(1.0f, research_param_v));
+
+        std::filesystem::path nist_path = research_archive.root_dir.empty()
+            ? (repo_root / "ResearchConfinement" / "nist_silicon_reference.json")
+            : (research_archive.root_dir / "nist_silicon_reference.json");
+        std::error_code nist_ec;
+        if (std::filesystem::exists(nist_path, nist_ec) && std::filesystem::is_regular_file(nist_path, nist_ec)) {
+            cmd << " --nist-ref \"" << nist_path.string() << "\"";
+        }
+        PushLocalUiLine(std::string("RESEARCH_FREQ:run_start exe=") + exe.string());
+
+        const int rc = std::system(cmd.str().c_str());
+        if (rc == 0) {
+            PushLocalUiLine("RESEARCH_FREQ:run_complete code=0");
+            ReloadResearchArchive(true);
+        } else {
+            std::ostringstream oss;
+            oss << "RESEARCH_FREQ:run_failed code=" << rc;
+            PushLocalUiLine(oss.str());
+        }
+    }
 
     Scene() : sm(128), lattice(128u, 128u, 128u) {
         // seed one anchor pulse so AI loop is alive
@@ -289,6 +603,10 @@ void refresh_fixed_cache() {
         density_mask_u8.assign((size_t)128u * (size_t)128u * (size_t)128u, 0u);
         // Deterministic seed constant (ASCII mnemonic encoded as hex-ish).
         lattice.init(0xE16E5151ULL);
+        research_archive = genesis::ge_load_research_confinement_archive();
+        research_points.reserve(20000u);
+        SyncResearchWatchState();
+        PersistResearchRuntimeState();
 
 // ------------------------------------------------------------
 // Default level: Sun + Earth (minimum viable game world)
@@ -367,18 +685,19 @@ void refresh_fixed_cache() {
     }
 
     
-void Tick() {
+    void Tick() {
     sm.tick();
+    PollResearchArchiveHotReload();
+    PollResearchCommandFile();
 
 
     // Pull authoritative render-object packets from substrate (object/planet anchors).
     {
         const EwRenderObjectPacket* ptr = nullptr;
-        uint32_t count = 0u;
-        uint64_t tick_u64 = 0u;
-        if (ew_runtime_get_render_object_packets(&sm, &ptr, &count, &tick_u64) && ptr && count > 0u) {
+        size_t count = 0u;
+        if (ew_runtime_get_render_object_packets(&sm, &ptr, &count) && ptr && count > 0u) {
             // Update local scene cache for UI selection lists (not authoritative).
-            for (uint32_t i = 0u; i < count; ++i) {
+            for (size_t i = 0u; i < count; ++i) {
                 const EwRenderObjectPacket& p = ptr[i];
                 for (auto& o : objects) {
                     if (o.object_id_u64 == p.object_id_u64) {
@@ -386,7 +705,6 @@ void Tick() {
                         o.xf.pos[0] = (float)p.pos_q16_16[0] / 65536.0f;
                         o.xf.pos[1] = (float)p.pos_q16_16[1] / 65536.0f;
                         o.xf.pos[2] = (float)p.pos_q16_16[2] / 65536.0f;
-                        for (int k = 0; k < 4; ++k) o.rot_quat_q16_16[k] = p.rot_quat_q16_16[k];
                         o.radius_m_f32 = (float)p.radius_q16_16 / 65536.0f;
                         o.albedo_rgba8 = p.albedo_rgba8;
                         o.atmosphere_rgba8 = p.atmosphere_rgba8;
@@ -413,28 +731,181 @@ void Tick() {
     // Wrap
     if (earth_orbit_angle_rad > 2.0 * 3.14159265358979323846) earth_orbit_angle_rad -= 2.0 * 3.14159265358979323846;
 
-    const float AU = 149597870700.0f;
-    if (objects.size() >= 2) {
-        Object& earth = objects[1];
-        // Orbit updates are substrate-authoritative; viewport does not compute analytic motion.
-        // Earth position is updated from substrate-projected object packets when available.
-        (void)earth_orbit_angle_rad;
+    // Orbit updates are substrate-authoritative; viewport does not compute analytic motion.
+    // Earth position is updated from substrate-projected object packets when available.
+    (void)earth_orbit_angle_rad;
+
+    // Frequency-domain mode does not require voxel stepping; vector mode keeps lattice stepping active.
+    if (research_output_mode_u8 == 2u) {
+        lattice.step_one_tick();
     }
 
-    lattice.step_one_tick();
+    if (genesis::ge_has_research_realtime_outputs(research_archive)) {
+        if (research_visual_stream_enabled) {
+            const uint32_t hz = std::max<uint32_t>(research_visual_stream_hz_u32, 1u);
+            const float frame_phase_01 = (float)((double)(sm.canonical_tick % hz) / (double)hz);
+            const float temporal_coupling_01 =
+                std::max(0.0f, std::min(1.0f,
+                                        0.40f + 0.30f * research_param_a +
+                                        0.20f * research_param_f +
+                                        0.15f * std::sin(frame_phase_01 * 6.2831853f + research_param_v)));
+            genesis::ge_build_research_particle_viz(research_archive,
+                                                    sm.canonical_tick,
+                                                    research_visual_max_points,
+                                                    frame_phase_01,
+                                                    temporal_coupling_01,
+                                                    research_points);
+            if (research_stov_mode) {
+                // STOV mode: apply a paraxial helical phase ramp in the moving frame proxy.
+                // This keeps emergence tied to phase/temporal coupling without injecting explicit vectors.
+                for (size_t i = 0u; i < research_points.size(); ++i) {
+                    auto& p = research_points[i];
+                    const float phi = std::atan2(p.y, p.x);
+                    const float charge_l = (float)((int)(i % 4u) - 2);
+                    const float helical = std::sin(phi * charge_l + frame_phase_01 * 6.2831853f);
+                    const float swirl = 0.015f * (0.5f + 0.5f * p.temporal_coupling);
+                    const float tx = p.x;
+                    const float ty = p.y;
+                    p.x = tx - ty * swirl * helical;
+                    p.y = ty + tx * swirl * helical;
+                    p.phase_bias = std::max(-1.0f, std::min(1.0f, p.phase_bias + 0.35f * helical));
+                    p.curvature_n = std::max(0.0f, std::min(1.0f, p.curvature_n + 0.20f * std::fabs(helical)));
+                }
+            }
+            if (research_output_mode_u8 == 2u) {
+                // Vector-only mode: show extrapolated vector + tensor glyph layers.
+                research_points.erase(std::remove_if(research_points.begin(),
+                                                     research_points.end(),
+                                                     [](const genesis::GeResearchParticleVizPoint& p) {
+                                                         return !(p.render_kind_u32 == 4u || p.render_kind_u32 == 5u);
+                                                     }),
+                                     research_points.end());
+            }
+            research_visual_last_tick_u64 = sm.canonical_tick;
+        }
+        if (!research_use_compute_audio) {
+            genesis::ge_build_research_audio_frame(research_archive, sm.canonical_tick, 64u, research_audio_frame);
+            if (!research_audio_frame.interleaved_pcm16.empty()) {
+                sm.inject_audio_pcm16(research_audio_frame.interleaved_pcm16.data(),
+                                      (int)(research_audio_frame.interleaved_pcm16.size() /
+                                            (size_t)std::max<uint32_t>(research_audio_frame.channel_count_u32, 1u)),
+                                      (int)research_audio_frame.channel_count_u32);
+            }
+        } else {
+            research_audio_frame = genesis::GeResearchAudioFrame{};
+        }
+    } else {
+        research_audio_frame = genesis::GeResearchAudioFrame{};
+        research_points.clear();
+    }
 }
 
     bool PopUiLine(std::string& out_utf8) {
+        if (!local_output_lines.empty()) {
+            out_utf8 = local_output_lines.front();
+            local_output_lines.erase(local_output_lines.begin());
+            return true;
+        }
         return sm.ui_pop_output_text(out_utf8);
     }
 
     void SubmitUiLine(const std::string& utf8) {
+        if (utf8.rfind("/research_reload", 0) == 0 || utf8.rfind("research_reload:", 0) == 0 ||
+            utf8.rfind("/sim_freq_reload", 0) == 0 || utf8.rfind("sim_freq_reload:", 0) == 0) {
+            ReloadResearchArchive(true);
+            return;
+        }
+        if (utf8.rfind("/sim_freq_run", 0) == 0 || utf8.rfind("sim_freq_run:", 0) == 0) {
+            RunFrequencySimulator(true);
+            return;
+        }
+        if (utf8.rfind("/sim_freq_status", 0) == 0 || utf8.rfind("sim_freq_status:", 0) == 0) {
+            std::ostringstream oss;
+            oss << "RESEARCH_FREQ:loaded=" << (research_archive.loaded ? 1 : 0)
+                << " packets=" << research_archive.packet_path_classes.size()
+                << " tensor=" << research_archive.tensor6d_cells.size()
+                << " vectors=" << research_archive.vector_excitations.size()
+                << " audio=" << research_archive.audio_waveform.size()
+                << " stream_hz=" << research_visual_stream_hz_u32
+                << " stream_tick=" << research_visual_last_tick_u64
+                << " stream_points=" << research_points.size()
+                << " mode=" << ((research_output_mode_u8 == 2u) ? "vector" : "frequency")
+                << " stov=" << (research_stov_mode ? 1 : 0)
+                << " lattice_edge=" << research_lattice_edge_u32
+                << " A=" << research_param_a
+                << " F=" << research_param_f
+                << " I=" << research_param_i
+                << " V=" << research_param_v;
+            PushLocalUiLine(oss.str());
+            return;
+        }
+        if (utf8.rfind("/sim_mode", 0) == 0 || utf8.rfind("sim_mode:", 0) == 0) {
+            if (utf8.find("vector") != std::string::npos || utf8.find("VECTOR") != std::string::npos) {
+                SetResearchOutputMode(2u, true);
+            } else {
+                SetResearchOutputMode(1u, true);
+            }
+            return;
+        }
+        if (utf8.rfind("/stov_mode", 0) == 0 || utf8.rfind("stov_mode:", 0) == 0) {
+            const bool on = (utf8.find("1") != std::string::npos ||
+                             utf8.find("on") != std::string::npos ||
+                             utf8.find("ON") != std::string::npos ||
+                             utf8.find("true") != std::string::npos ||
+                             utf8.find("TRUE") != std::string::npos);
+            SetResearchStovMode(on, true);
+            return;
+        }
+        if (utf8.rfind("/sim_stream_hz", 0) == 0 || utf8.rfind("sim_stream_hz:", 0) == 0) {
+            const std::size_t sp = utf8.find_last_of("=:");
+            if (sp != std::string::npos && sp + 1 < utf8.size()) {
+                const uint32_t hz = (uint32_t)std::strtoul(utf8.substr(sp + 1).c_str(), nullptr, 10);
+                SetResearchStreamHz(hz, true);
+            }
+            return;
+        }
+        if (utf8.rfind("/sim_lattice_edge", 0) == 0 || utf8.rfind("sim_lattice_edge:", 0) == 0) {
+            const std::size_t sp = utf8.find_last_of("=:");
+            if (sp != std::string::npos && sp + 1 < utf8.size()) {
+                const uint32_t edge = (uint32_t)std::strtoul(utf8.substr(sp + 1).c_str(), nullptr, 10);
+                SetResearchLatticeEdge(edge, true);
+            }
+            return;
+        }
+        if (utf8.rfind("/sim_param", 0) == 0 || utf8.rfind("sim_param:", 0) == 0) {
+            const std::size_t eq = utf8.find('=');
+            if (eq != std::string::npos && eq + 1 < utf8.size()) {
+                std::string payload = utf8.substr(eq + 1);
+                for (char& ch : payload) {
+                    if (ch == ',' || ch == ';') ch = ' ';
+                }
+                std::istringstream iss(payload);
+                float a = research_param_a;
+                float f = research_param_f;
+                float i = research_param_i;
+                float v = research_param_v;
+                std::string token;
+                while (iss >> token) {
+                    const std::size_t colon = token.find(':');
+                    if (colon == std::string::npos) continue;
+                    const std::string k = token.substr(0, colon);
+                    const float val = (float)std::atof(token.substr(colon + 1).c_str());
+                    if (k == "A" || k == "a") a = val;
+                    else if (k == "F" || k == "f") f = val;
+                    else if (k == "I" || k == "i") i = val;
+                    else if (k == "V" || k == "v") v = val;
+                }
+                SetResearchParams(a, f, i, v, true);
+            }
+            return;
+        }
         sm.ui_submit_user_text_line(utf8);
     }
 
     static bool genesis_synthesize_voxelize_local(EwObjectStore& store,
                                                   const EwObjMesh& mesh,
                                                   uint64_t object_id_u64,
+                                                  bool materials_calib_done,
                                                   uint32_t grid_x_u32,
                                                   uint32_t grid_y_u32,
                                                   uint32_t grid_z_u32) {
@@ -454,7 +925,7 @@ void Tick() {
         }
 
         std::vector<uint8_t> occ;
-        if (!genesis::ewmesh_voxelize_occupancy_u8(m, sm.materials_calib_done, grid_x_u32, grid_y_u32, grid_z_u32, occ)) return false;
+        if (!genesis::ewmesh_voxelize_occupancy_u8(m, materials_calib_done, grid_x_u32, grid_y_u32, grid_z_u32, occ)) return false;
 
         if (!store.upsert_voxel_volume_occupancy_u8(object_id_u64, grid_x_u32, grid_y_u32, grid_z_u32, occ.data(), occ.size())) {
             return false;
@@ -561,7 +1032,7 @@ void Tick() {
         const EwObjectEntry* e_check = sm.object_store.find(object_id);
         const bool needs_vox = (!e_check) || (e_check->voxel_format_u32 == 0u) || (e_check->voxel_grid_x_u32 == 0u);
         if (needs_vox) {
-            if (!genesis_synthesize_voxelize_local(sm.object_store, m, object_id, synth_g, synth_g, synth_g)) return false;
+            if (!genesis_synthesize_voxelize_local(sm.object_store, m, object_id, sm.materials_calib_done, synth_g, synth_g, synth_g)) return false;
         }
 
         // Bind synthesized density into the lattice (physics field).
@@ -666,6 +1137,40 @@ struct App::VkCtx {
     VkDeviceMemory cam_out_mem = VK_NULL_HANDLE;
     void* cam_out_mapped = nullptr;
 
+    // Photon-native compute pipelines (frequency -> color/audio stream)
+    VkDescriptorSetLayout photon_visual_ds_layout = VK_NULL_HANDLE;
+    VkPipelineLayout photon_visual_pipe_layout = VK_NULL_HANDLE;
+    VkPipeline photon_visual_pipe = VK_NULL_HANDLE;
+    VkDescriptorPool photon_visual_ds_pool = VK_NULL_HANDLE;
+    VkDescriptorSet photon_visual_ds = VK_NULL_HANDLE;
+    VkBuffer photon_visual_in_buf = VK_NULL_HANDLE;
+    VkDeviceMemory photon_visual_in_mem = VK_NULL_HANDLE;
+    void* photon_visual_in_mapped = nullptr;
+    VkDeviceSize photon_visual_in_capacity = 0;
+    VkBuffer photon_visual_out_buf = VK_NULL_HANDLE;
+    VkDeviceMemory photon_visual_out_mem = VK_NULL_HANDLE;
+    void* photon_visual_out_mapped = nullptr;
+    VkDeviceSize photon_visual_out_capacity = 0;
+
+    VkDescriptorSetLayout photon_audio_ds_layout = VK_NULL_HANDLE;
+    VkPipelineLayout photon_audio_pipe_layout = VK_NULL_HANDLE;
+    VkPipeline photon_audio_pipe = VK_NULL_HANDLE;
+    VkDescriptorPool photon_audio_ds_pool = VK_NULL_HANDLE;
+    VkDescriptorSet photon_audio_ds = VK_NULL_HANDLE;
+    VkBuffer photon_audio_phase_buf = VK_NULL_HANDLE;
+    VkDeviceMemory photon_audio_phase_mem = VK_NULL_HANDLE;
+    void* photon_audio_phase_mapped = nullptr;
+    VkDeviceSize photon_audio_phase_capacity = 0;
+    VkBuffer photon_audio_oam_buf = VK_NULL_HANDLE;
+    VkDeviceMemory photon_audio_oam_mem = VK_NULL_HANDLE;
+    void* photon_audio_oam_mapped = nullptr;
+    VkDeviceSize photon_audio_oam_capacity = 0;
+    VkBuffer photon_audio_out_buf = VK_NULL_HANDLE;
+    VkDeviceMemory photon_audio_out_mem = VK_NULL_HANDLE;
+    void* photon_audio_out_mapped = nullptr;
+    VkDeviceSize photon_audio_out_capacity = 0;
+    uint32_t photon_audio_last_count_u32 = 0u;
+
     // Production virtual texture system: atlas + page table.
     VkImage vt_atlas_image = VK_NULL_HANDLE;
     VkDeviceMemory vt_atlas_mem = VK_NULL_HANDLE;
@@ -729,6 +1234,46 @@ struct App::VkCtx {
                 cam_out_buf = VK_NULL_HANDLE;
             }
             if (cam_out_mem) { vkFreeMemory(dev, cam_out_mem, nullptr); cam_out_mem = VK_NULL_HANDLE; }
+
+            if (photon_visual_pipe) { vkDestroyPipeline(dev, photon_visual_pipe, nullptr); photon_visual_pipe = VK_NULL_HANDLE; }
+            if (photon_visual_pipe_layout) { vkDestroyPipelineLayout(dev, photon_visual_pipe_layout, nullptr); photon_visual_pipe_layout = VK_NULL_HANDLE; }
+            if (photon_visual_ds_layout) { vkDestroyDescriptorSetLayout(dev, photon_visual_ds_layout, nullptr); photon_visual_ds_layout = VK_NULL_HANDLE; }
+            if (photon_visual_ds_pool) { vkDestroyDescriptorPool(dev, photon_visual_ds_pool, nullptr); photon_visual_ds_pool = VK_NULL_HANDLE; }
+            if (photon_visual_in_buf) {
+                if (photon_visual_in_mapped) { vkUnmapMemory(dev, photon_visual_in_mem); photon_visual_in_mapped = nullptr; }
+                vkDestroyBuffer(dev, photon_visual_in_buf, nullptr);
+                photon_visual_in_buf = VK_NULL_HANDLE;
+            }
+            if (photon_visual_in_mem) { vkFreeMemory(dev, photon_visual_in_mem, nullptr); photon_visual_in_mem = VK_NULL_HANDLE; }
+            if (photon_visual_out_buf) {
+                if (photon_visual_out_mapped) { vkUnmapMemory(dev, photon_visual_out_mem); photon_visual_out_mapped = nullptr; }
+                vkDestroyBuffer(dev, photon_visual_out_buf, nullptr);
+                photon_visual_out_buf = VK_NULL_HANDLE;
+            }
+            if (photon_visual_out_mem) { vkFreeMemory(dev, photon_visual_out_mem, nullptr); photon_visual_out_mem = VK_NULL_HANDLE; }
+
+            if (photon_audio_pipe) { vkDestroyPipeline(dev, photon_audio_pipe, nullptr); photon_audio_pipe = VK_NULL_HANDLE; }
+            if (photon_audio_pipe_layout) { vkDestroyPipelineLayout(dev, photon_audio_pipe_layout, nullptr); photon_audio_pipe_layout = VK_NULL_HANDLE; }
+            if (photon_audio_ds_layout) { vkDestroyDescriptorSetLayout(dev, photon_audio_ds_layout, nullptr); photon_audio_ds_layout = VK_NULL_HANDLE; }
+            if (photon_audio_ds_pool) { vkDestroyDescriptorPool(dev, photon_audio_ds_pool, nullptr); photon_audio_ds_pool = VK_NULL_HANDLE; }
+            if (photon_audio_phase_buf) {
+                if (photon_audio_phase_mapped) { vkUnmapMemory(dev, photon_audio_phase_mem); photon_audio_phase_mapped = nullptr; }
+                vkDestroyBuffer(dev, photon_audio_phase_buf, nullptr);
+                photon_audio_phase_buf = VK_NULL_HANDLE;
+            }
+            if (photon_audio_phase_mem) { vkFreeMemory(dev, photon_audio_phase_mem, nullptr); photon_audio_phase_mem = VK_NULL_HANDLE; }
+            if (photon_audio_oam_buf) {
+                if (photon_audio_oam_mapped) { vkUnmapMemory(dev, photon_audio_oam_mem); photon_audio_oam_mapped = nullptr; }
+                vkDestroyBuffer(dev, photon_audio_oam_buf, nullptr);
+                photon_audio_oam_buf = VK_NULL_HANDLE;
+            }
+            if (photon_audio_oam_mem) { vkFreeMemory(dev, photon_audio_oam_mem, nullptr); photon_audio_oam_mem = VK_NULL_HANDLE; }
+            if (photon_audio_out_buf) {
+                if (photon_audio_out_mapped) { vkUnmapMemory(dev, photon_audio_out_mem); photon_audio_out_mapped = nullptr; }
+                vkDestroyBuffer(dev, photon_audio_out_buf, nullptr);
+                photon_audio_out_buf = VK_NULL_HANDLE;
+            }
+            if (photon_audio_out_mem) { vkFreeMemory(dev, photon_audio_out_mem, nullptr); photon_audio_out_mem = VK_NULL_HANDLE; }
 
             if (vt_atlas_sampler) vkDestroySampler(dev, vt_atlas_sampler, nullptr);
             if (vt_atlas_view) vkDestroyImageView(dev, vt_atlas_view, nullptr);
@@ -836,6 +1381,50 @@ static bool ew_create_or_resize_instance_buffer(App::VkCtx& vk, VkDeviceSize nee
 
     vk_check(vkMapMemory(vk.dev, vk.instance_mem, 0, req.size, 0, &vk.instance_mapped), "vkMapMemory(instance)");
     vk.instance_capacity = needed_bytes;
+    return true;
+}
+
+static bool ew_create_or_resize_host_ssbo(App::VkCtx& vk,
+                                          VkBuffer& io_buf,
+                                          VkDeviceMemory& io_mem,
+                                          void*& io_mapped,
+                                          VkDeviceSize& io_capacity,
+                                          VkDeviceSize needed_bytes) {
+    const VkDeviceSize min_bytes = 16 * 1024;
+    if (needed_bytes < min_bytes) needed_bytes = min_bytes;
+    if (io_buf && io_capacity >= needed_bytes) return true;
+
+    if (io_buf) {
+        if (io_mapped) {
+            vkUnmapMemory(vk.dev, io_mem);
+            io_mapped = nullptr;
+        }
+        vkDestroyBuffer(vk.dev, io_buf, nullptr);
+        vkFreeMemory(vk.dev, io_mem, nullptr);
+        io_buf = VK_NULL_HANDLE;
+        io_mem = VK_NULL_HANDLE;
+        io_capacity = 0;
+    }
+
+    VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bi.size = needed_bytes;
+    bi.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    vk_check(vkCreateBuffer(vk.dev, &bi, nullptr, &io_buf), "vkCreateBuffer(host_ssbo)");
+
+    VkMemoryRequirements req{};
+    vkGetBufferMemoryRequirements(vk.dev, io_buf, &req);
+    const uint32_t mt = ew_find_memory_type(vk.phys, req.memoryTypeBits,
+                                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (mt == UINT32_MAX) return false;
+
+    VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    ai.allocationSize = req.size;
+    ai.memoryTypeIndex = mt;
+    vk_check(vkAllocateMemory(vk.dev, &ai, nullptr, &io_mem), "vkAllocateMemory(host_ssbo)");
+    vk_check(vkBindBufferMemory(vk.dev, io_buf, io_mem, 0), "vkBindBufferMemory(host_ssbo)");
+    vk_check(vkMapMemory(vk.dev, io_mem, 0, req.size, 0, &io_mapped), "vkMapMemory(host_ssbo)");
+    io_capacity = needed_bytes;
     return true;
 }
 
@@ -1306,12 +1895,60 @@ static VkSurfaceKHR create_surface(VkInstance inst, HWND hwnd) {
     return s;
 }
 
-static VkPhysicalDevice pick_phys(VkInstance inst) {
+static VkPhysicalDevice pick_phys(VkInstance inst, VkSurfaceKHR surf) {
     uint32_t n = 0;
     vk_check(vkEnumeratePhysicalDevices(inst, &n, nullptr), "vkEnumeratePhysicalDevices(count)");
     std::vector<VkPhysicalDevice> devs(n);
     vk_check(vkEnumeratePhysicalDevices(inst, &n, devs.data()), "vkEnumeratePhysicalDevices");
-    return (n > 0) ? devs[0] : VK_NULL_HANDLE;
+    if (n == 0) return VK_NULL_HANDLE;
+
+    auto has_graphics_present_queue = [&](VkPhysicalDevice pd) -> bool {
+        uint32_t qn = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(pd, &qn, nullptr);
+        if (qn == 0) return false;
+        std::vector<VkQueueFamilyProperties> qprops(qn);
+        vkGetPhysicalDeviceQueueFamilyProperties(pd, &qn, qprops.data());
+        for (uint32_t qi = 0; qi < qn; ++qi) {
+            if ((qprops[qi].queueFlags & VK_QUEUE_GRAPHICS_BIT) == 0) continue;
+            VkBool32 present = VK_FALSE;
+            VkResult r = vkGetPhysicalDeviceSurfaceSupportKHR(pd, qi, surf, &present);
+            if (r == VK_SUCCESS && present) return true;
+        }
+        return false;
+    };
+
+    int best_score = -1;
+    VkPhysicalDevice best = VK_NULL_HANDLE;
+    for (uint32_t i = 0; i < n; ++i) {
+        VkPhysicalDevice pd = devs[i];
+        if (!has_graphics_present_queue(pd)) continue;
+
+        VkPhysicalDeviceProperties props{};
+        vkGetPhysicalDeviceProperties(pd, &props);
+
+        int score = 0;
+        switch (props.deviceType) {
+            case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU: score += 10000; break;
+            case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: score += 2000; break;
+            case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU: score += 1000; break;
+            case VK_PHYSICAL_DEVICE_TYPE_CPU: score += 100; break;
+            default: break;
+        }
+        if (VK_API_VERSION_MAJOR(props.apiVersion) >= 1 && VK_API_VERSION_MINOR(props.apiVersion) >= 3) {
+            score += 250;
+        }
+        if (props.vendorID == 0x10DE) score += 120; // NVIDIA
+        if (props.vendorID == 0x1002 || props.vendorID == 0x1022) score += 100; // AMD
+        if (props.vendorID == 0x8086) score += 10; // Intel
+
+        if (score > best_score) {
+            best_score = score;
+            best = pd;
+        }
+    }
+
+    if (best != VK_NULL_HANDLE) return best;
+    return devs[0];
 }
 
 static uint32_t find_gfx_queue(VkPhysicalDevice phys, VkSurfaceKHR surf) {
@@ -1527,7 +2164,8 @@ static void create_pipeline(App::VkCtx& vk) {
     //  binding 0 = instances SSBO
     //  binding 1 = virtual texture atlas sampler
     //  binding 2 = virtual texture page table SSBO
-    VkDescriptorSetLayoutBinding bindings[3]{};
+    //  binding 3 = photon-native color SSBO (compute output)
+    VkDescriptorSetLayoutBinding bindings[4]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[0].descriptorCount = 1;
@@ -1543,8 +2181,13 @@ static void create_pipeline(App::VkCtx& vk) {
     bindings[2].descriptorCount = 1;
     bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
+    bindings[3].binding = 3;
+    bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[3].descriptorCount = 1;
+    bindings[3].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
     VkDescriptorSetLayoutCreateInfo dlci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    dlci.bindingCount = 3;
+    dlci.bindingCount = 4;
     dlci.pBindings = bindings;
     vk_check(vkCreateDescriptorSetLayout(vk.dev, &dlci, nullptr, &vk.ds_layout), "vkCreateDescriptorSetLayout");
 VkPushConstantRange pcr{};
@@ -1562,11 +2205,11 @@ VkPushConstantRange pcr{};
     // Descriptor pool + set
     VkDescriptorPoolSize ps[3]{};
     ps[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    ps[0].descriptorCount = 1;
+    ps[0].descriptorCount = 3;
     ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     ps[1].descriptorCount = 1;
     ps[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    ps[2].descriptorCount = 1;
+    ps[2].descriptorCount = 3;
 
     VkDescriptorPoolCreateInfo dpci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     dpci.maxSets = 1;
@@ -1584,6 +2227,12 @@ VkPushConstantRange pcr{};
     if (!vk.vt_atlas_image) {
         ew_vt_init(vk);
     }
+
+    // Ensure photon compute stream buffers exist before binding the graphics descriptor set.
+    // Colors are one vec4 per instance (runtime-resizable).
+    (void)ew_create_or_resize_host_ssbo(vk, vk.photon_visual_out_buf, vk.photon_visual_out_mem,
+                                        vk.photon_visual_out_mapped, vk.photon_visual_out_capacity,
+                                        65536u * sizeof(float) * 4u);
 
     VkDescriptorImageInfo di{};
     di.sampler = vk.vt_atlas_sampler;
@@ -1609,8 +2258,20 @@ VkPushConstantRange pcr{};
     w2.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     w2.pBufferInfo = &bi2;
 
-    VkWriteDescriptorSet writes[2] = {w1, w2};
-    vkUpdateDescriptorSets(vk.dev, 2, writes, 0, nullptr);
+    VkDescriptorBufferInfo bi3{};
+    bi3.buffer = vk.photon_visual_out_buf;
+    bi3.offset = 0;
+    bi3.range = VK_WHOLE_SIZE;
+
+    VkWriteDescriptorSet w3{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    w3.dstSet = vk.ds;
+    w3.dstBinding = 3;
+    w3.descriptorCount = 1;
+    w3.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    w3.pBufferInfo = &bi3;
+
+    VkWriteDescriptorSet writes[3] = {w1, w2, w3};
+    vkUpdateDescriptorSets(vk.dev, 3, writes, 0, nullptr);
 
     // Load SPIR-V (built at compile time by Vulkan SDK tools)
     std::wstring vert_path = utf8_to_wide(std::string(EW_SHADER_OUT_DIR) + "\\instanced.vert.spv");
@@ -1857,14 +2518,294 @@ VkPushConstantRange pcr{};
         vkDestroyShaderModule(vk.dev, hs, nullptr);
         vkDestroyShaderModule(vk.dev, ms, nullptr);
     }
+
+    // -----------------------------------------------------------------
+    // Photon-native compute pipelines (visual + audio)
+    // -----------------------------------------------------------------
+    {
+        // Visual stream buffers.
+        (void)ew_create_or_resize_host_ssbo(vk, vk.photon_visual_in_buf, vk.photon_visual_in_mem,
+                                            vk.photon_visual_in_mapped, vk.photon_visual_in_capacity,
+                                            65536u * sizeof(float) * 4u);
+        (void)ew_create_or_resize_host_ssbo(vk, vk.photon_visual_out_buf, vk.photon_visual_out_mem,
+                                            vk.photon_visual_out_mapped, vk.photon_visual_out_capacity,
+                                            65536u * sizeof(float) * 4u);
+
+        if (!vk.photon_visual_ds_layout) {
+            VkDescriptorSetLayoutBinding b[2]{};
+            b[0].binding = 0;
+            b[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            b[0].descriptorCount = 1;
+            b[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            b[1].binding = 1;
+            b[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            b[1].descriptorCount = 1;
+            b[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+            VkDescriptorSetLayoutCreateInfo dsl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+            dsl.bindingCount = 2;
+            dsl.pBindings = b;
+            vk_check(vkCreateDescriptorSetLayout(vk.dev, &dsl, nullptr, &vk.photon_visual_ds_layout),
+                     "vkCreateDescriptorSetLayout(photon_visual)");
+
+            VkPushConstantRange pcr{};
+            pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            pcr.offset = 0;
+            pcr.size = sizeof(uint32_t);
+
+            VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+            pl.setLayoutCount = 1;
+            pl.pSetLayouts = &vk.photon_visual_ds_layout;
+            pl.pushConstantRangeCount = 1;
+            pl.pPushConstantRanges = &pcr;
+            vk_check(vkCreatePipelineLayout(vk.dev, &pl, nullptr, &vk.photon_visual_pipe_layout),
+                     "vkCreatePipelineLayout(photon_visual)");
+
+            VkDescriptorPoolSize ps{};
+            ps.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            ps.descriptorCount = 2;
+            VkDescriptorPoolCreateInfo dp{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+            dp.maxSets = 1;
+            dp.poolSizeCount = 1;
+            dp.pPoolSizes = &ps;
+            vk_check(vkCreateDescriptorPool(vk.dev, &dp, nullptr, &vk.photon_visual_ds_pool),
+                     "vkCreateDescriptorPool(photon_visual)");
+
+            VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+            ai.descriptorPool = vk.photon_visual_ds_pool;
+            ai.descriptorSetCount = 1;
+            ai.pSetLayouts = &vk.photon_visual_ds_layout;
+            vk_check(vkAllocateDescriptorSets(vk.dev, &ai, &vk.photon_visual_ds),
+                     "vkAllocateDescriptorSets(photon_visual)");
+        }
+
+        VkDescriptorBufferInfo vis_in{};
+        vis_in.buffer = vk.photon_visual_in_buf;
+        vis_in.offset = 0;
+        vis_in.range = VK_WHOLE_SIZE;
+        VkDescriptorBufferInfo vis_out{};
+        vis_out.buffer = vk.photon_visual_out_buf;
+        vis_out.offset = 0;
+        vis_out.range = VK_WHOLE_SIZE;
+        VkWriteDescriptorSet vw[2]{};
+        vw[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        vw[0].dstSet = vk.photon_visual_ds;
+        vw[0].dstBinding = 0;
+        vw[0].descriptorCount = 1;
+        vw[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        vw[0].pBufferInfo = &vis_in;
+        vw[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        vw[1].dstSet = vk.photon_visual_ds;
+        vw[1].dstBinding = 1;
+        vw[1].descriptorCount = 1;
+        vw[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        vw[1].pBufferInfo = &vis_out;
+        vkUpdateDescriptorSets(vk.dev, 2, vw, 0, nullptr);
+
+        if (!vk.photon_visual_pipe) {
+            std::wstring vis_path = utf8_to_wide(std::string(EW_SHADER_OUT_DIR) + "\\vkcompute_photon_visual.comp.spv");
+            auto vis_spv = ew_read_spv_u32(vis_path);
+            if (!vis_spv.empty()) {
+                VkShaderModule sm = ew_make_shader(vk.dev, vis_spv);
+                VkComputePipelineCreateInfo cpi{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+                cpi.layout = vk.photon_visual_pipe_layout;
+                cpi.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+                cpi.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+                cpi.stage.module = sm;
+                cpi.stage.pName = "main";
+                vk_check(vkCreateComputePipelines(vk.dev, VK_NULL_HANDLE, 1, &cpi, nullptr, &vk.photon_visual_pipe),
+                         "vkCreateComputePipelines(photon_visual)");
+                vkDestroyShaderModule(vk.dev, sm, nullptr);
+            }
+        }
+    }
+
+    {
+        // Audio stream buffers (phase/oam -> 4ch waveform).
+        (void)ew_create_or_resize_host_ssbo(vk, vk.photon_audio_phase_buf, vk.photon_audio_phase_mem,
+                                            vk.photon_audio_phase_mapped, vk.photon_audio_phase_capacity,
+                                            4096u * sizeof(float));
+        (void)ew_create_or_resize_host_ssbo(vk, vk.photon_audio_oam_buf, vk.photon_audio_oam_mem,
+                                            vk.photon_audio_oam_mapped, vk.photon_audio_oam_capacity,
+                                            4096u * sizeof(float));
+        (void)ew_create_or_resize_host_ssbo(vk, vk.photon_audio_out_buf, vk.photon_audio_out_mem,
+                                            vk.photon_audio_out_mapped, vk.photon_audio_out_capacity,
+                                            4096u * sizeof(float) * 4u);
+
+        if (!vk.photon_audio_ds_layout) {
+            VkDescriptorSetLayoutBinding b[3]{};
+            b[0].binding = 0;
+            b[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            b[0].descriptorCount = 1;
+            b[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            b[1].binding = 1;
+            b[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            b[1].descriptorCount = 1;
+            b[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            b[2].binding = 2;
+            b[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            b[2].descriptorCount = 1;
+            b[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+            VkDescriptorSetLayoutCreateInfo dsl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+            dsl.bindingCount = 3;
+            dsl.pBindings = b;
+            vk_check(vkCreateDescriptorSetLayout(vk.dev, &dsl, nullptr, &vk.photon_audio_ds_layout),
+                     "vkCreateDescriptorSetLayout(photon_audio)");
+
+            VkPushConstantRange pcr{};
+            pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            pcr.offset = 0;
+            pcr.size = sizeof(uint32_t);
+
+            VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+            pl.setLayoutCount = 1;
+            pl.pSetLayouts = &vk.photon_audio_ds_layout;
+            pl.pushConstantRangeCount = 1;
+            pl.pPushConstantRanges = &pcr;
+            vk_check(vkCreatePipelineLayout(vk.dev, &pl, nullptr, &vk.photon_audio_pipe_layout),
+                     "vkCreatePipelineLayout(photon_audio)");
+
+            VkDescriptorPoolSize ps{};
+            ps.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            ps.descriptorCount = 3;
+            VkDescriptorPoolCreateInfo dp{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+            dp.maxSets = 1;
+            dp.poolSizeCount = 1;
+            dp.pPoolSizes = &ps;
+            vk_check(vkCreateDescriptorPool(vk.dev, &dp, nullptr, &vk.photon_audio_ds_pool),
+                     "vkCreateDescriptorPool(photon_audio)");
+
+            VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+            ai.descriptorPool = vk.photon_audio_ds_pool;
+            ai.descriptorSetCount = 1;
+            ai.pSetLayouts = &vk.photon_audio_ds_layout;
+            vk_check(vkAllocateDescriptorSets(vk.dev, &ai, &vk.photon_audio_ds),
+                     "vkAllocateDescriptorSets(photon_audio)");
+        }
+
+        VkDescriptorBufferInfo ab0{};
+        ab0.buffer = vk.photon_audio_phase_buf;
+        ab0.offset = 0;
+        ab0.range = VK_WHOLE_SIZE;
+        VkDescriptorBufferInfo ab1{};
+        ab1.buffer = vk.photon_audio_oam_buf;
+        ab1.offset = 0;
+        ab1.range = VK_WHOLE_SIZE;
+        VkDescriptorBufferInfo ab2{};
+        ab2.buffer = vk.photon_audio_out_buf;
+        ab2.offset = 0;
+        ab2.range = VK_WHOLE_SIZE;
+        VkWriteDescriptorSet aw[3]{};
+        aw[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        aw[0].dstSet = vk.photon_audio_ds;
+        aw[0].dstBinding = 0;
+        aw[0].descriptorCount = 1;
+        aw[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        aw[0].pBufferInfo = &ab0;
+        aw[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        aw[1].dstSet = vk.photon_audio_ds;
+        aw[1].dstBinding = 1;
+        aw[1].descriptorCount = 1;
+        aw[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        aw[1].pBufferInfo = &ab1;
+        aw[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        aw[2].dstSet = vk.photon_audio_ds;
+        aw[2].dstBinding = 2;
+        aw[2].descriptorCount = 1;
+        aw[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        aw[2].pBufferInfo = &ab2;
+        vkUpdateDescriptorSets(vk.dev, 3, aw, 0, nullptr);
+
+        if (!vk.photon_audio_pipe) {
+            std::wstring audio_path = utf8_to_wide(std::string(EW_SHADER_OUT_DIR) + "\\vkcompute_photon_audio.comp.spv");
+            auto audio_spv = ew_read_spv_u32(audio_path);
+            if (!audio_spv.empty()) {
+                VkShaderModule sm = ew_make_shader(vk.dev, audio_spv);
+                VkComputePipelineCreateInfo cpi{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+                cpi.layout = vk.photon_audio_pipe_layout;
+                cpi.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+                cpi.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+                cpi.stage.module = sm;
+                cpi.stage.pName = "main";
+                vk_check(vkCreateComputePipelines(vk.dev, VK_NULL_HANDLE, 1, &cpi, nullptr, &vk.photon_audio_pipe),
+                         "vkCreateComputePipelines(photon_audio)");
+                vkDestroyShaderModule(vk.dev, sm, nullptr);
+            }
+        }
+    }
 }
 
 App::App(const AppConfig& cfg) : cfg_(cfg) {
     ew_camera_init(cam_);
     std::memset(&input_, 0, sizeof(input_));
+    stov_mode_ = cfg.stov_mode;
+    stov_data_log_path_utf8_ = cfg.stov_data_log_path_utf8;
+    stov_audio_out_path_utf8_ = cfg.stov_audio_out_path_utf8;
     const char* v = std::getenv("EW_IMMERSION");
     if (v && (v[0]=='1' || v[0]=='y' || v[0]=='Y' || v[0]=='t' || v[0]=='T')) {
         immersion_mode_ = true;
+    }
+}
+
+void App::SetSTOVMode(bool enable) {
+    stov_mode_ = enable;
+    if (scene_) scene_->SetResearchStovMode(enable, false);
+    AppendOutputUtf8(enable ? "STOV MODE: ON" : "STOV MODE: OFF");
+}
+
+void App::LogSTOVData(const std::vector<float>& phase, const std::vector<float>& oam, const std::vector<int>& winding) {
+    if (stov_data_log_path_utf8_.empty()) return;
+    std::ofstream out(stov_data_log_path_utf8_, std::ios::out | std::ios::app);
+    if (!out.good()) return;
+    for (size_t i = 0; i < phase.size(); ++i) {
+        out << i << ',' << phase[i] << ',' << oam[i] << ',' << winding[i] << '\n';
+    }
+}
+
+void App::OutputSTOVAudio(const std::vector<float>& phase, const std::vector<float>& oam, const std::vector<int>& winding) {
+    if (phase.empty() || oam.empty()) return;
+    const size_t n = std::min<size_t>(phase.size(), oam.size());
+    if (n == 0u) return;
+
+    std::vector<int16_t> pcm;
+    pcm.reserve(n * 4u);
+    for (size_t i = 0u; i < n; ++i) {
+        const float p = phase[i];
+        const float c = oam[i];
+        const float dry = std::sin(p);
+        const float wet = std::sin(p + c * 1.5707963f);
+        const float spread = std::max(0.0f, std::min(1.0f, std::fabs(c)));
+        const float s[4] = {
+            dry,
+            dry * (1.0f - spread) + wet * spread,
+            dry * (1.0f - spread) - wet * spread,
+            wet
+        };
+        for (int ch = 0; ch < 4; ++ch) {
+            const float v = std::max(-1.0f, std::min(1.0f, s[ch]));
+            pcm.push_back((int16_t)std::lround(v * 32767.0f));
+        }
+    }
+
+    if (scene_ && !pcm.empty()) {
+        scene_->sm.inject_audio_pcm16(pcm.data(), (int)n, 4);
+    }
+
+    if (!stov_audio_out_path_utf8_.empty()) {
+        std::ofstream out(stov_audio_out_path_utf8_, std::ios::out | std::ios::trunc);
+        if (out.good()) {
+            out << "idx,c0,c1,c2,c3,w\n";
+            for (size_t i = 0u; i < n; ++i) {
+                const int w = (i < winding.size()) ? winding[i] : 0;
+                out << i << ','
+                    << pcm[i * 4u + 0u] << ','
+                    << pcm[i * 4u + 1u] << ','
+                    << pcm[i * 4u + 2u] << ','
+                    << pcm[i * 4u + 3u] << ','
+                    << w << '\n';
+            }
+        }
     }
 }
 
@@ -1940,7 +2881,7 @@ void App::CreateChildWindows() {
                                  100, 40, 110, 26,
                                  hwnd_panel_, (HMENU)2003, GetModuleHandleW(nullptr), nullptr);
 
-    hwnd_bootstrap_ = CreateWindowW(L\"BUTTON\", L\"Bootstrap Engine\",
+    hwnd_bootstrap_ = CreateWindowW(L"BUTTON", L"Bootstrap Engine",
                                WS_CHILD | WS_VISIBLE,
                                220, 40, 190, 26,
                                hwnd_panel_, (HMENU)2006, GetModuleHandleW(nullptr), nullptr);
@@ -1977,10 +2918,36 @@ hwnd_redo_      = CreateWindowW(L"BUTTON", L"Redo", WS_CHILD | WS_VISIBLE, 262, 
     CreateWindowW(L"STATIC", L"Angle(deg)", WS_CHILD | WS_VISIBLE, 150, 322, 72, 18, hwnd_panel_, nullptr, GetModuleHandleW(nullptr), nullptr);
     hwnd_angle_step_ = CreateWindowW(L"EDIT", L"15", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 226, 318, 60, 24, hwnd_panel_, (HMENU)2025, GetModuleHandleW(nullptr), nullptr);
 
+    // Photon simulation controls.
+    CreateWindowW(L"STATIC", L"Photon Sim", WS_CHILD | WS_VISIBLE, 10, 378, 90, 18, hwnd_panel_, nullptr, GetModuleHandleW(nullptr), nullptr);
+    hwnd_mode_freq_ = CreateWindowW(L"BUTTON", L"Frequency", WS_CHILD | WS_VISIBLE, 10, 398, 86, 24, hwnd_panel_, (HMENU)2040, GetModuleHandleW(nullptr), nullptr);
+    hwnd_mode_vector_ = CreateWindowW(L"BUTTON", L"Vector", WS_CHILD | WS_VISIBLE, 102, 398, 70, 24, hwnd_panel_, (HMENU)2041, GetModuleHandleW(nullptr), nullptr);
+    hwnd_stov_toggle_ = CreateWindowW(L"BUTTON", L"STOV", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 178, 398, 60, 24, hwnd_panel_, (HMENU)2042, GetModuleHandleW(nullptr), nullptr);
+
+    CreateWindowW(L"STATIC", L"A", WS_CHILD | WS_VISIBLE, 10, 430, 14, 18, hwnd_panel_, nullptr, GetModuleHandleW(nullptr), nullptr);
+    hwnd_param_a_ = CreateWindowW(L"EDIT", L"0.19", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 24, 426, 64, 24, hwnd_panel_, (HMENU)2043, GetModuleHandleW(nullptr), nullptr);
+    CreateWindowW(L"STATIC", L"F", WS_CHILD | WS_VISIBLE, 92, 430, 14, 18, hwnd_panel_, nullptr, GetModuleHandleW(nullptr), nullptr);
+    hwnd_param_f_ = CreateWindowW(L"EDIT", L"0.245", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 106, 426, 64, 24, hwnd_panel_, (HMENU)2044, GetModuleHandleW(nullptr), nullptr);
+    CreateWindowW(L"STATIC", L"I", WS_CHILD | WS_VISIBLE, 174, 430, 14, 18, hwnd_panel_, nullptr, GetModuleHandleW(nullptr), nullptr);
+    hwnd_param_i_ = CreateWindowW(L"EDIT", L"0.35", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 188, 426, 64, 24, hwnd_panel_, (HMENU)2045, GetModuleHandleW(nullptr), nullptr);
+    CreateWindowW(L"STATIC", L"V", WS_CHILD | WS_VISIBLE, 256, 430, 14, 18, hwnd_panel_, nullptr, GetModuleHandleW(nullptr), nullptr);
+    hwnd_param_v_ = CreateWindowW(L"EDIT", L"0.35", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 270, 426, 64, 24, hwnd_panel_, (HMENU)2046, GetModuleHandleW(nullptr), nullptr);
+    hwnd_apply_sim_params_ = CreateWindowW(L"BUTTON", L"Apply Params", WS_CHILD | WS_VISIBLE, 340, 426, 70, 24, hwnd_panel_, (HMENU)2047, GetModuleHandleW(nullptr), nullptr);
+
+    CreateWindowW(L"STATIC", L"Lattice", WS_CHILD | WS_VISIBLE, 10, 460, 44, 18, hwnd_panel_, nullptr, GetModuleHandleW(nullptr), nullptr);
+    hwnd_lattice_edge_ = CreateWindowW(L"EDIT", L"256", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 56, 456, 72, 24, hwnd_panel_, (HMENU)2048, GetModuleHandleW(nullptr), nullptr);
+    hwnd_apply_lattice_edge_ = CreateWindowW(L"BUTTON", L"Apply Edge", WS_CHILD | WS_VISIBLE, 134, 456, 76, 24, hwnd_panel_, (HMENU)2049, GetModuleHandleW(nullptr), nullptr);
+    CreateWindowW(L"STATIC", L"StreamHz", WS_CHILD | WS_VISIBLE, 218, 460, 54, 18, hwnd_panel_, nullptr, GetModuleHandleW(nullptr), nullptr);
+    hwnd_stream_hz_ = CreateWindowW(L"EDIT", L"360", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 274, 456, 56, 24, hwnd_panel_, (HMENU)2050, GetModuleHandleW(nullptr), nullptr);
+    hwnd_apply_stream_hz_ = CreateWindowW(L"BUTTON", L"Apply Hz", WS_CHILD | WS_VISIBLE, 336, 456, 74, 24, hwnd_panel_, (HMENU)2051, GetModuleHandleW(nullptr), nullptr);
+
     hwnd_output_ = CreateWindowW(L"EDIT", L"",
                                  WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL,
-                                 10, 350, 400, client_h_ - 360,
+                                 10, 490, 400, client_h_ - 500,
                                  hwnd_panel_, (HMENU)2005, GetModuleHandleW(nullptr), nullptr);
+    if (stov_mode_) {
+        SendMessageW(hwnd_stov_toggle_, BM_SETCHECK, BST_CHECKED, 0);
+    }
     LayoutChildren(client_w_, client_h_);
 }
 
@@ -1989,7 +2956,7 @@ void App::LayoutChildren(int w, int h) {
     MoveWindow(hwnd_viewport_, 0, 0, w - panel_w, h, TRUE);
     MoveWindow(hwnd_panel_, w - panel_w, 0, panel_w, h, TRUE);
 
-    MoveWindow(hwnd_output_, 10, 350, panel_w - 20, h - 360, TRUE);
+    MoveWindow(hwnd_output_, 10, 490, panel_w - 20, std::max(80, h - 500), TRUE);
 }
 
 int App::Run(HINSTANCE hInst) {
@@ -2020,7 +2987,7 @@ int App::Run(HINSTANCE hInst) {
     vk_->instance = create_instance(vk_->enable_validation, &vk_->dbg,
                                     xr_ok_init ? xr_.VulkanInstanceExtensions() : "");
     vk_->surface = create_surface(vk_->instance, hwnd_viewport_);
-    vk_->phys = pick_phys(vk_->instance);
+    vk_->phys = pick_phys(vk_->instance, vk_->surface);
     if (!vk_->phys) {
         MessageBoxA(hwnd_main_, "No Vulkan physical device found.", "GenesisEngineVulkan", MB_ICONERROR | MB_OK);
         return 1;
@@ -2116,7 +3083,7 @@ void App::Tick() {
     // Authoritative simulation ticks (server-truth) at fixed cadence.
     // Deterministic clamp: never execute more than N ticks per rendered frame.
     acc += dt;
-    const int kMaxTicksPerFrame = 8;
+    const int kMaxTicksPerFrame = 12;
     int steps = 0;
     while (acc >= tick_dt && steps < kMaxTicksPerFrame) {
         scene_->Tick();
@@ -2172,8 +3139,10 @@ if (uy_now && !prev_uy) { EmitEditorRedo(); }
 prev_uz = uz_now;
 prev_uy = uy_now;
 
-    // Camera rig controls (Alt + mouse):
-    //   Alt+LMB orbit, Alt+MMB pan, wheel dolly.
+    // Camera rig controls:
+    //   Alt+LMB orbit, Alt+MMB pan
+    //   wheel dolly
+    //   Alt+wheel photon lattice scale
     if (mouse_in_view) {
         if (input_.alt && input_.lmb) {
             cam_yaw_rad_   += (float)input_.mouse_dx * 0.005f;
@@ -2193,9 +3162,13 @@ prev_uy = uy_now;
         }
         if (input_.wheel_delta != 0) {
             const int steps = (input_.wheel_delta > 0) ? 1 : -1;
-            const float s = (steps > 0) ? 0.9f : 1.1111111f;
-            cam_dist_m_ *= s;
-            if (cam_dist_m_ < 0.1f) cam_dist_m_ = 0.1f;
+            if (input_.alt && scene_) {
+                scene_->ScaleResearchLatticeByStepDelta(steps, true);
+            } else {
+                const float s = (steps > 0) ? 0.9f : 1.1111111f;
+                cam_dist_m_ *= s;
+                if (cam_dist_m_ < 0.1f) cam_dist_m_ = 0.1f;
+            }
         }
     }
 
@@ -2509,12 +3482,59 @@ if (editor_axis_constraint_u8_ == 1) {
 
     // Projection (camera-relative instances)
     scene_->instances.clear();
-    scene_->instances.reserve(scene_->objects.size());
+    scene_->instances.reserve(scene_->objects.size() + 512u);
 
     auto ew_clamp_i32 = [](int64_t v, int32_t lo, int32_t hi) -> int32_t {
         if (v < (int64_t)lo) return lo;
         if (v > (int64_t)hi) return hi;
         return (int32_t)v;
+    };
+
+    auto append_research_instances = [&]() {
+        if (!genesis::ge_has_research_realtime_outputs(scene_->research_archive)) return;
+        if (scene_->research_points.empty()) return;
+        const float lattice_constant_m =
+            (float)std::max(scene_->research_archive.silicon_lattice_constant_m, 1.0e-12);
+        auto normalize_axis = [&](float v) -> float {
+            return (std::fabs(v) < 1.0e-6f) ? (v / lattice_constant_m) : v;
+        };
+
+        for (const genesis::GeResearchParticleVizPoint& p : scene_->research_points) {
+            const float wx = normalize_axis(p.x) * 0.12f + p.observer_shift * 0.03f;
+            const float wy = normalize_axis(p.y) * 0.12f + p.phase_bias * 0.02f;
+            const float wz = normalize_axis(p.z) * 0.12f - p.trail_age * 0.04f;
+            float cx = 0.0f;
+            float cy = 0.0f;
+            float cz = 0.0f;
+            camera_space_pos(wx, wy, wz, cx, cy, cz);
+
+            EwRenderInstance inst{};
+            inst.object_id_u64 = 0u;
+            inst.anchor_id_u32 = 0u;
+            inst.kind_u32 = p.render_kind_u32;
+            inst.rel_pos_q16_16[0] = (int32_t)std::llround((double)cx * 65536.0);
+            inst.rel_pos_q16_16[1] = (int32_t)std::llround((double)cy * 65536.0);
+            inst.rel_pos_q16_16[2] = (int32_t)std::llround((double)cz * 65536.0);
+            inst.rel_pos_q16_16[3] = 0;
+            inst.radius_q16_16 = (int32_t)std::llround((double)p.radius_m * 65536.0);
+            inst.emissive_q16_16 = (int32_t)std::llround((double)p.emissive * 65536.0);
+            inst.atmosphere_thickness_q16_16 = 0;
+            inst.lod_bias_q16_16 = 0;
+            inst.clarity_q16_16 = (int32_t)std::llround((1.0 - 0.35 * (double)p.trail_age) * 65536.0);
+            inst.albedo_rgba8 = p.rgba8;
+            inst.atmosphere_rgba8 = 0;
+            inst.carrier_x_u32 = (uint32_t)ew_clamp_i32((int64_t)std::llround((double)p.temporal_coupling * 65536.0),
+                                                        0, 65536);
+            inst.carrier_y_u32 = (uint32_t)(int32_t)ew_clamp_i32((int64_t)std::llround((double)p.phase_bias * 65536.0),
+                                                                 -65536, 65536);
+            const uint32_t harm_q15 = (uint32_t)ew_clamp_i32((int64_t)std::llround((double)p.amplitude * 32768.0),
+                                                             0, 32768);
+            const uint32_t flux_q15 = (uint32_t)ew_clamp_i32((int64_t)std::llround((double)p.curvature_n * 32768.0),
+                                                             0, 32768);
+            inst.carrier_z_u32 = (flux_q15 << 16u) | (harm_q15 & 65535u);
+            inst.tick_u64 = scene_->sm.canonical_tick;
+            scene_->instances.push_back(inst);
+        }
     };
 
     // Compute emergent realism carrier triples (x=leak Q16.16, y=doppler_k Q16.16, z=harm_mean Q0.15)
@@ -2657,11 +3677,37 @@ scene_->instances.push_back(inst);
         }
     }
 
+    append_research_instances();
+
     // UI output
     std::string line;
     int guard = 64;
     while (guard-- > 0 && scene_->PopUiLine(line)) {
         AppendOutputUtf8(line);
+    }
+
+    if (scene_) {
+        stov_mode_ = scene_->research_stov_mode;
+    }
+    if (scene_ && scene_->research_stov_mode && !scene_->research_points.empty()) {
+        std::vector<float> phase;
+        std::vector<float> oam;
+        std::vector<int> winding;
+        const size_t n = std::min<size_t>(scene_->research_points.size(), 4096u);
+        phase.reserve(n);
+        oam.reserve(n);
+        winding.reserve(n);
+        for (size_t i = 0u; i < n; ++i) {
+            const auto& p = scene_->research_points[i];
+            const float ph = p.phase_bias * 3.14159265f;
+            const float oa = p.curvature_n * ((p.phase_bias >= 0.0f) ? 1.0f : -1.0f);
+            const int w = (oa > 0.35f) ? 1 : ((oa < -0.35f) ? -1 : 0);
+            phase.push_back(ph);
+            oam.push_back(oa);
+            winding.push_back(w);
+        }
+        LogSTOVData(phase, oam, winding);
+        OutputSTOVAudio(phase, oam, winding);
     }
 
     ew_input_reset_deltas(input_);
@@ -2701,6 +3747,22 @@ void App::Render() {
         const uint32_t total = out_u32[1];
         if (total > 0u) {
             ew_runtime_submit_camera_sensor_median_norm(&scene_->sm, (int32_t)median_q16, scene_->sm.canonical_tick);
+        }
+    }
+    if (scene_ && scene_->research_use_compute_audio && vk_->photon_audio_out_mapped && vk_->photon_audio_last_count_u32 > 0u) {
+        const uint32_t n = std::min<uint32_t>(vk_->photon_audio_last_count_u32, 4096u);
+        const float* out_f32 = reinterpret_cast<const float*>(vk_->photon_audio_out_mapped);
+        std::vector<int16_t> pcm;
+        pcm.reserve((size_t)n * 4u);
+        for (uint32_t i = 0u; i < n; ++i) {
+            const size_t k = (size_t)i * 4u;
+            for (int ch = 0; ch < 4; ++ch) {
+                const float v = std::max(-1.0f, std::min(1.0f, out_f32[k + (size_t)ch]));
+                pcm.push_back((int16_t)std::lround(v * 32767.0f));
+            }
+        }
+        if (!pcm.empty()) {
+            scene_->sm.inject_audio_pcm16(pcm.data(), (int)n, 4);
         }
     }
 
@@ -2749,6 +3811,8 @@ void App::Render() {
 
             scene_->instances.clear();
             scene_->instances.reserve(scene_->objects.size());
+            EwRenderAssistPacket ra{};
+            const bool have_ra = ew_runtime_get_render_assist_packet(&scene_->sm, &ra);
 
             auto ew_clamp_i32 = [](int64_t v, int32_t lo, int32_t hi) -> int32_t {
                 if (v < (int64_t)lo) return lo;
@@ -2783,9 +3847,9 @@ void App::Render() {
                     rel_q16_16[2] = (int32_t)cz_q;
                 } else {
                     // Fail-closed fallback: translation only.
-                    rel_q16_16[0] = (int32_t)llround((double)dx * 65536.0);
-                    rel_q16_16[1] = (int32_t)llround((double)dy * 65536.0);
-                    rel_q16_16[2] = (int32_t)llround((double)dz * 65536.0);
+                    rel_q16_16[0] = o.pos_q16_16[0];
+                    rel_q16_16[1] = o.pos_q16_16[1];
+                    rel_q16_16[2] = o.pos_q16_16[2];
                 }
 
                 const float cx = (float)rel_q16_16[0] / 65536.0f;
@@ -2796,7 +3860,7 @@ void App::Render() {
                 // Use substrate-derived RenderAssistPacket coefficients and only simple
                 // fixed-point multiply-add + clamps here (no sqrt/fabs focus-band math).
                 // Distance is evaluated in squared-distance domain (m^2) to avoid sqrt.
-                const double dist2_m2 = (double)dx*(double)dx + (double)dy*(double)dy + (double)dz*(double)dz;
+                const double dist2_m2 = (double)cx*(double)cx + (double)cy*(double)cy + (double)cz*(double)cz;
                 const uint64_t dist2_m2_q32_32 = (uint64_t)std::llround(dist2_m2 * (double)(1ull<<32));
 
                 int32_t focus_w_q16_16 = 0;
@@ -3063,7 +4127,6 @@ void App::Render() {
             vkCmdEndRendering(cmd);
             vk_check(vkEndCommandBuffer(cmd), "vkEndCommandBuffer(XR)");
 
-            VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
             VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
             si.commandBufferCount = 1;
             si.pCommandBuffers = &cmd;
@@ -3101,6 +4164,130 @@ void App::Render() {
             w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             w.pBufferInfo = &dbi;
             vkUpdateDescriptorSets(vk_->dev, 1, &w, 0, nullptr);
+        }
+
+        // Stream per-instance frequency state into photon compute input.
+        const uint32_t inst_n_u32 = (uint32_t)scene_->instances.size();
+        const VkDeviceSize photon_bytes = std::max<VkDeviceSize>((VkDeviceSize)inst_n_u32 * sizeof(float) * 4u,
+                                                                 (VkDeviceSize)sizeof(float) * 4u);
+        if (ew_create_or_resize_host_ssbo(*vk_, vk_->photon_visual_in_buf, vk_->photon_visual_in_mem,
+                                          vk_->photon_visual_in_mapped, vk_->photon_visual_in_capacity,
+                                          photon_bytes) &&
+            ew_create_or_resize_host_ssbo(*vk_, vk_->photon_visual_out_buf, vk_->photon_visual_out_mem,
+                                          vk_->photon_visual_out_mapped, vk_->photon_visual_out_capacity,
+                                          photon_bytes)) {
+            float* in = reinterpret_cast<float*>(vk_->photon_visual_in_mapped);
+            for (uint32_t i = 0u; i < inst_n_u32; ++i) {
+                const EwRenderInstance& inst = scene_->instances[i];
+                const float phase = (float)((int32_t)inst.carrier_y_u32) / 65536.0f;
+                const float amp = std::max(0.0f, std::min(1.0f, (float)(inst.carrier_z_u32 & 65535u) / 32768.0f));
+                const float oam = std::max(-1.0f, std::min(1.0f, (float)((int32_t)inst.carrier_y_u32) / 65536.0f));
+                const float coupling = std::max(0.0f, std::min(1.0f, (float)((int32_t)inst.carrier_x_u32) / 65536.0f));
+                const size_t k = (size_t)i * 4u;
+                in[k + 0u] = phase;
+                in[k + 1u] = amp;
+                in[k + 2u] = oam;
+                in[k + 3u] = coupling;
+            }
+
+            VkDescriptorBufferInfo vis_in{};
+            vis_in.buffer = vk_->photon_visual_in_buf;
+            vis_in.offset = 0;
+            vis_in.range = VK_WHOLE_SIZE;
+            VkDescriptorBufferInfo vis_out{};
+            vis_out.buffer = vk_->photon_visual_out_buf;
+            vis_out.offset = 0;
+            vis_out.range = VK_WHOLE_SIZE;
+            VkWriteDescriptorSet vw[2]{};
+            vw[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            vw[0].dstSet = vk_->photon_visual_ds;
+            vw[0].dstBinding = 0;
+            vw[0].descriptorCount = 1;
+            vw[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            vw[0].pBufferInfo = &vis_in;
+            vw[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            vw[1].dstSet = vk_->photon_visual_ds;
+            vw[1].dstBinding = 1;
+            vw[1].descriptorCount = 1;
+            vw[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            vw[1].pBufferInfo = &vis_out;
+            vkUpdateDescriptorSets(vk_->dev, 2, vw, 0, nullptr);
+
+            VkDescriptorBufferInfo color_ssbo{};
+            color_ssbo.buffer = vk_->photon_visual_out_buf;
+            color_ssbo.offset = 0;
+            color_ssbo.range = VK_WHOLE_SIZE;
+            VkWriteDescriptorSet color_w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            color_w.dstSet = vk_->ds;
+            color_w.dstBinding = 3;
+            color_w.descriptorCount = 1;
+            color_w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            color_w.pBufferInfo = &color_ssbo;
+            vkUpdateDescriptorSets(vk_->dev, 1, &color_w, 0, nullptr);
+        }
+
+        // Prepare photon audio compute inputs from research points (phase + OAM/curl).
+        const uint32_t audio_n_u32 =
+            (uint32_t)std::max<size_t>(64u, std::min<size_t>(scene_->research_points.size(), 4096u));
+        const VkDeviceSize audio_scalar_bytes = std::max<VkDeviceSize>((VkDeviceSize)audio_n_u32 * sizeof(float),
+                                                                       (VkDeviceSize)sizeof(float));
+        const VkDeviceSize audio_vec4_bytes = std::max<VkDeviceSize>((VkDeviceSize)audio_n_u32 * sizeof(float) * 4u,
+                                                                     (VkDeviceSize)sizeof(float) * 4u);
+        if (ew_create_or_resize_host_ssbo(*vk_, vk_->photon_audio_phase_buf, vk_->photon_audio_phase_mem,
+                                          vk_->photon_audio_phase_mapped, vk_->photon_audio_phase_capacity,
+                                          audio_scalar_bytes) &&
+            ew_create_or_resize_host_ssbo(*vk_, vk_->photon_audio_oam_buf, vk_->photon_audio_oam_mem,
+                                          vk_->photon_audio_oam_mapped, vk_->photon_audio_oam_capacity,
+                                          audio_scalar_bytes) &&
+            ew_create_or_resize_host_ssbo(*vk_, vk_->photon_audio_out_buf, vk_->photon_audio_out_mem,
+                                          vk_->photon_audio_out_mapped, vk_->photon_audio_out_capacity,
+                                          audio_vec4_bytes)) {
+            float* phase = reinterpret_cast<float*>(vk_->photon_audio_phase_mapped);
+            float* oam = reinterpret_cast<float*>(vk_->photon_audio_oam_mapped);
+            for (uint32_t i = 0u; i < audio_n_u32; ++i) {
+                const size_t idx = scene_->research_points.empty()
+                                     ? 0u
+                                     : (size_t)(i % (uint32_t)scene_->research_points.size());
+                const genesis::GeResearchParticleVizPoint& p =
+                    scene_->research_points.empty()
+                        ? genesis::GeResearchParticleVizPoint{}
+                        : scene_->research_points[idx];
+                phase[i] = p.phase_bias * 3.14159265f;
+                oam[i] = p.curvature_n * ((p.phase_bias >= 0.0f) ? 1.0f : -1.0f);
+            }
+
+            VkDescriptorBufferInfo ab0{};
+            ab0.buffer = vk_->photon_audio_phase_buf;
+            ab0.offset = 0;
+            ab0.range = VK_WHOLE_SIZE;
+            VkDescriptorBufferInfo ab1{};
+            ab1.buffer = vk_->photon_audio_oam_buf;
+            ab1.offset = 0;
+            ab1.range = VK_WHOLE_SIZE;
+            VkDescriptorBufferInfo ab2{};
+            ab2.buffer = vk_->photon_audio_out_buf;
+            ab2.offset = 0;
+            ab2.range = VK_WHOLE_SIZE;
+            VkWriteDescriptorSet aw[3]{};
+            aw[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            aw[0].dstSet = vk_->photon_audio_ds;
+            aw[0].dstBinding = 0;
+            aw[0].descriptorCount = 1;
+            aw[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            aw[0].pBufferInfo = &ab0;
+            aw[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            aw[1].dstSet = vk_->photon_audio_ds;
+            aw[1].dstBinding = 1;
+            aw[1].descriptorCount = 1;
+            aw[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            aw[1].pBufferInfo = &ab1;
+            aw[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            aw[2].dstSet = vk_->photon_audio_ds;
+            aw[2].dstBinding = 2;
+            aw[2].descriptorCount = 1;
+            aw[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            aw[2].pBufferInfo = &ab2;
+            vkUpdateDescriptorSets(vk_->dev, 3, aw, 0, nullptr);
         }
     }
 
@@ -3180,6 +4367,88 @@ void App::Render() {
     dep.imageMemoryBarrierCount = 2;
     dep.pImageMemoryBarriers = barriers;
     vkCmdPipelineBarrier2(cmd, &dep);
+
+    // Photon-native compute dispatch (visual colors + audio waveform) at render cadence.
+    if (scene_ && vk_->photon_visual_pipe && vk_->photon_visual_ds) {
+        const uint32_t vis_count = (uint32_t)scene_->instances.size();
+        if (vis_count > 0u) {
+            VkBufferMemoryBarrier2 h2c_vis[2]{};
+            h2c_vis[0].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+            h2c_vis[0].srcStageMask = VK_PIPELINE_STAGE_2_HOST_BIT;
+            h2c_vis[0].srcAccessMask = VK_ACCESS_2_HOST_WRITE_BIT;
+            h2c_vis[0].dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            h2c_vis[0].dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+            h2c_vis[0].buffer = vk_->photon_visual_in_buf;
+            h2c_vis[0].offset = 0;
+            h2c_vis[0].size = VK_WHOLE_SIZE;
+            h2c_vis[1] = h2c_vis[0];
+            h2c_vis[1].buffer = vk_->instance_buf;
+            VkDependencyInfo vis_dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+            vis_dep.bufferMemoryBarrierCount = 2;
+            vis_dep.pBufferMemoryBarriers = h2c_vis;
+            vkCmdPipelineBarrier2(cmd, &vis_dep);
+
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, vk_->photon_visual_pipe);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, vk_->photon_visual_pipe_layout, 0, 1, &vk_->photon_visual_ds, 0, nullptr);
+            vkCmdPushConstants(cmd, vk_->photon_visual_pipe_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(uint32_t), &vis_count);
+            const uint32_t gx = (vis_count + 63u) / 64u;
+            vkCmdDispatch(cmd, gx, 1u, 1u);
+
+            VkBufferMemoryBarrier2 c2f{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+            c2f.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            c2f.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            c2f.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+            c2f.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+            c2f.buffer = vk_->photon_visual_out_buf;
+            c2f.offset = 0;
+            c2f.size = VK_WHOLE_SIZE;
+            VkDependencyInfo c2f_dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+            c2f_dep.bufferMemoryBarrierCount = 1;
+            c2f_dep.pBufferMemoryBarriers = &c2f;
+            vkCmdPipelineBarrier2(cmd, &c2f_dep);
+        }
+    }
+    if (scene_ && vk_->photon_audio_pipe && vk_->photon_audio_ds) {
+        const uint32_t audio_count =
+            (uint32_t)std::max<size_t>(64u, std::min<size_t>(scene_->research_points.size(), 4096u));
+        if (audio_count > 0u) {
+            vk_->photon_audio_last_count_u32 = audio_count;
+            VkBufferMemoryBarrier2 h2c_audio[2]{};
+            h2c_audio[0].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+            h2c_audio[0].srcStageMask = VK_PIPELINE_STAGE_2_HOST_BIT;
+            h2c_audio[0].srcAccessMask = VK_ACCESS_2_HOST_WRITE_BIT;
+            h2c_audio[0].dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            h2c_audio[0].dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+            h2c_audio[0].buffer = vk_->photon_audio_phase_buf;
+            h2c_audio[0].offset = 0;
+            h2c_audio[0].size = VK_WHOLE_SIZE;
+            h2c_audio[1] = h2c_audio[0];
+            h2c_audio[1].buffer = vk_->photon_audio_oam_buf;
+            VkDependencyInfo audio_dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+            audio_dep.bufferMemoryBarrierCount = 2;
+            audio_dep.pBufferMemoryBarriers = h2c_audio;
+            vkCmdPipelineBarrier2(cmd, &audio_dep);
+
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, vk_->photon_audio_pipe);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, vk_->photon_audio_pipe_layout, 0, 1, &vk_->photon_audio_ds, 0, nullptr);
+            vkCmdPushConstants(cmd, vk_->photon_audio_pipe_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(uint32_t), &audio_count);
+            const uint32_t gx = (audio_count + 63u) / 64u;
+            vkCmdDispatch(cmd, gx, 1u, 1u);
+
+            VkBufferMemoryBarrier2 c2h{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+            c2h.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            c2h.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            c2h.dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT;
+            c2h.dstAccessMask = VK_ACCESS_2_HOST_READ_BIT;
+            c2h.buffer = vk_->photon_audio_out_buf;
+            c2h.offset = 0;
+            c2h.size = VK_WHOLE_SIZE;
+            VkDependencyInfo c2h_dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+            c2h_dep.bufferMemoryBarrierCount = 1;
+            c2h_dep.pBufferMemoryBarriers = &c2h;
+            vkCmdPipelineBarrier2(cmd, &c2h_dep);
+        }
+    }
 
     // Dynamic rendering begin
     VkClearValue clear{};
@@ -3538,6 +4807,8 @@ void App::EmitEditorSelection(uint64_t object_id_u64) {
     cp.tick_u64 = scene_->sm.canonical_tick;
     cp.payload.editor_set_selection.selected_object_id_u64 = object_id_u64;
     (void)ew_runtime_submit_control_packet(&scene_->sm, &cp);
+}
+
 void App::EmitEditorToggleSelection(uint64_t object_id_u64) {
     if (!scene_) return;
     EwControlPacket cp{};
@@ -3596,8 +4867,6 @@ void App::EmitEditorRedo() {
     cp.source_u16 = 1;
     cp.tick_u64 = scene_->sm.canonical_tick;
     (void)ew_runtime_submit_control_packet(&scene_->sm, &cp);
-}
-
 }
 
 void App::EmitEditorGizmo() {
@@ -3698,6 +4967,22 @@ LRESULT App::WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             if (id == 2003 && code == BN_CLICKED) { OnImportObj(); }
             if (id == 2006 && code == BN_CLICKED) { OnBootstrapGame(); }
             if (id == 2013 && code == BN_CLICKED) { OnApplyTransform(); }
+            auto read_u32 = [&](HWND h, uint32_t defv)->uint32_t {
+                wchar_t buf[128]; buf[0] = 0;
+                GetWindowTextW(h, buf, 128);
+                wchar_t* endp = nullptr;
+                const unsigned long v = wcstoul(buf, &endp, 10);
+                if (!endp || endp == buf) return defv;
+                return (uint32_t)v;
+            };
+            auto read_f32 = [&](HWND h, float defv)->float {
+                wchar_t buf[128]; buf[0] = 0;
+                GetWindowTextW(h, buf, 128);
+                wchar_t* endp = nullptr;
+                const double v = wcstod(buf, &endp);
+                if (!endp || endp == buf) return defv;
+                return (float)v;
+            };
             if (id == 2020 && code == BN_CLICKED) {
                 editor_gizmo_mode_u8_ = 1;
                 EmitEditorGizmo();
@@ -3741,6 +5026,38 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); AppendOutputUtf8("EDIT
                 const LRESULT v = SendMessageW(hwnd_snap_enable_, BM_GETCHECK, 0, 0);
                 editor_snap_enabled_u8_ = (v == BST_CHECKED) ? 1 : 0;
                 EmitEditorSnap();
+            }
+            if (id == 2040 && code == BN_CLICKED) {
+                if (scene_) scene_->SetResearchOutputMode(1u, true);
+                AppendOutputUtf8("RESEARCH: mode=frequency");
+            }
+            if (id == 2041 && code == BN_CLICKED) {
+                if (scene_) scene_->SetResearchOutputMode(2u, true);
+                AppendOutputUtf8("RESEARCH: mode=vector");
+            }
+            if (id == 2042 && code == BN_CLICKED) {
+                const LRESULT v = SendMessageW(hwnd_stov_toggle_, BM_GETCHECK, 0, 0);
+                const bool on = (v == BST_CHECKED);
+                SetSTOVMode(on);
+                if (scene_) scene_->SetResearchStovMode(on, false);
+            }
+            if (id == 2047 && code == BN_CLICKED) {
+                const float a = read_f32(hwnd_param_a_, 0.19f);
+                const float f = read_f32(hwnd_param_f_, 0.245f);
+                const float i = read_f32(hwnd_param_i_, 0.35f);
+                const float v = read_f32(hwnd_param_v_, 0.35f);
+                if (scene_) scene_->SetResearchParams(a, f, i, v, true);
+                AppendOutputUtf8("RESEARCH: params applied");
+            }
+            if (id == 2049 && code == BN_CLICKED) {
+                const uint32_t edge = read_u32(hwnd_lattice_edge_, 256u);
+                if (scene_) scene_->SetResearchLatticeEdge(edge, true);
+                AppendOutputUtf8("RESEARCH: lattice edge applied");
+            }
+            if (id == 2051 && code == BN_CLICKED) {
+                const uint32_t hz = read_u32(hwnd_stream_hz_, 360u);
+                if (scene_) scene_->SetResearchStreamHz(hz, true);
+                AppendOutputUtf8("RESEARCH: stream hz applied");
             }
             if ((id == 2024 || id == 2025) && code == EN_KILLFOCUS) {
                 // Parse snap config edits and emit.

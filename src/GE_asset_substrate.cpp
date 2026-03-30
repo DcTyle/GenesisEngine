@@ -1,8 +1,10 @@
 #include "GE_asset_substrate.hpp"
 
 #include "GE_runtime.hpp"
+#include "VirtualStateDrive.hpp"
 
 #include <algorithm>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 
@@ -12,6 +14,82 @@ static inline bool _ensure_dirs(const std::string& p) {
     std::error_code ec;
     (void)std::filesystem::create_directories(p, ec);
     return !ec;
+}
+
+static bool _write_blob_to_path(const std::string& path_utf8, const std::vector<uint8_t>& blob, std::string* out_err) {
+    std::ofstream out(path_utf8.c_str(), std::ios::binary | std::ios::trunc);
+    if (!out.good()) {
+        if (out_err) *out_err = "write_failed";
+        return false;
+    }
+    if (!blob.empty()) out.write((const char*)blob.data(), (std::streamsize)blob.size());
+    if (!out.good()) {
+        if (out_err) *out_err = "write_incomplete";
+        return false;
+    }
+    return true;
+}
+
+static bool _read_blob_from_path(const std::string& path_utf8, std::vector<uint8_t>& out_blob, std::string* out_err) {
+    std::ifstream in(path_utf8.c_str(), std::ios::binary);
+    if (!in.good()) {
+        if (out_err) *out_err = "read_failed";
+        return false;
+    }
+    in.seekg(0, std::ios::end);
+    const std::streamoff size = in.tellg();
+    if (size < 0) {
+        if (out_err) *out_err = "read_failed";
+        return false;
+    }
+    in.seekg(0, std::ios::beg);
+    out_blob.assign((size_t)size, 0u);
+    if (size > 0) in.read((char*)out_blob.data(), size);
+    if (!in.good() && !in.eof()) {
+        if (out_err) *out_err = "read_incomplete";
+        return false;
+    }
+    return true;
+}
+
+static bool _write_object_asset_to_path(SubstrateManager* sm,
+                                        uint64_t object_id_u64,
+                                        uint32_t kind_u32,
+                                        const std::string& path_utf8,
+                                        std::string* out_err) {
+    if (!sm) {
+        if (out_err) *out_err = "null_substrate";
+        return false;
+    }
+    const EwObjectEntry* entry = sm->object_store.find(object_id_u64);
+    if (!entry) {
+        if (out_err) *out_err = "object_not_found";
+        return false;
+    }
+
+    std::ofstream out(path_utf8.c_str(), std::ios::binary | std::ios::trunc);
+    if (!out.good()) {
+        if (out_err) *out_err = "write_failed";
+        return false;
+    }
+
+    const std::string label_utf8 = entry->label_utf8;
+    const uint32_t magic_u32 = 0x54534147u; // 'GAST'
+    const uint32_t version_u32 = 1u;
+    const uint32_t label_size_u32 = (uint32_t)label_utf8.size();
+    out.write(reinterpret_cast<const char*>(&magic_u32), sizeof(magic_u32));
+    out.write(reinterpret_cast<const char*>(&version_u32), sizeof(version_u32));
+    out.write(reinterpret_cast<const char*>(&object_id_u64), sizeof(object_id_u64));
+    out.write(reinterpret_cast<const char*>(&kind_u32), sizeof(kind_u32));
+    out.write(reinterpret_cast<const char*>(&label_size_u32), sizeof(label_size_u32));
+    if (label_size_u32 != 0u) {
+        out.write(label_utf8.data(), (std::streamsize)label_utf8.size());
+    }
+    if (!out.good()) {
+        if (out_err) *out_err = "write_incomplete";
+        return false;
+    }
+    return true;
 }
 
 const char* GeAssetSubstrate::partition_dirname(GeAssetPartition p) {
@@ -113,11 +191,31 @@ bool GeAssetSubstrate::save_into_root_(SubstrateManager* sm,
     if (out_path_utf8) *out_path_utf8 = full;
 
     // Write the geasset via substrate-owned serializer.
-    if (!sm->sim_save_object_asset_to_exact_path(full, object_id_u64, kind_u32)) {
-        if (out_err) *out_err = "write_failed";
+    if (!_write_object_asset_to_path(sm, object_id_u64, kind_u32, full, out_err)) {
         return false;
     }
     return true;
+}
+
+bool GeAssetSubstrate::save_drive_into_root_(const VirtualStateDrive& drive,
+                                             const std::string& root_utf8,
+                                             const std::string& label_utf8,
+                                             GeAssetPartition partition,
+                                             std::string* out_path_utf8,
+                                             std::string* out_err) const {
+    const std::string part_dir = join_path_(root_utf8, partition_dirname(partition));
+    (void)_ensure_dirs(part_dir);
+
+    std::string label = sanitize_filename_ascii_(label_utf8.empty() ? std::string("virtual_state_drive") : label_utf8);
+    const std::string full = join_path_(part_dir, label + ".gevsd");
+    if (out_path_utf8) *out_path_utf8 = full;
+
+    std::vector<uint8_t> blob;
+    if (!drive.serialize_binary(blob)) {
+        if (out_err) *out_err = "serialize_failed";
+        return false;
+    }
+    return _write_blob_to_path(full, blob, out_err);
 }
 
 bool GeAssetSubstrate::save_object_asset(SubstrateManager* sm,
@@ -138,6 +236,36 @@ bool GeAssetSubstrate::save_object_asset(SubstrateManager* sm,
     return rebuild_project_index(out_err);
 }
 
+bool GeAssetSubstrate::save_virtual_state_drive(const VirtualStateDrive& drive,
+                                                const std::string& label_utf8,
+                                                GeAssetPartition partition,
+                                                bool mirror_to_global_cache,
+                                                std::string* out_path_utf8,
+                                                std::string* out_err) {
+    std::string project_path_utf8;
+    if (!save_drive_into_root_(drive, project_root_utf8_, label_utf8, partition, &project_path_utf8, out_err)) {
+        return false;
+    }
+    if (out_path_utf8) *out_path_utf8 = project_path_utf8;
+    if (mirror_to_global_cache) {
+        std::string cache_path_utf8;
+        (void)save_drive_into_root_(drive, global_cache_root_utf8_, label_utf8, partition, &cache_path_utf8, nullptr);
+    }
+    return rebuild_project_index(out_err);
+}
+
+bool GeAssetSubstrate::load_virtual_state_drive(const std::string& path_utf8,
+                                                VirtualStateDrive& out_drive,
+                                                std::string* out_err) const {
+    std::vector<uint8_t> blob;
+    if (!_read_blob_from_path(path_utf8, blob, out_err)) return false;
+    if (!out_drive.deserialize_binary(blob.data(), blob.size())) {
+        if (out_err) *out_err = "deserialize_failed";
+        return false;
+    }
+    return true;
+}
+
 bool GeAssetSubstrate::scan_entries_(const std::string& root_utf8, std::vector<GeAssetEntry>& out_entries, std::string* out_err) const {
     out_entries.clear();
     std::error_code ec;
@@ -155,7 +283,7 @@ bool GeAssetSubstrate::scan_entries_(const std::string& root_utf8, std::vector<G
             if (ec) break;
             if (!it->is_regular_file()) continue;
             const std::string ext = it->path().extension().string();
-            if (ext != ".geasset") continue;
+            if (ext != ".geasset" && ext != ".gevsd") continue;
             GeAssetEntry e{};
             e.partition = part;
 
@@ -163,13 +291,14 @@ bool GeAssetSubstrate::scan_entries_(const std::string& root_utf8, std::vector<G
             std::filesystem::path rel = std::filesystem::relative(it->path(), root_utf8, ec);
             e.relpath_utf8 = ec ? it->path().string() : rel.generic_string();
 
-            // Best-effort parse of the deterministic file name fields.
-            // label_k<kind>_oid<object>.geasset
+            // Best-effort parse of deterministic file name fields.
+            // Object assets: label_k<kind>_oid<object>.geasset
+            // Drive assets: label.gevsd
             const std::string stem = it->path().stem().string();
             e.label_utf8 = stem;
             size_t kpos = stem.rfind("_k");
             size_t opos = stem.rfind("_oid");
-            if (kpos != std::string::npos && opos != std::string::npos && opos > kpos + 2) {
+            if (ext == ".geasset" && kpos != std::string::npos && opos != std::string::npos && opos > kpos + 2) {
                 e.label_utf8 = stem.substr(0, kpos);
                 const std::string kstr = stem.substr(kpos + 2, opos - (kpos + 2));
                 const std::string ostr = stem.substr(opos + 4);
@@ -179,6 +308,9 @@ bool GeAssetSubstrate::scan_entries_(const std::string& root_utf8, std::vector<G
                 end = nullptr;
                 unsigned long long oo = std::strtoull(ostr.c_str(), &end, 10);
                 if (end && *end == '\0') e.object_id_u64 = (uint64_t)oo;
+            } else if (ext == ".gevsd") {
+                e.kind_u32 = 0x56534431u;
+                e.object_id_u64 = 0u;
             }
             out_entries.push_back(e);
         }

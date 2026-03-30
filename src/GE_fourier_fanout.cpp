@@ -7,6 +7,9 @@
 #include <algorithm>
 #include <vector>
 
+static inline uint64_t ew_mix64(uint64_t x);
+static inline int64_t ew_mul_q32_32(int64_t a_q32_32, int64_t b_q32_32);
+
 // -----------------------------------------------------------------------------
 // Derived probe helpers (read-only, for viewport/debug only)
 // -----------------------------------------------------------------------------
@@ -124,16 +127,6 @@ static inline uint64_t ew_abs_i64_to_u64(int64_t x) {
 }
 
 static inline uint32_t ew_u32_min(uint32_t a, uint32_t b) { return (a < b) ? a : b; }
-
-static inline uint8_t ew_band_from_q15(uint16_t v_q15) {
-    uint32_t x = (uint32_t)v_q15;
-    uint8_t b = 0u;
-    while (x > 0u && b + 1u < 8u) {
-        x >>= 1;
-        ++b;
-    }
-    return b;
-}
 
 static inline bool ew_in_region_q16_16(const int32_t center_q16_16[3], int32_t radius_q16_16, const int32_t p_q16_16[3]) {
     const int64_t dx = (int64_t)p_q16_16[0] - (int64_t)center_q16_16[0];
@@ -404,7 +397,7 @@ void ew_fourier_fanout_step(EwState& cand, const EwInputs& inputs, const EwCtx& 
 
         // Intent summary: hash + magnitude proxy from forcing (first 8 bins).
         // This forms the actuation "intent" plane for temporal coupling.
-        uint64_t intent_hash = 0xA17E5EEDULL ^ ((uint64_t)ss.twiddle_profile_u32 << 32) ^ (uint64_t)cand.tick_u64;
+        uint64_t intent_hash = 0xA17E5EEDULL ^ ((uint64_t)ss.twiddle_profile_u32 << 32) ^ (uint64_t)cand.canonical_tick;
         uint64_t intent_acc_q15 = 0u;
         for (uint32_t kk = 0u; kk < 8u; ++kk) {
             const uint16_t ar = ew_q32_32_to_q15_sat(ss.forcing_hat[kk].re_q32_32);
@@ -490,7 +483,7 @@ void ew_fourier_fanout_step(EwState& cand, const EwInputs& inputs, const EwCtx& 
 
         // Calibration forcing is injected after external pulses.
         if (ss.calibration_mode_u8 == 1u && ss.calibration_ticks_remaining_u32 > 0u) {
-            ew_calibration_inject_forcing(ss, cand.tick_u64);
+            ew_calibration_inject_forcing(ss, cand.canonical_tick);
         }
 
         // If frozen by hook, HOLD this tick: keep state stable and emit minimal leakage status.
@@ -549,7 +542,7 @@ void ew_fourier_fanout_step(EwState& cand, const EwInputs& inputs, const EwCtx& 
         ss.measured_summary.energy_peak_q15 = e_peak;
 
         // Measured summary: hash of resulting low-frequency bins (first 8 bins).
-        uint64_t measured_hash = 0xC011A9EULL ^ ((uint64_t)ss.twiddle_profile_u32 << 32) ^ (uint64_t)cand.tick_u64;
+        uint64_t measured_hash = 0xC011A9EULL ^ ((uint64_t)ss.twiddle_profile_u32 << 32) ^ (uint64_t)cand.canonical_tick;
         for (uint32_t kk = 0u; kk < 8u; ++kk) {
             const uint16_t ar = ew_q32_32_to_q15_sat(ss.phi_hat[kk].re_q32_32);
             const uint16_t ai = ew_q32_32_to_q15_sat(ss.phi_hat[kk].im_q32_32);

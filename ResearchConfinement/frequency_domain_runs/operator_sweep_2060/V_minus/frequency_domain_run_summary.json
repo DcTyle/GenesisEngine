@@ -1,0 +1,15 @@
+// frequency_domain_run_summary.json
+{
+  "mode": "frequency_domain_packets_only_nist_wafer",
+  "description": "Headless spectral silicon-wafer photon confinement with injected GPU pulse quartet field terms.",
+  "packet_count": 24,
+  "bin_count": 96,
+  "steps": 40,
+  "recon_samples": 256,
+  "equivalent_grid_linear": 1024,
+  "voxel_grid_materialized": false,
+  "fft_backend": "cpp_dft_ifft",
+  "gpu_pulse_quartet": {"frequency": 0.245,"amplitude": 0.18,"amperage": 0.36,"voltage": 0.33},
+  "nist_reference": {"path": "ResearchConfinement/nist_silicon_reference.json","loaded": true,"lattice_constant_m": 5.43102e-10,"density_g_cm3": 2.33},
+  "aggregate_metrics": {"mean_shared_score": 0.995885,"low_frequency_trap_ratio": 0.092102,"silicon_reproduction_score": 0.628596,"packet_class_counts": {"shared": 12,"individual": 12}}
+}

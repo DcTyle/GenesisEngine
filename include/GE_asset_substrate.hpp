@@ -8,6 +8,8 @@ class SubstrateManager;
 
 namespace genesis {
 
+class VirtualStateDrive;
+
 // Per-project asset library substrate.
 //
 // Goals:
@@ -57,6 +59,21 @@ public:
                            bool mirror_to_global_cache,
                            std::string* out_err);
 
+    // Save a VirtualStateDrive snapshot as a deterministic binary asset.
+    // This is intended for encoded random-access state, tensor/Fourier summaries,
+    // and lattice sizing experiments derived from the drive contents.
+    bool save_virtual_state_drive(const VirtualStateDrive& drive,
+                                  const std::string& label_utf8,
+                                  GeAssetPartition partition,
+                                  bool mirror_to_global_cache,
+                                  std::string* out_path_utf8,
+                                  std::string* out_err);
+
+    // Load a previously saved VirtualStateDrive snapshot by full path.
+    bool load_virtual_state_drive(const std::string& path_utf8,
+                                  VirtualStateDrive& out_drive,
+                                  std::string* out_err) const;
+
     // Scan the project substrate and rebuild its content index file.
     bool rebuild_project_index(std::string* out_err);
 
@@ -85,6 +102,12 @@ private:
                          GeAssetPartition partition,
                          std::string* out_path_utf8,
                          std::string* out_err);
+    bool save_drive_into_root_(const VirtualStateDrive& drive,
+                               const std::string& root_utf8,
+                               const std::string& label_utf8,
+                               GeAssetPartition partition,
+                               std::string* out_path_utf8,
+                               std::string* out_err) const;
 };
 
 } // namespace genesis

@@ -6,6 +6,7 @@
 #include "anchor.hpp"
 #include "ew_eq_exec.h"
 #include "crawler_encode_cuda.hpp"
+#include "frequency_collapse.hpp"
 
 static inline void ge_wr_u32_le(uint8_t* b, uint32_t off, uint32_t v) {
     b[off+0] = (uint8_t)(v & 0xFFu);

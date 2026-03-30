@@ -1,6 +1,8 @@
 #pragma once
 
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
 
 #include <cstdint>
@@ -16,12 +18,21 @@ struct AppConfig {
     std::string app_title_utf8;
     int initial_width = 1280;
     int initial_height = 720;
+    bool stov_mode = false;
+    std::string stov_data_log_path_utf8;
+    std::string stov_audio_out_path_utf8;
 };
 
 class App {
 public:
+    struct VkCtx;
+    struct Scene;
+
     explicit App(const AppConfig& cfg);
     int Run(HINSTANCE hInst);
+    void SetSTOVMode(bool enable);
+    void LogSTOVData(const std::vector<float>& phase, const std::vector<float>& oam, const std::vector<int>& winding);
+    void OutputSTOVAudio(const std::vector<float>& phase, const std::vector<float>& oam, const std::vector<int>& winding);
 
 private:
     AppConfig cfg_;
@@ -58,6 +69,18 @@ private:
     HWND hwnd_snap_enable_ = nullptr;
     HWND hwnd_grid_step_ = nullptr;
     HWND hwnd_angle_step_ = nullptr;
+    HWND hwnd_mode_freq_ = nullptr;
+    HWND hwnd_mode_vector_ = nullptr;
+    HWND hwnd_stov_toggle_ = nullptr;
+    HWND hwnd_param_a_ = nullptr;
+    HWND hwnd_param_f_ = nullptr;
+    HWND hwnd_param_i_ = nullptr;
+    HWND hwnd_param_v_ = nullptr;
+    HWND hwnd_apply_sim_params_ = nullptr;
+    HWND hwnd_lattice_edge_ = nullptr;
+    HWND hwnd_apply_lattice_edge_ = nullptr;
+    HWND hwnd_stream_hz_ = nullptr;
+    HWND hwnd_apply_stream_hz_ = nullptr;
 
     bool running_ = true;
     bool resized_ = false;
@@ -65,8 +88,6 @@ private:
     int client_h_ = 0;
 
     // Subsystems
-    struct VkCtx;
-    struct Scene;
     VkCtx* vk_ = nullptr;
     Scene* scene_ = nullptr;
     EwOpenXRRuntime xr_{};
@@ -101,10 +122,14 @@ private:
     int32_t drag_start_pos_q16_16_[3] = {0,0,0};
     int32_t drag_last_pos_q16_16_[3] = {0,0,0};
     int32_t drag_start_rot_q16_16_[4] = {0,0,0,65536};
+    int32_t drag_last_rot_q16_16_[4] = {0,0,0,65536};
 
     // Visualization toggle: when false, the app runs headless (no continuous presentation)
     // but simulation and verification continue.
     bool visualize_enabled_ = true;
+    bool stov_mode_ = false;
+    std::string stov_data_log_path_utf8_;
+    std::string stov_audio_out_path_utf8_;
 
 // View modes
     bool immersion_mode_ = false; // Standard vs Immersion

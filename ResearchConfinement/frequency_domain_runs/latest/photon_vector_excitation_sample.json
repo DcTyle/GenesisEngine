@@ -1,0 +1,19 @@
+// photon_vector_excitation_sample.json
+[
+  {"x":0,"y":0,"z":0,"vec_x":16,"vec_y":19,"vec_z":22,"spin":[0,0,1],"oam_twist":-0.996132},
+  {"x":1,"y":0,"z":0,"vec_x":13,"vec_y":17,"vec_z":20,"spin":[0,0,1],"oam_twist":-0.498877},
+  {"x":2,"y":0,"z":0,"vec_x":13,"vec_y":17,"vec_z":20,"spin":[0,0,1],"oam_twist":0.493324},
+  {"x":3,"y":0,"z":0,"vec_x":17,"vec_y":20,"vec_z":23,"spin":[0,0,1],"oam_twist":0.996063},
+  {"x":4,"y":0,"z":0,"vec_x":14,"vec_y":17,"vec_z":21,"spin":[0,0,1],"oam_twist":-0.997762},
+  {"x":5,"y":0,"z":0,"vec_x":14,"vec_y":18,"vec_z":21,"spin":[0,0,1],"oam_twist":-0.498877},
+  {"x":6,"y":0,"z":0,"vec_x":17,"vec_y":20,"vec_z":23,"spin":[0,0,1],"oam_twist":0.498019},
+  {"x":7,"y":0,"z":0,"vec_x":15,"vec_y":18,"vec_z":21,"spin":[0,0,1],"oam_twist":0.997768},
+  {"x":8,"y":0,"z":0,"vec_x":15,"vec_y":18,"vec_z":21,"spin":[0,0,1],"oam_twist":-0.997762},
+  {"x":9,"y":0,"z":0,"vec_x":18,"vec_y":21,"vec_z":24,"spin":[0,0,1],"oam_twist":-0.494474},
+  {"x":10,"y":0,"z":0,"vec_x":15,"vec_y":19,"vec_z":22,"spin":[0,0,1],"oam_twist":0.498885},
+  {"x":11,"y":0,"z":0,"vec_x":16,"vec_y":19,"vec_z":22,"spin":[0,0,1],"oam_twist":0.997768},
+  {"x":12,"y":0,"z":0,"vec_x":18,"vec_y":22,"vec_z":25,"spin":[0,0,1],"oam_twist":-0.979217},
+  {"x":13,"y":0,"z":0,"vec_x":16,"vec_y":19,"vec_z":22,"spin":[0,0,1],"oam_twist":-0.495082},
+  {"x":14,"y":0,"z":0,"vec_x":16,"vec_y":19,"vec_z":23,"spin":[0,0,1],"oam_twist":0.498885},
+  {"x":15,"y":0,"z":0,"vec_x":19,"vec_y":22,"vec_z":25,"spin":[0,0,1],"oam_twist":0.974898}
+]

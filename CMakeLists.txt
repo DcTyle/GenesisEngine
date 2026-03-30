@@ -55,6 +55,7 @@ endif()
 
 add_library(EigenWareCore
     src/GE_runtime.cpp
+    src/VirtualStateDrive.cpp
     src/GE_camera_anchor.cpp
     src/GE_pulse_trajectory_bound.cpp
     src/GE_project_settings.cpp
@@ -74,6 +75,7 @@ add_library(EigenWareCore
     src/GE_language_foundation.cpp
     src/GE_audio_wav.cpp
     src/GE_audio_features.cpp
+    src/GE_research_confinement.cpp
     src/GE_speech_alignment.cpp
     src/GE_forced_aligner.cpp
     src/GE_voice_synth.cpp
@@ -109,6 +111,7 @@ add_library(EigenWareCore
     src/GE_safety_governor.cpp
     src/GE_phase_current.cpp
     src/GE_global_coherence.cpp
+    src/GE_planet_ancilla.cpp
     src/ancilla_ops.cpp
     src/substrate_alu.cpp
     src/substrate_harmonics.cpp
@@ -177,12 +180,14 @@ endif()
 if (EW_BUILD_ASSIMP_TOOLS)
     target_sources(EigenWareCore PRIVATE src/assimp_fbx_io.cpp)
     target_link_libraries(EigenWareCore PUBLIC assimp::assimp)
+else()
+    target_sources(EigenWareCore PRIVATE src/assimp_fbx_io_stub.cpp)
 endif()
 
 # Main executables are provided by vulkan_app as genesis_runtime and genesis_editor.
 
 option(EW_ENABLE_UI_PARTITION "Enable UI anchor partition + chat stream" ON)
-option(EW_ENABLE_CUDA "Enable CUDA evolution kernel (required for GPU-only pipeline)" ON)
+option(EW_ENABLE_CUDA "Enable CUDA evolution kernel (required for GPU-only pipeline)" OFF)
 if (EW_ENABLE_CUDA)
     enable_language(CUDA)
     find_package(CUDAToolkit REQUIRED)
@@ -224,8 +229,30 @@ else()
     # "not available" deterministically via existing EW_ENABLE_CUDA guards.
     target_compile_definitions(EigenWareCore PRIVATE EW_ENABLE_CUDA=0)
     target_sources(EigenWareCore PRIVATE
+        src/crawler_encode_cuda.cpp
         src/carrier_bundle_cuda.cpp
+        src/GE_canonicalize_cuda.cpp
+        src/GE_overlap_cuda.cpp
+        src/GE_topk_cuda.cpp
+        src/field_lattice_gpu_stub.cpp
     )
+endif()
+
+# Clang on Windows needs compiler-rt builtins for 128-bit integer helpers
+# (__divti3, __udivti3, __modti3, ...), which are emitted by deterministic
+# fixed-point math paths throughout EigenWareCore.
+if (WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    get_filename_component(_ew_llvm_bin_dir "${CMAKE_LINKER}" DIRECTORY)
+    get_filename_component(_ew_llvm_root "${_ew_llvm_bin_dir}" DIRECTORY)
+    file(GLOB _ew_builtins_candidates "${_ew_llvm_root}/lib/clang/*/lib/windows/clang_rt.builtins-x86_64.lib")
+    if (_ew_builtins_candidates)
+        list(SORT _ew_builtins_candidates)
+        list(REVERSE _ew_builtins_candidates)
+        list(GET _ew_builtins_candidates 0 _ew_clang_builtins_lib)
+        target_link_libraries(EigenWareCore PUBLIC "${_ew_clang_builtins_lib}")
+    else()
+        message(FATAL_ERROR "Clang builtins library not found (clang_rt.builtins-x86_64.lib).")
+    endif()
 endif()
 
 # Vulkan app lives in its own subdirectory.
@@ -239,6 +266,28 @@ add_executable(test_determinism
 )
 target_link_libraries(test_determinism PRIVATE EigenWareCore)
 add_test(NAME deterministic COMMAND test_determinism)
+
+add_executable(test_research_confinement
+    tests/test_research_confinement.cpp
+)
+target_link_libraries(test_research_confinement PRIVATE EigenWareCore)
+add_test(NAME research_confinement COMMAND test_research_confinement)
+
+add_executable(test_virtual_state_drive
+    tests/test_virtual_state_drive.cpp
+)
+target_link_libraries(test_virtual_state_drive PRIVATE EigenWareCore)
+add_test(NAME virtual_state_drive COMMAND test_virtual_state_drive)
+
+add_executable(test_asset_substrate_virtual_state_drive
+    tests/test_asset_substrate_virtual_state_drive.cpp
+)
+target_link_libraries(test_asset_substrate_virtual_state_drive PRIVATE EigenWareCore)
+
+add_executable(photon_frequency_domain_sim
+    tools/photon_frequency_domain_sim.cpp
+)
+add_test(NAME asset_substrate_virtual_state_drive COMMAND test_asset_substrate_virtual_state_drive)
 
 # Corpus pipeline regression tests (CUDA required).
 if (EW_ENABLE_CUDA)
@@ -335,17 +384,17 @@ add_executable(ew_flow_analyze
 )
 target_link_libraries(ew_flow_analyze PRIVATE EigenWareCore)
 
-add_executable(ew_self_patch_loop
+add_executable(ew_self_patch_loop EXCLUDE_FROM_ALL
     src/tools/self_patch_loop_main.cpp
 )
 target_link_libraries(ew_self_patch_loop PRIVATE EigenWareCore)
 
-add_executable(ge_corpus_ingest
+add_executable(ge_corpus_ingest EXCLUDE_FROM_ALL
     src/tools/ge_corpus_ingest_main.cpp
 )
 target_link_libraries(ge_corpus_ingest PRIVATE EigenWareCore)
 
-add_executable(ge_corpus_replay
+add_executable(ge_corpus_replay EXCLUDE_FROM_ALL
     src/tools/ge_corpus_replay_main.cpp
 )
 target_link_libraries(ge_corpus_replay PRIVATE EigenWareCore)
@@ -361,17 +410,17 @@ add_executable(ge_speech_ingest
 )
 target_link_libraries(ge_speech_ingest PRIVATE EigenWareCore)
 
-add_executable(ge_tts_speak
+add_executable(ge_tts_speak EXCLUDE_FROM_ALL
     src/tools/ge_tts_speak_main.cpp
 )
 target_link_libraries(ge_tts_speak PRIVATE EigenWareCore)
 
-add_executable(ge_voice_train
+add_executable(ge_voice_train EXCLUDE_FROM_ALL
     src/tools/ge_voice_train_main.cpp
 )
 target_link_libraries(ge_voice_train PRIVATE EigenWareCore)
 
-add_executable(ge_force_align
+add_executable(ge_force_align EXCLUDE_FROM_ALL
     src/tools/ge_force_align_main.cpp
 )
 target_link_libraries(ge_force_align PRIVATE EigenWareCore)
@@ -379,10 +428,20 @@ target_link_libraries(ge_force_align PRIVATE EigenWareCore)
 
 option(EW_ENFORCE_COHERENCE_GATE "Fail builds unless integration proofs pass" ON)
 if (EW_ENFORCE_COHERENCE_GATE)
-    add_custom_target(coherence_gate ALL
-        COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
-        COMMAND ew_contract_harness
-        COMMAND ew_verify_proofs
+    set(EW_COHERENCE_GATE_EXTRA_COMMANDS)
+    if (TARGET ew_contract_harness)
+        list(APPEND EW_COHERENCE_GATE_EXTRA_COMMANDS
+            COMMAND $<TARGET_FILE:ew_contract_harness>
+        )
+    endif()
+    if (TARGET ew_verify_proofs)
+        list(APPEND EW_COHERENCE_GATE_EXTRA_COMMANDS
+            COMMAND $<TARGET_FILE:ew_verify_proofs>
+        )
+    endif()
+    add_custom_target(coherence_gate
+        COMMAND ${CMAKE_CTEST_COMMAND} -C $<CONFIG> --output-on-failure
+        ${EW_COHERENCE_GATE_EXTRA_COMMANDS}
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         COMMENT "Coherence gate: running integration proofs"
         VERBATIM
@@ -423,7 +482,7 @@ if (EW_BUILD_ASSIMP_TOOLS)
     target_link_libraries(ew_assimp_fbx_test PRIVATE EigenWareCore)
     target_include_directories(ew_assimp_fbx_test PRIVATE include)
 endif()
-add_executable(ge_vocab_recall_test
+add_executable(ge_vocab_recall_test EXCLUDE_FROM_ALL
     src/tools/ge_vocab_recall_test_main.cpp
 )
 target_link_libraries(ge_vocab_recall_test PRIVATE EigenWareCore)

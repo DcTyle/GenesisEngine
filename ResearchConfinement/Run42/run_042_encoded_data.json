@@ -1,0 +1,66 @@
+﻿{
+    "encoding_name":  "f_code_a_code_i_code_v_code",
+    "encoded_controls":  {
+                             "f_code":  0.245,
+                             "a_code":  0.18,
+                             "i_code":  0.33,
+                             "v_code":  0.33
+                         },
+    "seed_controls":  {
+                          "D_track":  {
+                                          "freq_norm":  0.245,
+                                          "curr_norm":  0.35,
+                                          "volt_norm":  0.35,
+                                          "amp_norm":  0.19
+                                      },
+                          "I_accum":  {
+                                          "freq_norm":  0.1775,
+                                          "curr_norm":  0.45,
+                                          "volt_norm":  0.37,
+                                          "amp_norm":  0.19
+                                      },
+                          "L_smooth":  {
+                                           "freq_norm":  0.175,
+                                           "curr_norm":  0.37,
+                                           "volt_norm":  0.37,
+                                           "amp_norm":  0.19
+                                       }
+                      },
+    "operator_coefficients":  {
+                                  "kappa_a":  0.085,
+                                  "kappa_f":  0.055,
+                                  "kappa_couple":  0.08,
+                                  "kappa_leak":  0.035,
+                                  "max_amplitude":  2.75,
+                                  "low_bin_count":  12
+                              },
+    "nist_reference":  {
+                           "lattice_constant_m":  5.43102E-10,
+                           "density_g_cm3":  2.33,
+                           "mean_excitation_energy_ev":  173,
+                           "first_ionization_energy_ev":  8.15168
+                       },
+    "derived_observables":  {
+                                "shared_packets":  23,
+                                "individual_packets":  27,
+                                "low_frequency_trap_ratio":  0.209172,
+                                "mean_shared_score":  0.997396,
+                                "calculus_product_peak":  0.97955772808299235,
+                                "calculus_product_mean_active":  0.94442990807605054,
+                                "collapse_gate_engagement":  0.98125
+                            },
+    "certainty":  {
+                      "model_certainty_score":  0.92043475792675755,
+                      "cross_talk_stability":  0.9996939970168095,
+                      "conservation_stability":  0.72835863409358292,
+                      "split_balance":  0.92,
+                      "run42_composite_mean":  0.65647152680191878,
+                      "run41_composite_mean":  0.50541974740614315,
+                      "run42_minus_run41_composite":  0.15105177939577563,
+                      "certainty_scope":  "model-internal certainty only; not a direct proof of physical truth"
+                  },
+    "equation_artifacts":  {
+                               "equation_stack_markdown":  "run_042_equation_stack.md",
+                               "collapse_calculus_timeseries":  "run_042_collapse_calculus_timeseries.csv"
+                           }
+}

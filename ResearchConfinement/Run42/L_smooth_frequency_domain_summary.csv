@@ -1,0 +1,2 @@
+﻿task,freq_norm,amp_norm,volt_norm,curr_norm,pulse_period_steps,phase_lock_fraction,lattice_lock_fraction,joint_lock_fraction,speed_tracking_score,curvature_tracking_score,feedback_to_signal_ratio,mean_energy_drift,return_step,return_distance_a,dominant_recurrence_steps,recurrence_alignment,conservation_alignment,composite_score
+L_smooth,0.175,0.19,0.37,0.37,1,0.6875,0.9978843125,0.68604546484375,0.41533867784821643,0.61932754957696223,0.038457978968677746,0.034049321655657716,20,27363.367551509364,1,0.95143717392974581,0.70992885057122712,0.74245397881277164

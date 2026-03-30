@@ -9,8 +9,25 @@ class PhotonConfinement {
 public:
     enum class SimulationMode {
         TemporalDynamicsOnLattice, // Mode 1: Apply temporal dynamics to silicon lattice characteristics
-        Baseline9DStabilization    // Mode 2: Baseline 9D accounting, output parameters for temporal dynamics
+        Baseline9DStabilization,   // Mode 2: Baseline 9D accounting, output parameters for temporal dynamics
+        STOV                       // Mode 3: Explicit Spatiotemporal Optical Vortex (STOV) simulation
     };
+    // STOV: Output buffers for phase, OAM, winding number, etc.
+    struct STOVData {
+        std::vector<float> phase;         // Per-cell phase
+        std::vector<float> oam_density;   // Per-cell OAM density
+        std::vector<int> winding_number;  // Per-cell winding number
+        std::vector<float> amplitude;     // Per-cell amplitude
+        // Add more as needed (e.g., tensor gradients)
+    };
+
+    // Simulate a step of photon confinement (calls CUDA kernel)
+    // If mode == STOV, fills stov_data with per-cell results
+    static void simulate_step(std::vector<PhotonState>& states, float dt, float field_strength,
+                             float voltage, float amperage, float frequency, float amplitude,
+                             float temperature, float ambient_freq,
+                             SimulationMode mode,
+                             STOVData* stov_data = nullptr);
 public:
         float x, y, z;      // Position
         float px, py, pz;   // Momentum

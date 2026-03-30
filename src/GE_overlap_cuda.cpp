@@ -1,6 +1,7 @@
 #include "GE_overlap_cuda.hpp"
 #include "GE_topk_cuda.hpp"
 
+#if defined(EW_ENABLE_CUDA) && (EW_ENABLE_CUDA==1)
 #include <cuda_runtime.h>
 #include <vector>
 
@@ -110,3 +111,19 @@ bool GE_retrieve_topk_cuda(const GE_CorpusAnchorStore& store,
     return GE_select_topk_cuda(cache.d_scores, n, k, out_hits);
 #endif
 }
+#else
+bool GE_retrieve_topk_cuda(const GE_CorpusAnchorStore& store,
+                           const GE_CorpusAnchorRecord& query,
+                           uint8_t lane_u8,
+                           const EwId9* opt_domain_id9,
+                           size_t k,
+                           std::vector<GE_OverlapHit>& out_hits) {
+    (void)store;
+    (void)query;
+    (void)lane_u8;
+    (void)opt_domain_id9;
+    (void)k;
+    out_hits.clear();
+    return false;
+}
+#endif

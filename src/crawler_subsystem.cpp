@@ -16,7 +16,9 @@
 
 // Host pinned buffer (DMA-friendly). This is orchestration-only; all compute
 // remains GPU-side.
+#if defined(EW_ENABLE_CUDA) && (EW_ENABLE_CUDA==1)
 #include <cuda_runtime_api.h>
+#endif
 
 CrawlerSubsystem::CrawlerSubsystem() {
     stats_ = {};
@@ -30,7 +32,11 @@ CrawlerSubsystem::CrawlerSubsystem() {
 CrawlerSubsystem::~CrawlerSubsystem() {
     if (pinned_bytes_) {
         if (pinned_is_cuda_) {
+#if defined(EW_ENABLE_CUDA) && (EW_ENABLE_CUDA==1)
             cudaFreeHost(pinned_bytes_);
+#else
+            std::free(pinned_bytes_);
+#endif
         } else {
             std::free(pinned_bytes_);
         }
@@ -53,19 +59,35 @@ bool CrawlerSubsystem::ensure_pinned_capacity_bytes_(size_t need_cap_bytes) {
 
     // Release old.
     if (pinned_bytes_) {
-        if (pinned_is_cuda_) cudaFreeHost(pinned_bytes_);
-        else std::free(pinned_bytes_);
+        if (pinned_is_cuda_) {
+#if defined(EW_ENABLE_CUDA) && (EW_ENABLE_CUDA==1)
+            cudaFreeHost(pinned_bytes_);
+#else
+            std::free(pinned_bytes_);
+#endif
+        } else {
+            std::free(pinned_bytes_);
+        }
         pinned_bytes_ = nullptr;
         pinned_cap_bytes_ = 0;
         pinned_is_cuda_ = false;
     }
 
     void* p = nullptr;
+#if defined(EW_ENABLE_CUDA) && (EW_ENABLE_CUDA==1)
     const cudaError_t ce = cudaHostAlloc(&p, new_cap, cudaHostAllocPortable);
     if (ce == cudaSuccess && p) {
         pinned_bytes_ = (uint8_t*)p;
         pinned_cap_bytes_ = new_cap;
         pinned_is_cuda_ = true;
+        return true;
+    }
+#endif
+    p = std::malloc(new_cap);
+    if (p) {
+        pinned_bytes_ = (uint8_t*)p;
+        pinned_cap_bytes_ = new_cap;
+        pinned_is_cuda_ = false;
         return true;
     }
     return false;

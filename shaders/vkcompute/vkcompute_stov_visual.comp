@@ -1,0 +1,46 @@
+// vkcompute_stov_visual.comp
+// STOV visualization compute pass:
+// phase + amplitude + OAM + winding -> packed RGBA stream.
+
+#version 450
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform StovVisualPc {
+    uint count;
+} pc;
+
+layout(binding = 0) readonly buffer PhaseBuf   { float phase[]; };
+layout(binding = 1) readonly buffer AmpBuf     { float amplitude[]; };
+layout(binding = 2) readonly buffer OAMBuf     { float oam[]; };
+layout(binding = 3) readonly buffer WindBuf    { int winding[]; };
+layout(binding = 4) writeonly buffer OutBuf    { vec4 rgba_out[]; };
+
+vec3 hsv2rgb(float h, float s, float v) {
+    float c = v * s;
+    float x = c * (1.0 - abs(mod(h * 6.0, 2.0) - 1.0));
+    float m = v - c;
+    vec3 rgb;
+    if      (h < 1.0 / 6.0) rgb = vec3(c, x, 0.0);
+    else if (h < 2.0 / 6.0) rgb = vec3(x, c, 0.0);
+    else if (h < 3.0 / 6.0) rgb = vec3(0.0, c, x);
+    else if (h < 4.0 / 6.0) rgb = vec3(0.0, x, c);
+    else if (h < 5.0 / 6.0) rgb = vec3(x, 0.0, c);
+    else                    rgb = vec3(c, 0.0, x);
+    return rgb + m;
+}
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pc.count) return;
+
+    float theta = phase[idx];
+    float amp = clamp(amplitude[idx], 0.0, 1.0);
+    float oam_val = oam[idx];
+    float wind = float(winding[idx]);
+
+    float hue = fract(theta / (2.0 * 3.14159265) + 0.5 + 0.08 * wind);
+    float sat = clamp(0.25 + 0.65 * abs(oam_val), 0.0, 1.0);
+    float val = clamp(0.10 + 0.90 * amp, 0.0, 1.0);
+    vec3 rgb = hsv2rgb(hue, sat, val);
+    rgba_out[idx] = vec4(rgb, clamp(0.20 + 0.80 * amp, 0.0, 1.0));
+}

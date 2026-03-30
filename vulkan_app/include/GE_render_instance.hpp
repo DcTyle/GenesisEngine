@@ -7,7 +7,7 @@
 struct EwRenderInstance {
     uint64_t object_id_u64 = 0;
     uint32_t anchor_id_u32 = 0;
-    uint32_t kind_u32 = 0; // 0=generic, 1=Sun, 2=Earth
+    uint32_t kind_u32 = 0; // 0=generic, 1=Sun, 2=Earth, 3=research packet, 4=research vector, 5=tensor glyph, 6=shader voxel
 
     uint32_t albedo_rgba8 = 0xFFFFFFFFu;
     uint32_t atmosphere_rgba8 = 0x00000000u;

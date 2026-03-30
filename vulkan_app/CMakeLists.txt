@@ -8,6 +8,9 @@ add_executable(genesis_runtime
     src/camera_controller.cpp
     src/ai_ui.cpp
     src/openxr_runtime.cpp
+    src/obj_import.cpp
+    src/scene.cpp
+    src/scene_api.cpp
 )
 
 add_executable(genesis_editor
@@ -17,7 +20,15 @@ add_executable(genesis_editor
     src/ai_ui.cpp
     src/openxr_runtime.cpp
     src/obj_import.cpp
+    src/scene.cpp
+    src/scene_api.cpp
 )
+
+if (WIN32)
+    # main.cpp provides wWinMain entry point.
+    set_target_properties(genesis_runtime PROPERTIES WIN32_EXECUTABLE TRUE)
+    set_target_properties(genesis_editor PROPERTIES WIN32_EXECUTABLE TRUE)
+endif()
 
 target_include_directories(genesis_runtime PRIVATE include)
 target_link_libraries(genesis_runtime PRIVATE EigenWareCore)
@@ -81,6 +92,7 @@ endif()
 
 set(EW_SHADER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/shaders")
 set(EW_SHADER_OUT "${CMAKE_CURRENT_BINARY_DIR}/shaders")
+set(EW_RESEARCH_SHADER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../shaders/vkcompute")
 file(MAKE_DIRECTORY "${EW_SHADER_OUT}")
 
 if (WIN32)
@@ -111,36 +123,51 @@ set(EW_SPV
     "${EW_SHADER_OUT}/instanced.frag.spv"
     "${EW_SHADER_OUT}/cam_hist.comp.spv"
     "${EW_SHADER_OUT}/cam_median.comp.spv"
+    "${EW_SHADER_OUT}/vkcompute_photon_visual.comp.spv"
+    "${EW_SHADER_OUT}/vkcompute_photon_audio.comp.spv"
+    "${EW_SHADER_OUT}/vkcompute_stov_visual.comp.spv"
 )
 
 if (WIN32)
-    add_custom_command(
-        OUTPUT "${EW_SHADER_OUT}/instanced.vert.spv"
-        COMMAND "${EW_SHADER_COMPILER}" $<$<STREQUAL:${EW_COMP_MODE},glslc>:-o> "${EW_SHADER_OUT}/instanced.vert.spv" "${EW_SHADER_DIR}/instanced.vert"
-        COMMAND "${EW_SHADER_COMPILER}" $<$<STREQUAL:${EW_COMP_MODE},glslang>:-V> "${EW_SHADER_DIR}/instanced.vert" -o "${EW_SHADER_OUT}/instanced.vert.spv"
-        DEPENDS "${EW_SHADER_DIR}/instanced.vert"
-        VERBATIM)
+    function(ew_add_shader_compile_rule shader_src shader_out)
+        if (EW_COMP_MODE STREQUAL "glslc")
+            add_custom_command(
+                OUTPUT "${shader_out}"
+                COMMAND "${EW_SHADER_COMPILER}" -o "${shader_out}" "${shader_src}"
+                DEPENDS "${shader_src}"
+                VERBATIM)
+        else()
+            add_custom_command(
+                OUTPUT "${shader_out}"
+                COMMAND "${EW_SHADER_COMPILER}" -V "${shader_src}" -o "${shader_out}"
+                DEPENDS "${shader_src}"
+                VERBATIM)
+        endif()
+    endfunction()
 
-    add_custom_command(
-        OUTPUT "${EW_SHADER_OUT}/instanced.frag.spv"
-        COMMAND "${EW_SHADER_COMPILER}" $<$<STREQUAL:${EW_COMP_MODE},glslc>:-o> "${EW_SHADER_OUT}/instanced.frag.spv" "${EW_SHADER_DIR}/instanced.frag"
-        COMMAND "${EW_SHADER_COMPILER}" $<$<STREQUAL:${EW_COMP_MODE},glslang>:-V> "${EW_SHADER_DIR}/instanced.frag" -o "${EW_SHADER_OUT}/instanced.frag.spv"
-        DEPENDS "${EW_SHADER_DIR}/instanced.frag"
-        VERBATIM)
+    function(ew_add_compute_shader_compile_rule shader_src shader_out)
+        if (EW_COMP_MODE STREQUAL "glslc")
+            add_custom_command(
+                OUTPUT "${shader_out}"
+                COMMAND "${EW_SHADER_COMPILER}" -fshader-stage=comp -o "${shader_out}" "${shader_src}"
+                DEPENDS "${shader_src}"
+                VERBATIM)
+        else()
+            add_custom_command(
+                OUTPUT "${shader_out}"
+                COMMAND "${EW_SHADER_COMPILER}" -V -S comp "${shader_src}" -o "${shader_out}"
+                DEPENDS "${shader_src}"
+                VERBATIM)
+        endif()
+    endfunction()
 
-    add_custom_command(
-        OUTPUT "${EW_SHADER_OUT}/cam_hist.comp.spv"
-        COMMAND "${EW_SHADER_COMPILER}" $<$<STREQUAL:${EW_COMP_MODE},glslc>:-o> "${EW_SHADER_OUT}/cam_hist.comp.spv" "${EW_SHADER_DIR}/cam_hist.comp"
-        COMMAND "${EW_SHADER_COMPILER}" $<$<STREQUAL:${EW_COMP_MODE},glslang>:-V> "${EW_SHADER_DIR}/cam_hist.comp" -o "${EW_SHADER_OUT}/cam_hist.comp.spv"
-        DEPENDS "${EW_SHADER_DIR}/cam_hist.comp"
-        VERBATIM)
-
-    add_custom_command(
-        OUTPUT "${EW_SHADER_OUT}/cam_median.comp.spv"
-        COMMAND "${EW_SHADER_COMPILER}" $<$<STREQUAL:${EW_COMP_MODE},glslc>:-o> "${EW_SHADER_OUT}/cam_median.comp.spv" "${EW_SHADER_DIR}/cam_median.comp"
-        COMMAND "${EW_SHADER_COMPILER}" $<$<STREQUAL:${EW_COMP_MODE},glslang>:-V> "${EW_SHADER_DIR}/cam_median.comp" -o "${EW_SHADER_OUT}/cam_median.comp.spv"
-        DEPENDS "${EW_SHADER_DIR}/cam_median.comp"
-        VERBATIM)
+    ew_add_shader_compile_rule("${EW_SHADER_DIR}/instanced.vert" "${EW_SHADER_OUT}/instanced.vert.spv")
+    ew_add_shader_compile_rule("${EW_SHADER_DIR}/instanced.frag" "${EW_SHADER_OUT}/instanced.frag.spv")
+    ew_add_shader_compile_rule("${EW_SHADER_DIR}/cam_hist.comp" "${EW_SHADER_OUT}/cam_hist.comp.spv")
+    ew_add_shader_compile_rule("${EW_SHADER_DIR}/cam_median.comp" "${EW_SHADER_OUT}/cam_median.comp.spv")
+    ew_add_compute_shader_compile_rule("${EW_RESEARCH_SHADER_DIR}/vkcompute_photon_visual.glsl" "${EW_SHADER_OUT}/vkcompute_photon_visual.comp.spv")
+    ew_add_compute_shader_compile_rule("${EW_RESEARCH_SHADER_DIR}/vkcompute_photon_audio.glsl" "${EW_SHADER_OUT}/vkcompute_photon_audio.comp.spv")
+    ew_add_compute_shader_compile_rule("${EW_RESEARCH_SHADER_DIR}/vkcompute_stov_visual.comp" "${EW_SHADER_OUT}/vkcompute_stov_visual.comp.spv")
 
     add_custom_target(EWShaders ALL DEPENDS ${EW_SPV})
     add_dependencies(genesis_runtime EWShaders)
