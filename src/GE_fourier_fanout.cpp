@@ -114,6 +114,51 @@ static inline uint16_t ew_q32_32_to_q15_sat(int64_t v_q32_32) {
     return (uint16_t)((a * 32767ULL) >> 32);
 }
 
+static inline int64_t ew_q15_to_q32_32(uint16_t v_q15) {
+    return ((int64_t)v_q15) << 17;
+}
+
+static inline uint16_t ew_ratio_q15_u64(uint64_t num, uint64_t den) {
+    if (den == 0u) return (num != 0u) ? 32767u : 0u;
+    __int128 s = (__int128)num << 15;
+    uint64_t q = (uint64_t)(s / (__int128)den);
+    if (q > 32767u) q = 32767u;
+    return (uint16_t)q;
+}
+
+static inline uint16_t ew_mean_q15_u16(const uint16_t* v, uint32_t n) {
+    if (!v || n == 0u) return 0u;
+    uint64_t sum = 0u;
+    for (uint32_t i = 0u; i < n; ++i) sum += (uint64_t)v[i];
+    uint64_t q = sum / (uint64_t)n;
+    if (q > 32767u) q = 32767u;
+    return (uint16_t)q;
+}
+
+static inline uint16_t ew_abs_diff_q15(uint16_t a, uint16_t b) {
+    return (a >= b) ? (uint16_t)(a - b) : (uint16_t)(b - a);
+}
+
+static inline uint16_t ew_coherence_q15_from_pair(uint16_t a, uint16_t b) {
+    const uint16_t hi = (a >= b) ? a : b;
+    if (hi == 0u) return 0u;
+    const uint16_t diff = ew_abs_diff_q15(a, b);
+    const uint16_t diff_ratio_q15 = ew_ratio_q15_u64((uint64_t)diff, (uint64_t)hi);
+    return (diff_ratio_q15 >= 32767u) ? 0u : (uint16_t)(32767u - diff_ratio_q15);
+}
+
+static inline int64_t ew_move_toward_i64(int64_t cur, int64_t target, int64_t step) {
+    if (step <= 0) step = 1;
+    if (cur < target) {
+        cur += step;
+        if (cur > target) cur = target;
+    } else if (cur > target) {
+        cur -= step;
+        if (cur < target) cur = target;
+    }
+    return cur;
+}
+
 static inline uint8_t ew_band_from_q15(uint16_t q15) {
     // crude log band from 0..32767.
     uint8_t band = 0;
@@ -186,12 +231,27 @@ static void ew_apply_hooks(EwSpectralFieldAnchorState& ss) {
             // p1 is a signed residual proxy (Q32.32).
             const uint32_t gain_q15 = (uint32_t)((uint64_t)hp.p0_q32_32 >> 32);
             const int64_t residual = hp.p1_q32_32;
+            const int64_t error_delta = ss.calculus_summary.error_delta_q32_32;
+            const int64_t error_integral = ss.calculus_summary.error_integral_q32_32;
+            const uint32_t delta_norm_q15 = (uint32_t)ew_q32_32_to_q15_sat(error_delta);
+            const uint32_t integral_norm_q15 = (uint32_t)ew_q32_32_to_q15_sat(error_integral);
+
+            uint32_t authority_q15 = gain_q15;
+            authority_q15 += (delta_norm_q15 >> 2);
+            authority_q15 += (integral_norm_q15 >> 3);
+            if (authority_q15 > 32767u) authority_q15 = 32767u;
+            ss.calculus_summary.controller_authority_q15 = (uint16_t)authority_q15;
 
             // Update op_gain_q15 toward a target based on residual sign.
-            // Deterministic bounded update: op_gain += sign(residual) * gain/8.
+            // Deterministic bounded update: op_gain += sign(residual) * authority/8,
+            // with extra emphasis when the error derivative is still growing.
             int32_t cur = (int32_t)ss.op_gain_q15;
-            int32_t dg = (int32_t)(gain_q15 >> 3);
+            int32_t dg = (int32_t)(authority_q15 >> 3);
             if (dg < 1) dg = 1;
+            if (error_delta >= 0) {
+                dg += (dg >> 1);
+                if (dg < 1) dg = 1;
+            }
             if (residual >= 0) cur += dg; else cur -= dg;
             if (cur < 8192) cur = 8192;
             if (cur > 32767) cur = 32767;
@@ -199,7 +259,7 @@ static void ew_apply_hooks(EwSpectralFieldAnchorState& ss) {
 
             // Update low-frequency band weights slightly (collapse-like operator replacement).
             // We bias weights toward bin0 on negative residual, toward bin1..3 on positive residual.
-            const uint16_t wstep = (uint16_t)ew_u32_min((uint32_t)(gain_q15 >> 6), 256u);
+            const uint16_t wstep = (uint16_t)ew_u32_min((uint32_t)(authority_q15 >> 6), 256u);
             if (residual >= 0) {
                 for (uint32_t k = 1u; k < 4u; ++k) {
                     uint32_t w = (uint32_t)ss.op_band_w_q15[k] + (uint32_t)wstep;
@@ -220,6 +280,19 @@ static void ew_apply_hooks(EwSpectralFieldAnchorState& ss) {
                     ss.op_band_w_q15[k] = (uint16_t)(((uint32_t)ss.op_band_w_q15[k] * 65534u) / sum);
                 }
             }
+
+            // Phase bias becomes a live bounded control variable.
+            int32_t phase_cur = (int32_t)(ss.op_phase_bias_q15 & 0x7FFFu);
+            int32_t phase_step = (int32_t)(authority_q15 >> 7);
+            if (phase_step < 1) phase_step = 1;
+            if (phase_step > 128) phase_step = 128;
+            if (error_delta >= 0) {
+                phase_cur = (phase_cur + phase_step) & 0x7FFF;
+            } else {
+                phase_cur -= phase_step;
+                while (phase_cur < 0) phase_cur += 32768;
+            }
+            ss.op_phase_bias_q15 = (uint16_t)phase_cur;
         } else if (op == EwCoherenceHookOp::HookResyncPhase) {
             // Minimal deterministic resync: reset spectral state to zero.
             for (uint32_t k = 0; k < EW_SPECTRAL_N; ++k) {
@@ -241,7 +314,10 @@ static void ew_clear_forcing(EwSpectralFieldAnchorState& ss) {
     }
 }
 
-static void ew_calibration_inject_forcing(EwSpectralFieldAnchorState& ss, uint64_t tick_u64) {
+static void ew_calibration_inject_forcing(EwSpectralFieldAnchorState& ss,
+                                          uint64_t tick_u64,
+                                          int64_t drive_gain_q32_32,
+                                          uint16_t phase_feedback_q15) {
     // Deterministic pulse-train-like forcing that does not rely on external queues.
     // This is bounded and only active while calibration_mode_u8==1.
     //
@@ -267,10 +343,12 @@ static void ew_calibration_inject_forcing(EwSpectralFieldAnchorState& ss, uint64
     // learning_coupling_q15 in [0..32767] -> gain in Q32.32 scaled by 0.5.
     const int64_t learn_gain_q32_32 = ((int64_t)ss.learning_coupling_q15) << 16;
     amp = amp + ew_mul_q32_32(amp, learn_gain_q32_32);
+    amp = ew_mul_q32_32(amp, drive_gain_q32_32);
 
     // Phase offset from k.
     const uint64_t h = ew_mix64(((uint64_t)ss.calibration_profile_u8 << 56) ^ (uint64_t)k);
-    const int64_t phase_q32_32 = (int64_t)(h & 0xFFFFFFFFull);
+    int64_t phase_q32_32 = (int64_t)(h & 0xFFFFFFFFull);
+    phase_q32_32 += ((int64_t)phase_feedback_q15) << 17;
     static const int64_t TWO_PI_Q32_32 = 26986075409LL;
     int64_t theta = (int64_t)(((__int128)phase_q32_32 * (__int128)TWO_PI_Q32_32) >> 32);
     static const int64_t PI_Q32_32 = 13493037704LL;
@@ -283,8 +361,6 @@ static void ew_calibration_inject_forcing(EwSpectralFieldAnchorState& ss, uint64
 }
 
 void ew_fourier_fanout_step(EwState& cand, const EwInputs& inputs, const EwCtx& ctx) {
-    (void)ctx;
-
     // Pre-sort pulses for determinism (only those that target spectral anchors).
     struct TmpPulse { Pulse p; };
     std::vector<TmpPulse> ps;
@@ -360,6 +436,48 @@ void ew_fourier_fanout_step(EwState& cand, const EwInputs& inputs, const EwCtx& 
         ss.intent_summary.last_v_code_u16 = last_v;
         ss.intent_summary.last_i_code_u16 = last_i;
 
+        const uint16_t gpu_freq_norm_q15 = ew_ratio_q15_u64(
+            inputs.gpu_pulse_freq_hz_u64,
+            (inputs.gpu_pulse_freq_ref_hz_u64 != 0u) ? inputs.gpu_pulse_freq_ref_hz_u64 : 1u);
+        const uint16_t gpu_amp_norm_q15 = ew_ratio_q15_u64(
+            (uint64_t)inputs.gpu_pulse_amp_u32,
+            (uint64_t)((inputs.gpu_pulse_amp_ref_u32 != 0u) ? inputs.gpu_pulse_amp_ref_u32 : 1u));
+        const uint16_t gpu_volt_norm_q15 = ew_ratio_q15_u64(
+            (uint64_t)inputs.gpu_pulse_volt_u32,
+            (uint64_t)((inputs.gpu_pulse_volt_ref_u32 != 0u) ? inputs.gpu_pulse_volt_ref_u32 : 1u));
+        const int64_t lattice_feedback_dev_q32_32 =
+            (ctx.sz_q32_32 >= (1LL << 32)) ? (ctx.sz_q32_32 - (1LL << 32)) : ((1LL << 32) - ctx.sz_q32_32);
+        const uint16_t lattice_feedback_norm_q15 = ew_q32_32_to_q15_sat(lattice_feedback_dev_q32_32);
+
+        const uint16_t prev_source_vibration_q15 = ss.calibration_summary.source_vibration_q15;
+        const uint16_t prev_coherence_norm_q15 = ss.calibration_summary.coherence_norm_q15;
+        const uint16_t drive_terms_q15[6] = {
+            gpu_freq_norm_q15,
+            gpu_amp_norm_q15,
+            gpu_volt_norm_q15,
+            lattice_feedback_norm_q15,
+            prev_source_vibration_q15,
+            prev_coherence_norm_q15
+        };
+        const uint16_t gpu_drive_norm_q15 = ew_mean_q15_u16(drive_terms_q15, 6u);
+        const uint16_t feedback_terms_q15[2] = {
+            prev_source_vibration_q15,
+            prev_coherence_norm_q15
+        };
+        const uint16_t feedback_mix_q15 = ew_mean_q15_u16(feedback_terms_q15, 2u);
+        const int64_t gpu_drive_gain_q32_32 =
+            ew_clamp_i64((3LL << 30) + (((int64_t)gpu_drive_norm_q15) << 16),
+                         (1LL << 31),
+                         (5LL << 30));
+        const int64_t source_feedback_gain_q32_32 =
+            ew_clamp_i64((1LL << 32) + (((int64_t)feedback_mix_q15) << 15),
+                         (1LL << 32),
+                         ((1LL << 32) + (1LL << 30)));
+        const uint16_t phase_feedback_q15 =
+            (uint16_t)(((uint32_t)ss.op_phase_bias_q15 +
+                        ((uint32_t)prev_source_vibration_q15 >> 4) +
+                        ((uint32_t)gpu_freq_norm_q15 >> 5)) & 0x7FFFu);
+
         // Apply actuation packets to forcing_hat.
         for (uint32_t wi = 0u; wi < ss.actuation_count_u32; ++wi) {
             const EwActuationPacket& ap = ss.actuation_slots[wi];
@@ -378,10 +496,13 @@ void ew_fourier_fanout_step(EwState& cand, const EwInputs& inputs, const EwCtx& 
             const uint16_t bw = ss.op_band_w_q15[k & 7u];
             const int64_t bw_q32_32 = ((int64_t)bw) << 17;
             amp = ew_mul_q32_32(amp, bw_q32_32);
+            amp = ew_mul_q32_32(amp, gpu_drive_gain_q32_32);
+            amp = ew_mul_q32_32(amp, source_feedback_gain_q32_32);
 
             // Mode injection uses a deterministic phase offset from profile_id.
             const uint64_t h = ew_mix64(((uint64_t)ap.profile_id_u8 << 32) ^ (uint64_t)k);
-            const int64_t phase_q32_32 = (int64_t)(h & 0xFFFFFFFFull); // [0..2^32)
+            int64_t phase_q32_32 = (int64_t)(h & 0xFFFFFFFFull); // [0..2^32)
+            phase_q32_32 += ((int64_t)phase_feedback_q15) << 17;
 
             // Convert phase to radians in [-pi, +pi] using 2pi wrap.
             static const int64_t TWO_PI_Q32_32 = 26986075409LL;
@@ -462,13 +583,16 @@ void ew_fourier_fanout_step(EwState& cand, const EwInputs& inputs, const EwCtx& 
                 const uint16_t bw = ss.op_band_w_q15[k & 7u];
                 const int64_t bw_q32_32 = ((int64_t)bw) << 17;
                 amp = ew_mul_q32_32(amp, bw_q32_32);
+                amp = ew_mul_q32_32(amp, gpu_drive_gain_q32_32);
+                amp = ew_mul_q32_32(amp, source_feedback_gain_q32_32);
 
                 // Apply voxel boundary mean strength (no-slip / boundary coupling proxy).
                 const int64_t bs_gain_q32_32 = ((int64_t)vs.boundary_strength_mean_q15) << 16;
                 amp = amp + ew_mul_q32_32(amp, (bs_gain_q32_32 >> 1));
 
                 // Deterministic phase per particle.
-                const int64_t phase_q32_32 = (int64_t)(h >> 32);
+                int64_t phase_q32_32 = (int64_t)(h >> 32);
+                phase_q32_32 += ((int64_t)phase_feedback_q15) << 17;
                 static const int64_t TWO_PI_Q32_32 = 26986075409LL;
                 int64_t theta = (int64_t)(((__int128)phase_q32_32 * (__int128)TWO_PI_Q32_32) >> 32);
                 static const int64_t PI_Q32_32 = 13493037704LL;
@@ -483,11 +607,13 @@ void ew_fourier_fanout_step(EwState& cand, const EwInputs& inputs, const EwCtx& 
 
         // Calibration forcing is injected after external pulses.
         if (ss.calibration_mode_u8 == 1u && ss.calibration_ticks_remaining_u32 > 0u) {
-            ew_calibration_inject_forcing(ss, cand.canonical_tick);
+            ew_calibration_inject_forcing(ss, cand.canonical_tick, gpu_drive_gain_q32_32, phase_feedback_q15);
         }
 
         // If frozen by hook, HOLD this tick: keep state stable and emit minimal leakage status.
         if (ss.hold_tick_u8) {
+            ss.calculus_summary.controller_hold_u8 = 1u;
+            ss.calculus_summary.last_commit_u8 = 0u;
             ss.hold_tick_u8 = 0u;
             ss.last_step_committed_u32 = 0u;
             ss.leakage_pending_u8 = 0u;
@@ -543,10 +669,12 @@ void ew_fourier_fanout_step(EwState& cand, const EwInputs& inputs, const EwCtx& 
 
         // Measured summary: hash of resulting low-frequency bins (first 8 bins).
         uint64_t measured_hash = 0xC011A9EULL ^ ((uint64_t)ss.twiddle_profile_u32 << 32) ^ (uint64_t)cand.canonical_tick;
+        uint16_t measured_band_q15[8] = {0,0,0,0,0,0,0,0};
         for (uint32_t kk = 0u; kk < 8u; ++kk) {
             const uint16_t ar = ew_q32_32_to_q15_sat(ss.phi_hat[kk].re_q32_32);
             const uint16_t ai = ew_q32_32_to_q15_sat(ss.phi_hat[kk].im_q32_32);
             const uint16_t m = (uint16_t)ew_u32_min((uint32_t)ar + (uint32_t)ai, 32767u);
+            measured_band_q15[kk] = m;
             measured_hash = ew_mix64(measured_hash ^ ((uint64_t)m << (kk & 31u)) ^ ((uint64_t)kk * 0xD1B54A32D192ED03ULL));
         }
         ss.temporal_residual.measured_hash_u64 = measured_hash;
@@ -554,14 +682,162 @@ void ew_fourier_fanout_step(EwState& cand, const EwInputs& inputs, const EwCtx& 
         // Temporal residual: discrepancy between intended forcing magnitude and measured energy peak.
         const int32_t r_q15 = (int32_t)e_peak - (int32_t)intent_norm_q15;
         const uint16_t rabs_q15 = (uint16_t)((r_q15 < 0) ? -r_q15 : r_q15);
+        const int64_t error_q32_32 = ((int64_t)r_q15) << 17;
+        const int64_t prev_error_q32_32 = ss.calculus_summary.error_q32_32;
+        const int64_t error_delta_q32_32 = error_q32_32 - prev_error_q32_32;
+        const int64_t integral_limit_q32_32 = (4LL << 32);
+        const int64_t error_integral_q32_32 =
+            ew_clamp_i64(ss.calculus_summary.error_integral_q32_32 + error_q32_32,
+                         -integral_limit_q32_32,
+                         integral_limit_q32_32);
         ss.temporal_residual.residual_norm_q15 = rabs_q15;
         ss.temporal_residual.residual_band_u8 = ew_band_from_q15(rabs_q15);
-        ss.temporal_residual.residual_q32_32 = ((int64_t)r_q15) << 17;
+        ss.temporal_residual.residual_q32_32 = error_q32_32;
         if (rabs_q15 > ss.noise_floor_q15 && rabs_q15 > ss.min_delta_q15) {
             ss.temporal_residual.residual_pending_u8 = 1u;
         } else {
             ss.temporal_residual.residual_pending_u8 = 0u;
         }
+
+        ss.calculus_summary.error_q32_32 = error_q32_32;
+        ss.calculus_summary.error_delta_q32_32 = error_delta_q32_32;
+        ss.calculus_summary.error_integral_q32_32 = error_integral_q32_32;
+        ss.calculus_summary.error_norm_q15 = rabs_q15;
+        ss.calculus_summary.error_delta_norm_q15 = ew_q32_32_to_q15_sat(error_delta_q32_32);
+        ss.calculus_summary.error_integral_norm_q15 = ew_q32_32_to_q15_sat(error_integral_q32_32);
+        ss.calculus_summary.controller_hold_u8 = 0u;
+
+        for (uint32_t kk = 0u; kk < 8u; ++kk) {
+            const uint16_t intent_mag_q15 = ss.intent_summary.band_mag_q15[kk];
+            const uint16_t measured_mag_q15 = measured_band_q15[kk];
+            ss.calibration_summary.interference_band_q15[kk] = ew_abs_diff_q15(intent_mag_q15, measured_mag_q15);
+            ss.calibration_summary.coherence_band_q15[kk] = ew_coherence_q15_from_pair(intent_mag_q15, measured_mag_q15);
+        }
+
+        const uint16_t interference_norm_q15 = ew_mean_q15_u16(ss.calibration_summary.interference_band_q15, 8u);
+        const uint16_t coherence_norm_q15 = ew_mean_q15_u16(ss.calibration_summary.coherence_band_q15, 8u);
+        const uint16_t inverse_interference_q15 =
+            (interference_norm_q15 >= 32767u) ? 0u : (uint16_t)(32767u - interference_norm_q15);
+        const uint16_t gpu_target_terms_q15[5] = {
+            gpu_freq_norm_q15,
+            gpu_amp_norm_q15,
+            gpu_volt_norm_q15,
+            lattice_feedback_norm_q15,
+            ss.intent_summary.intent_norm_q15
+        };
+        const uint16_t measured_calibration_terms_q15[4] = {
+            coherence_norm_q15,
+            ss.measured_summary.energy_mean_q15,
+            ss.measured_summary.energy_peak_q15,
+            inverse_interference_q15
+        };
+        const uint16_t gpu_target_norm_q15 = ew_mean_q15_u16(gpu_target_terms_q15, 5u);
+        const uint16_t measured_calibration_norm_q15 = ew_mean_q15_u16(measured_calibration_terms_q15, 4u);
+        const int64_t calibration_error_q32_32 =
+            ((int64_t)measured_calibration_norm_q15 - (int64_t)gpu_target_norm_q15) << 17;
+        const int64_t prev_calibration_error_q32_32 = ss.calibration_summary.calibration_error_q32_32;
+        const int64_t calibration_delta_q32_32 = calibration_error_q32_32 - prev_calibration_error_q32_32;
+        const int64_t calibration_integral_q32_32 =
+            ew_clamp_i64(ss.calibration_summary.calibration_integral_q32_32 + calibration_error_q32_32,
+                         -(8LL << 32),
+                         +(8LL << 32));
+        const uint16_t calibration_delta_norm_q15 = ew_q32_32_to_q15_sat(calibration_delta_q32_32);
+        const uint16_t calibration_integral_norm_q15 = ew_q32_32_to_q15_sat(calibration_integral_q32_32);
+
+        const uint16_t observer_drive_terms_q15[4] = {
+            gpu_volt_norm_q15,
+            interference_norm_q15,
+            ss.calculus_summary.controller_authority_q15,
+            lattice_feedback_norm_q15
+        };
+        const uint16_t observer_drive_q15 = ew_mean_q15_u16(observer_drive_terms_q15, 4u);
+        const int64_t observer_drive_q32_32 =
+            ew_mul_q32_32(ew_q15_to_q32_32(observer_drive_q15), ew_q15_to_q32_32(coherence_norm_q15));
+        const uint16_t observer_norm_q15 = ew_q32_32_to_q15_sat(observer_drive_q32_32);
+
+        uint32_t source_vibration_mix_u32 =
+            (uint32_t)prev_source_vibration_q15 * 3u +
+            (uint32_t)observer_norm_q15 +
+            ((uint32_t)lattice_feedback_norm_q15 >> 1) +
+            ((uint32_t)gpu_freq_norm_q15 >> 1) +
+            ((uint32_t)gpu_amp_norm_q15 >> 1);
+        source_vibration_mix_u32 /= 6u;
+        if (source_vibration_mix_u32 > 32767u) source_vibration_mix_u32 = 32767u;
+        const uint16_t source_vibration_q15 = (uint16_t)source_vibration_mix_u32;
+
+        uint32_t calibration_authority_u32 =
+            (uint32_t)interference_norm_q15 +
+            ((uint32_t)calibration_delta_norm_q15 / 2u) +
+            ((uint32_t)calibration_integral_norm_q15 / 4u) +
+            ((uint32_t)observer_norm_q15 / 4u);
+        if (calibration_authority_u32 > 32767u) calibration_authority_u32 = 32767u;
+
+        ss.calibration_summary.calibration_error_q32_32 = calibration_error_q32_32;
+        ss.calibration_summary.calibration_delta_q32_32 = calibration_delta_q32_32;
+        ss.calibration_summary.calibration_integral_q32_32 = calibration_integral_q32_32;
+        ss.calibration_summary.gpu_freq_norm_q15 = gpu_freq_norm_q15;
+        ss.calibration_summary.gpu_amp_norm_q15 = gpu_amp_norm_q15;
+        ss.calibration_summary.gpu_volt_norm_q15 = gpu_volt_norm_q15;
+        ss.calibration_summary.interference_norm_q15 = interference_norm_q15;
+        ss.calibration_summary.coherence_norm_q15 = coherence_norm_q15;
+        ss.calibration_summary.observer_norm_q15 = observer_norm_q15;
+        ss.calibration_summary.source_vibration_q15 = source_vibration_q15;
+        ss.calibration_summary.calibration_authority_q15 = (uint16_t)calibration_authority_u32;
+
+        const int64_t dt_target_q32_32 =
+            ew_clamp_i64((1LL << 31) + ((((int64_t)gpu_freq_norm_q15 + (int64_t)coherence_norm_q15) << 16)),
+                         (1LL << 31),
+                         (3LL << 31));
+        const uint16_t inverse_coherence_q15 =
+            (coherence_norm_q15 >= 32767u) ? 0u : (uint16_t)(32767u - coherence_norm_q15);
+        const uint16_t viscosity_terms_q15[3] = {
+            interference_norm_q15,
+            gpu_volt_norm_q15,
+            inverse_coherence_q15
+        };
+        const uint16_t viscosity_drive_q15 = ew_mean_q15_u16(viscosity_terms_q15, 3u);
+        const int64_t viscosity_target_q32_32 =
+            ew_clamp_i64(ew_q15_to_q32_32(viscosity_drive_q15) >> 2, 0, (1LL << 30));
+        const uint16_t control_seed_q15 =
+            (uint16_t)ew_u32_min((uint32_t)64u + (calibration_authority_u32 >> 6), 1024u);
+        const int64_t control_step_q32_32 = ew_q15_to_q32_32(control_seed_q15);
+        ss.dt_scale_q32_32 = ew_move_toward_i64(ss.dt_scale_q32_32, dt_target_q32_32, control_step_q32_32);
+        ss.viscosity_bias_q32_32 =
+            ew_move_toward_i64(ss.viscosity_bias_q32_32,
+                               viscosity_target_q32_32,
+                               (control_step_q32_32 > 1) ? (control_step_q32_32 >> 1) : 1);
+
+        const uint16_t learning_target_terms_q15[3] = {
+            gpu_amp_norm_q15,
+            coherence_norm_q15,
+            source_vibration_q15
+        };
+        const uint16_t learning_target_q15 = ew_mean_q15_u16(learning_target_terms_q15, 3u);
+        int32_t learning_cur = (int32_t)ss.learning_coupling_q15;
+        int32_t learning_step = (int32_t)(1u + (calibration_authority_u32 >> 9));
+        if (learning_step > 128) learning_step = 128;
+        if (learning_cur < (int32_t)learning_target_q15) {
+            learning_cur += learning_step;
+            if (learning_cur > (int32_t)learning_target_q15) learning_cur = (int32_t)learning_target_q15;
+        } else if (learning_cur > (int32_t)learning_target_q15) {
+            learning_cur -= learning_step;
+            if (learning_cur < (int32_t)learning_target_q15) learning_cur = (int32_t)learning_target_q15;
+        }
+        if (learning_cur < 0) learning_cur = 0;
+        if (learning_cur > 32767) learning_cur = 32767;
+        ss.learning_coupling_q15 = (uint16_t)learning_cur;
+
+        int32_t calibration_phase_cur = (int32_t)(ss.op_phase_bias_q15 & 0x7FFFu);
+        int32_t calibration_phase_step =
+            (int32_t)(1u + (calibration_authority_u32 >> 10) + ((uint32_t)observer_norm_q15 >> 11));
+        if (calibration_phase_step > 128) calibration_phase_step = 128;
+        if (calibration_error_q32_32 >= 0) {
+            calibration_phase_cur = (calibration_phase_cur + calibration_phase_step) & 0x7FFF;
+        } else {
+            calibration_phase_cur -= calibration_phase_step;
+            while (calibration_phase_cur < 0) calibration_phase_cur += 32768;
+        }
+        ss.op_phase_bias_q15 = (uint16_t)calibration_phase_cur;
 
         // Leakage residual proxy: excess above noise floor.
         uint16_t leak_abs = 0;
@@ -574,6 +850,7 @@ void ew_fourier_fanout_step(EwState& cand, const EwInputs& inputs, const EwCtx& 
         const uint16_t min_gate = (ss.min_delta_q15 > ss.noise_floor_q15) ? ss.min_delta_q15 : ss.noise_floor_q15;
         const bool commit = (delta >= ss.min_delta_q15) && (e_peak >= min_gate);
         ss.last_step_committed_u32 = commit ? 1u : 0u;
+        ss.calculus_summary.last_commit_u8 = commit ? 1u : 0u;
 
         // Publish leakage when energy peak exceeds noise floor.
         if (leak_abs > 0u) {
@@ -610,11 +887,17 @@ void ew_fourier_fanout_step(EwState& cand, const EwInputs& inputs, const EwCtx& 
                 const int64_t half = (1LL << 31);
                 const int64_t one = (1LL << 32);
                 const int64_t dt_bump = (int64_t)(((__int128)me * (__int128)(1LL<<31)) / 32767); // [0..0.5]
-                ss.dt_scale_q32_32 = ew_clamp_i64(one - half + dt_bump, (1LL<<31), (2LL<<32));
+                const int64_t coherence_bump_q32_32 = ((int64_t)ss.calibration_summary.coherence_norm_q15) << 15;
+                const int64_t calibrated_dt_target_q32_32 =
+                    ew_clamp_i64(one - half + dt_bump + (coherence_bump_q32_32 >> 1), (1LL<<31), (3LL<<31));
+                ss.dt_scale_q32_32 =
+                    ew_clamp_i64((ss.dt_scale_q32_32 + calibrated_dt_target_q32_32) / 2, (1LL<<31), (2LL<<32));
 
                 // viscosity_bias: if mean leak is high, increase damping slightly.
                 const uint64_t ml = (mean_leak > 32767u) ? 32767u : mean_leak;
-                const int64_t vb = (int64_t)(((__int128)ml * (__int128)(1LL<<30)) / 32767); // [0..0.25]
+                const uint64_t interference_mix =
+                    ew_u32_min((uint32_t)ss.calibration_summary.interference_norm_q15 + (uint32_t)ml, 32767u);
+                const int64_t vb = (int64_t)(((__int128)interference_mix * (__int128)(1LL<<30)) / 32767); // [0..0.25]
                 ss.viscosity_bias_q32_32 = ew_clamp_i64(ss.viscosity_bias_q32_32 + vb, -(1LL<<32), (1LL<<32));
 
                 ss.calibration_mode_u8 = 2u;

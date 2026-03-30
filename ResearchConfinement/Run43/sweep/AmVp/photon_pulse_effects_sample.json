@@ -1,0 +1,20 @@
+// photon_pulse_effects_sample.json
+{
+  "simulation_mode": "nist_silicon_wafer_with_injected_gpu_pulse_quartet",
+  "gpu_pulse_quartet": {"frequency": 0.245, "amplitude": 0.16, "amperage": 0.33, "voltage": 0.36},
+  "nist_reference": {
+    "path": "D:\\GameCreation\\GenesisEngine\\ResearchConfinement\\nist_silicon_reference.json",
+    "loaded": true,
+    "lattice_constant_m": 5.43102e-10,
+    "density_g_cm3": 2.33,
+    "mean_excitation_energy_ev": 173,
+    "first_ionization_energy_ev": 8.15168
+  },
+  "field_response": {
+    "low_frequency_trap_ratio": 0.273576,
+    "mean_temporal_coherence": 0.996867,
+    "mean_temporal_inertia": 0.000386652,
+    "mean_curvature": 19.1632
+  },
+  "silicon_reproduction_score": 0.712356
+}

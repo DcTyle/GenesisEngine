@@ -42,6 +42,136 @@ struct GeResearchNistSummary {
     std::string verdict_utf8;
 };
 
+struct GeResearchPulseQuartet {
+    double F = 0.0;
+    double A = 0.0;
+    double I = 0.0;
+    double V = 0.0;
+};
+
+struct GeResearchQuadraticMetricModel {
+    std::string metric_utf8;
+    double center_value = 0.0;
+    GeResearchPulseQuartet jacobian;
+    GeResearchPulseQuartet hessian_diag;
+    double hessian_FA = 0.0;
+    double hessian_FI = 0.0;
+    double hessian_FV = 0.0;
+    double hessian_AI = 0.0;
+    double hessian_AV = 0.0;
+    double hessian_IV = 0.0;
+    std::string deviation_formula_utf8;
+};
+
+struct GeResearchValidationError {
+    double silicon_score_mae = 0.0;
+    double silicon_score_rmse = 0.0;
+};
+
+struct GeResearchCollapseGates {
+    double gate_coherence = 0.0;
+    double gate_trap = 0.0;
+    double gate_score = 0.0;
+};
+
+struct GeResearchRuntimeGuidance {
+    bool valid = false;
+    uint32_t correction_cadence_ticks_u32 = 1u;
+
+    double certainty_norm = 0.0;
+    double exactness_norm = 0.0;
+    double recurrence_norm = 0.0;
+    double tensor_gradient_norm = 0.0;
+    double packet_coherence_norm = 0.0;
+    double observer_coupling_norm = 0.0;
+    double temporal_coupling_norm = 0.0;
+    double source_memory_norm = 0.0;
+    double correction_authority_norm = 0.0;
+
+    double predicted_silicon_score = 0.0;
+    double predicted_trap_ratio = 0.0;
+    double predicted_coherence = 0.0;
+    double predicted_inertia = 0.0;
+    double predicted_curvature = 0.0;
+
+    GeResearchPulseQuartet desired_quartet;
+    GeResearchPulseQuartet corrected_quartet;
+    GeResearchPulseQuartet gradient_quartet;
+};
+
+struct GeResearchInterferencePredictionCell {
+    GeResearchPulseQuartet quartet;
+    double predicted_interference_norm = 0.0;
+    double predicted_score = 0.0;
+    double predicted_trap_ratio = 0.0;
+    double predicted_coherence = 0.0;
+    double predicted_inertia = 0.0;
+    double predicted_curvature = 0.0;
+    double gpu_alignment_norm = 0.0;
+    double vector_coupling_norm = 0.0;
+    double lattice_interference_norm = 0.0;
+    double lattice_temporal_coupling_norm = 0.0;
+    double certainty_norm = 0.0;
+    uint32_t lattice_x_u32 = 0u;
+    uint32_t lattice_y_u32 = 0u;
+    uint32_t lattice_z_u32 = 0u;
+    uint64_t trajectory_spectral_id_u64 = 0u;
+};
+
+struct GeResearchGpuAdaptiveCalibration {
+    bool valid = false;
+    uint32_t axis_resolution_u32 = 0u;
+    uint32_t prediction_count_u32 = 0u;
+
+    double observed_gpu_freq_norm = 0.0;
+    double observed_gpu_amp_norm = 0.0;
+    double observed_gpu_curr_norm = 0.0;
+    double observed_gpu_volt_norm = 0.0;
+    double observed_interference_norm = 0.0;
+    double observed_coherence_norm = 0.0;
+    double observed_source_vibration_norm = 0.0;
+
+    double tensor_gradient_norm = 0.0;
+    double packet_coherence_norm = 0.0;
+    double observer_coupling_norm = 0.0;
+    double recurrence_norm = 0.0;
+
+    double prediction_confidence_norm = 0.0;
+    double best_gpu_alignment_norm = 0.0;
+    double best_vector_coupling_norm = 0.0;
+    double best_interference_norm = 0.0;
+    double best_lattice_interference_norm = 0.0;
+    double best_temporal_coupling_norm = 0.0;
+    double next_pulse_correction_norm = 0.0;
+    double best_silicon_score = 0.0;
+    double best_trap_ratio = 0.0;
+    double best_coherence = 0.0;
+    double best_inertia = 0.0;
+    double best_curvature = 0.0;
+
+    GeResearchPulseQuartet gpu_observed_quartet;
+    GeResearchPulseQuartet best_quartet;
+    GeResearchPulseQuartet adapted_quartet;
+    GeResearchPulseQuartet next_pulse_quartet;
+    uint32_t best_lattice_x_u32 = 0u;
+    uint32_t best_lattice_y_u32 = 0u;
+    uint32_t best_lattice_z_u32 = 0u;
+    uint64_t best_trajectory_spectral_id_u64 = 0u;
+};
+
+struct GeResearchLiveComputePlan {
+    bool valid = false;
+    bool ready = false;
+    double readiness_norm = 0.0;
+    double interference_ledger_norm = 0.0;
+    double encoded_extrapolation_norm = 0.0;
+    double score_alignment_norm = 0.0;
+    double trap_alignment_norm = 0.0;
+    double coherence_alignment_norm = 0.0;
+    GeResearchPulseQuartet compute_quartet;
+    uint64_t trajectory_spectral_id_u64 = 0u;
+};
+
 struct GeResearchTrajectorySample {
     std::string task_utf8;
     uint32_t step_u32 = 0u;
@@ -186,6 +316,19 @@ struct GeResearchConfinementArchive {
     std::vector<GeResearchTensorGlyphSample> tensor_glyphs;
     std::vector<GeResearchShaderTextureSample> shader_texture;
     std::vector<GeResearchAudioWaveSample> audio_waveform;
+
+    bool run043_loaded = false;
+    GeResearchPulseQuartet run043_center_quartet;
+    GeResearchPulseQuartet run043_delta_quartet;
+    GeResearchPulseQuartet pulse_window_min_quartet;
+    GeResearchPulseQuartet pulse_window_max_quartet;
+    GeResearchQuadraticMetricModel run043_silicon_score_model;
+    GeResearchQuadraticMetricModel run043_trap_ratio_model;
+    GeResearchQuadraticMetricModel run043_coherence_model;
+    GeResearchQuadraticMetricModel run043_inertia_model;
+    GeResearchQuadraticMetricModel run043_curvature_model;
+    GeResearchValidationError run043_validation_error;
+    GeResearchCollapseGates temporal_collapse_gates;
 };
 
 struct GeNistSiliconReference {
@@ -227,6 +370,53 @@ void ge_build_research_audio_frame(const GeResearchConfinementArchive& archive,
                                    uint64_t tick_u64,
                                    size_t frame_count,
                                    GeResearchAudioFrame& out_frame);
+
+bool ge_has_research_runtime_guidance(const GeResearchConfinementArchive& archive);
+
+double ge_compute_research_tensor_gradient_norm(const GeResearchConfinementArchive& archive);
+
+double ge_compute_research_packet_coherence_norm(const GeResearchConfinementArchive& archive);
+
+double ge_compute_research_observer_coupling_norm(const GeResearchConfinementArchive& archive);
+
+double ge_compute_research_recurrence_norm(const GeResearchConfinementArchive& archive);
+
+double ge_evaluate_research_metric_model(const GeResearchQuadraticMetricModel& model,
+                                         const GeResearchPulseQuartet& center_quartet,
+                                         const GeResearchPulseQuartet& quartet);
+
+bool ge_compute_research_metric_gradient(const GeResearchQuadraticMetricModel& model,
+                                         const GeResearchPulseQuartet& center_quartet,
+                                         const GeResearchPulseQuartet& quartet,
+                                         GeResearchPulseQuartet& out_gradient);
+
+bool ge_build_research_runtime_guidance(const GeResearchConfinementArchive& archive,
+                                        const GeResearchPulseQuartet& desired_quartet,
+                                        double residual_norm_01,
+                                        double interference_norm_01,
+                                        double substrate_coherence_norm_01,
+                                        double source_vibration_norm_01,
+                                        GeResearchRuntimeGuidance& out_guidance);
+
+bool ge_build_research_gpu_interference_predictions(
+    const GeResearchConfinementArchive& archive,
+    const GeResearchPulseQuartet& desired_quartet,
+    double gpu_freq_norm_01,
+    double gpu_amp_norm_01,
+    double gpu_curr_norm_01,
+    double gpu_volt_norm_01,
+    double interference_norm_01,
+    double substrate_coherence_norm_01,
+    double source_vibration_norm_01,
+    uint32_t axis_resolution_u32,
+    GeResearchGpuAdaptiveCalibration& out_calibration,
+    std::vector<GeResearchInterferencePredictionCell>* out_predictions);
+
+bool ge_build_research_live_compute_plan(
+    const GeResearchConfinementArchive& archive,
+    const GeResearchGpuAdaptiveCalibration& calibration,
+    const GeResearchRuntimeGuidance& guidance,
+    GeResearchLiveComputePlan& out_plan);
 
 uint32_t ge_particle_class_rgba8(GeResearchParticleClass particle_class);
 

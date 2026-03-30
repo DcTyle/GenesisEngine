@@ -41,6 +41,57 @@ static inline int64_t q32_32_mul(int64_t a_q32_32, int64_t b_q32_32) {
     return (int64_t)(p >> 32);
 }
 
+static inline int64_t ge_clamp_i64_local(int64_t v, int64_t lo, int64_t hi) {
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+static inline uint16_t ge_ratio_q15_u64(uint64_t num, uint64_t den) {
+    if (den == 0u) return (num != 0u) ? 32767u : 0u;
+    __int128 s = (__int128)num << 15;
+    uint64_t q = (uint64_t)(s / (__int128)den);
+    if (q > 32767u) q = 32767u;
+    return (uint16_t)q;
+}
+
+static inline uint16_t ge_headroom_q15_from_used_u32(uint32_t used_u32, uint32_t cap_u32) {
+    const uint16_t sat = ge_ratio_q15_u64((uint64_t)used_u32, (uint64_t)((cap_u32 != 0u) ? cap_u32 : 1u));
+    return (sat >= 32767u) ? 0u : (uint16_t)(32767u - sat);
+}
+
+static inline uint16_t ge_mean_q15_u16(const uint16_t* v, uint32_t n) {
+    if (!v || n == 0u) return 0u;
+    uint64_t sum = 0u;
+    for (uint32_t i = 0u; i < n; ++i) sum += (uint64_t)v[i];
+    uint64_t q = sum / (uint64_t)n;
+    if (q > 32767u) q = 32767u;
+    return (uint16_t)q;
+}
+
+static inline uint16_t ge_mean_abs_diff_q15_u16(const uint16_t* a, const uint16_t* b, uint32_t n) {
+    if (!a || !b || n == 0u) return 0u;
+    uint64_t sum = 0u;
+    for (uint32_t i = 0u; i < n; ++i) {
+        const int32_t d = (int32_t)a[i] - (int32_t)b[i];
+        sum += (uint64_t)((d < 0) ? -d : d);
+    }
+    uint64_t q = sum / (uint64_t)n;
+    if (q > 32767u) q = 32767u;
+    return (uint16_t)q;
+}
+
+static inline int64_t ge_q15_error_to_q32_32(uint16_t measured_q15, uint16_t intent_q15) {
+    return ((int64_t)measured_q15 - (int64_t)intent_q15) << 17;
+}
+
+static inline uint16_t ge_abs_q32_32_to_q15_sat(int64_t v_q32_32) {
+    uint64_t mag = (uint64_t)((v_q32_32 < 0) ? -v_q32_32 : v_q32_32);
+    uint64_t q = mag >> 17;
+    if (q > 32767u) q = 32767u;
+    return (uint16_t)q;
+}
+
 
 static void ge_rebuild_cached_anchor_ids(SubstrateManager& sm) {
     sm.camera_anchor_id_u32 = 0u;
@@ -74,6 +125,388 @@ static void ge_rebuild_cached_anchor_ids(SubstrateManager& sm) {
 
     // Ensure next id never regresses below vector size (anchors are id-indexed).
     if (sm.next_anchor_id_u32 < n) sm.next_anchor_id_u32 = n;
+}
+
+static void ge_update_process_substrate_telemetry(SubstrateManager& sm) {
+    sm.process_substrate_telemetry = EwProcessSubstrateTelemetry{};
+    EwProcessSubstrateTelemetry& out = sm.process_substrate_telemetry;
+    out.tick_u64 = sm.canonical_tick;
+
+    const Anchor* spectral = nullptr;
+    if (sm.spectral_field_anchor_id_u32 != 0u && sm.spectral_field_anchor_id_u32 < sm.anchors.size()) {
+        const Anchor& a = sm.anchors[sm.spectral_field_anchor_id_u32];
+        if (a.kind_u32 == EW_ANCHOR_KIND_SPECTRAL_FIELD) spectral = &a;
+    }
+    const Anchor* coherence = nullptr;
+    if (sm.coherence_bus_anchor_id_u32 != 0u && sm.coherence_bus_anchor_id_u32 < sm.anchors.size()) {
+        const Anchor& a = sm.anchors[sm.coherence_bus_anchor_id_u32];
+        if (a.kind_u32 == EW_ANCHOR_KIND_COHERENCE_BUS) coherence = &a;
+    }
+
+    if (spectral) {
+        const EwSpectralFieldAnchorState& ss = spectral->spectral_field_state;
+        out.valid_u32 = 1u;
+        out.spectral_anchor_id_u32 = spectral->id;
+        out.fanout_budget_u32 = ss.fanout_budget_u32;
+        out.dt_scale_q32_32 = ss.dt_scale_q32_32;
+        out.viscosity_bias_q32_32 = ss.viscosity_bias_q32_32;
+        out.error_q32_32 = ss.calculus_summary.error_q32_32;
+        out.error_delta_q32_32 = ss.calculus_summary.error_delta_q32_32;
+        out.error_integral_q32_32 = ss.calculus_summary.error_integral_q32_32;
+        out.calibration_error_q32_32 = ss.calibration_summary.calibration_error_q32_32;
+        out.calibration_delta_q32_32 = ss.calibration_summary.calibration_delta_q32_32;
+        out.calibration_integral_q32_32 = ss.calibration_summary.calibration_integral_q32_32;
+        out.intent_norm_q15 = ss.intent_summary.intent_norm_q15;
+        out.energy_mean_q15 = ss.measured_summary.energy_mean_q15;
+        out.energy_peak_q15 = ss.measured_summary.energy_peak_q15;
+        out.leakage_abs_q15 = ss.measured_summary.leakage_abs_q15;
+        out.residual_norm_q15 = ss.temporal_residual.residual_norm_q15;
+        out.error_delta_norm_q15 = ss.calculus_summary.error_delta_norm_q15;
+        out.error_integral_norm_q15 = ss.calculus_summary.error_integral_norm_q15;
+        out.controller_authority_q15 = ss.calculus_summary.controller_authority_q15;
+        out.gpu_freq_norm_q15 = ss.calibration_summary.gpu_freq_norm_q15;
+        out.gpu_amp_norm_q15 = ss.calibration_summary.gpu_amp_norm_q15;
+        out.gpu_volt_norm_q15 = ss.calibration_summary.gpu_volt_norm_q15;
+        out.interference_norm_q15 = ss.calibration_summary.interference_norm_q15;
+        out.coherence_norm_q15 = ss.calibration_summary.coherence_norm_q15;
+        out.observer_norm_q15 = ss.calibration_summary.observer_norm_q15;
+        out.source_vibration_q15 = ss.calibration_summary.source_vibration_q15;
+        out.calibration_authority_q15 = ss.calibration_summary.calibration_authority_q15;
+        out.op_gain_q15 = ss.op_gain_q15;
+        out.op_phase_bias_q15 = ss.op_phase_bias_q15;
+        out.learning_coupling_q15 = ss.learning_coupling_q15;
+        out.last_v_code_u16 = ss.intent_summary.last_v_code_u16;
+        out.last_i_code_u16 = ss.intent_summary.last_i_code_u16;
+        out.residual_pending_u8 = ss.temporal_residual.residual_pending_u8;
+        out.hold_tick_u8 = ss.calculus_summary.controller_hold_u8;
+        out.last_commit_u8 = ss.calculus_summary.last_commit_u8;
+    }
+
+    if (coherence) {
+        const EwCoherenceBusAnchorState& bs = coherence->coherence_bus_state;
+        out.coherence_anchor_id_u32 = coherence->id;
+        out.phys_coherence_q15 = bs.phys_coherence_q15;
+        out.learning_coherence_q15 = bs.learning_coherence_q15;
+        out.temporal_coherence_q15 = bs.temporal_coherence_q15;
+    }
+}
+
+static void ge_update_ai_substrate_telemetry(SubstrateManager& sm) {
+    sm.ai_substrate_telemetry = EwAiSubstrateTelemetry{};
+    EwAiSubstrateTelemetry& out = sm.ai_substrate_telemetry;
+
+    out.valid_u32 = 1u;
+    out.tick_u64 = sm.canonical_tick;
+    out.class_id_u32 = sm.neural_ai.status().class_id_u32;
+    out.sig9_u64 = sm.neural_ai.status().sig9_u64;
+    out.observation_seq_u64 = sm.observation_seq_u64;
+    out.dispatched_observation_seq_u64 = sm.ai_last_command_observation_seq_u64;
+    out.confidence_q32_32 = sm.neural_ai.status().confidence_q32_32;
+    out.attractor_strength_q32_32 = sm.neural_ai.last_attractor_strength_q32_32();
+    out.command_count_u32 = sm.ai_commands_count_u32;
+    out.action_log_count_u32 = sm.ai_action_log_count_u32;
+    out.carrier_pulse_q63 = sm.ai_pulse_q63;
+    out.carrier_total_weight_q63 = sm.ai_total_weight_q63;
+    out.pending_external_api_u32 = (uint32_t)sm.external_api_pending.size();
+    out.inflight_external_api_u32 = (uint32_t)sm.external_api_inflight.size();
+    out.ui_chat_count_u32 = (uint32_t)sm.ui_chat_q.size();
+
+    if (sm.ai_anticipation_enabled) out.anticipation_flags_u16 |= 0x1u;
+    if (sm.ai_anticipation_auto_execute) out.anticipation_flags_u16 |= 0x2u;
+    if (sm.ai_anticipation_emit_ui) out.anticipation_flags_u16 |= 0x4u;
+
+    const Anchor* spectral = nullptr;
+    if (sm.spectral_field_anchor_id_u32 != 0u && sm.spectral_field_anchor_id_u32 < sm.anchors.size()) {
+        const Anchor& a = sm.anchors[sm.spectral_field_anchor_id_u32];
+        if (a.kind_u32 == EW_ANCHOR_KIND_SPECTRAL_FIELD) spectral = &a;
+    }
+    if (spectral) {
+        const EwSpectralFieldAnchorState& ss = spectral->spectral_field_state;
+        out.fanout_budget_u32 = ss.fanout_budget_u32;
+        out.controller_authority_q15 = ss.calculus_summary.controller_authority_q15;
+        out.op_gain_q15 = ss.op_gain_q15;
+        out.op_phase_bias_q15 = ss.op_phase_bias_q15;
+        for (uint32_t i = 0; i < 8u; ++i) {
+            out.carrier_band_q15[i] = ss.intent_summary.band_mag_q15[i];
+        }
+    }
+
+    if (sm.ai_action_log_count_u32 > 0u) {
+        const uint32_t idx = (sm.ai_action_log_head_u32 + SubstrateManager::AI_ACTION_LOG_CAP - 1u) %
+                             SubstrateManager::AI_ACTION_LOG_CAP;
+        const EwAiActionEvent& e = sm.ai_action_log[idx];
+        out.last_action_kind_u16 = e.kind_u16;
+        out.last_action_profile_u16 = e.profile_id_u16;
+        out.last_target_anchor_id_u32 = e.target_anchor_id_u32;
+        out.last_f_code_i32 = e.f_code_i32;
+        out.last_a_code_u16 = (uint16_t)((e.a_code_u32 > 65535u) ? 65535u : e.a_code_u32);
+        out.last_v_code_u16 = (uint16_t)((e.v_code_u32 > 65535u) ? 65535u : e.v_code_u32);
+        out.last_i_code_u16 = (uint16_t)((e.i_code_u32 > 65535u) ? 65535u : e.i_code_u32);
+    }
+}
+
+static void ge_update_ai_data_substrate_telemetry(SubstrateManager& sm) {
+    const int64_t prev_error_q32_32 = sm.ai_data_substrate_telemetry.error_q32_32;
+    const int64_t prev_integral_q32_32 = sm.ai_data_substrate_telemetry.error_integral_q32_32;
+
+    sm.ai_data_substrate_telemetry = EwAiDataSubstrateTelemetry{};
+    EwAiDataSubstrateTelemetry& out = sm.ai_data_substrate_telemetry;
+    out.valid_u32 = 1u;
+    out.tick_u64 = sm.canonical_tick;
+
+    std::vector<EwInspectorArtifact> corpus;
+    sm.inspector_fields.snapshot_prefix("Draft Container/Corpus/", corpus);
+    out.corpus_artifact_count_u32 = (uint32_t)corpus.size();
+
+    uint32_t corpus_text_count_u32 = 0u;
+    for (size_t i = 0; i < corpus.size(); ++i) {
+        const std::string& p = corpus[i].rel_path;
+        if (p.find(".txt") != std::string::npos || p.find(".md") != std::string::npos) {
+            corpus_text_count_u32 += 1u;
+        }
+    }
+    out.corpus_text_artifact_count_u32 = corpus_text_count_u32;
+    out.manifest_record_count_u32 = (uint32_t)sm.manifest_records.size();
+    out.pending_metric_count_u32 = sm.learning_gate.registry().pending_count_u32();
+    out.completed_metric_count_u32 = sm.learning_gate.registry().completed_count_u32();
+
+    const auto& completed = sm.learning_gate.registry().completed();
+    uint32_t accepted_metric_count_u32 = 0u;
+    for (size_t i = 0; i < completed.size(); ++i) {
+        if (completed[i].accepted) accepted_metric_count_u32 += 1u;
+    }
+    out.accepted_metric_count_u32 = accepted_metric_count_u32;
+
+    const genesis::LangLexiconStats& ls = sm.language_foundation.stats();
+    out.language_word_count_u32 = ls.word_count_u32;
+    out.language_pron_count_u32 = ls.pron_count_u32;
+    out.language_relation_count_u32 = ls.relations_count_u32;
+    out.language_concept_count_u32 = ls.concept_count_u32;
+    out.language_speech_utt_count_u32 = ls.speech_utt_count_u32;
+    out.language_speech_word_tokens_u32 = ls.speech_word_tokens_u32;
+
+    const genesis::MathStats& ms = sm.math_foundation.stats();
+    out.math_pemdas_cases_total_u32 = ms.pemdas_cases_total_u32;
+    out.math_pemdas_cases_passed_u32 = ms.pemdas_cases_passed_u32;
+    out.math_graph_packets_emitted_u32 = ms.graph_1d_packets_emitted_u32;
+    out.math_khan_pages_seen_u32 = ms.khan_pages_seen_u32;
+    out.math_khan_chars_ingested_u32 = ms.khan_chars_ingested_u32;
+
+    out.pending_external_api_u32 = (uint32_t)sm.external_api_pending.size();
+    out.inflight_external_api_u32 = (uint32_t)sm.external_api_inflight.size();
+
+    out.intent_band_q15[0] = sm.corpus_pipeline_enable_u32 ? 32767u : 0u;
+    out.intent_band_q15[1] = sm.corpus_pipeline_enable_u32 ? 32767u : 0u;
+    out.intent_band_q15[2] = 32767u;
+    out.intent_band_q15[3] = 32767u;
+    out.intent_band_q15[4] = 32767u;
+    out.intent_band_q15[5] = 32767u;
+    out.intent_band_q15[6] = 32767u;
+    out.intent_band_q15[7] = 32767u;
+
+    out.measured_band_q15[0] = ge_ratio_q15_u64(out.corpus_artifact_count_u32, 128u);
+    out.measured_band_q15[1] = ge_ratio_q15_u64(out.manifest_record_count_u32, 64u);
+    {
+        uint16_t tmp[3] = {
+            ge_ratio_q15_u64(out.language_word_count_u32, 50000u),
+            ge_ratio_q15_u64(out.language_pron_count_u32, 50000u),
+            ge_ratio_q15_u64(out.language_relation_count_u32, 50000u)
+        };
+        out.measured_band_q15[2] = ge_mean_q15_u16(tmp, 3u);
+    }
+    {
+        uint16_t tmp[3] = {
+            ge_ratio_q15_u64(out.language_concept_count_u32, 10000u),
+            ge_ratio_q15_u64(out.language_speech_utt_count_u32, 10000u),
+            ge_ratio_q15_u64(out.language_speech_word_tokens_u32, 50000u)
+        };
+        out.measured_band_q15[3] = ge_mean_q15_u16(tmp, 3u);
+    }
+    {
+        uint16_t pemdas_q15 = ge_ratio_q15_u64(out.math_pemdas_cases_passed_u32,
+                                               (uint64_t)((out.math_pemdas_cases_total_u32 != 0u) ? out.math_pemdas_cases_total_u32 : 1u));
+        uint16_t graph_q15 = ge_ratio_q15_u64(out.math_graph_packets_emitted_u32, 8u);
+        uint16_t tmp[2] = { pemdas_q15, graph_q15 };
+        out.measured_band_q15[4] = ge_mean_q15_u16(tmp, 2u);
+    }
+    {
+        uint16_t tmp[2] = {
+            ge_ratio_q15_u64(out.math_khan_pages_seen_u32, 32u),
+            ge_ratio_q15_u64(out.math_khan_chars_ingested_u32, 131072u)
+        };
+        out.measured_band_q15[5] = ge_mean_q15_u16(tmp, 2u);
+    }
+    {
+        uint16_t completion_sat_q15 = ge_ratio_q15_u64(out.completed_metric_count_u32, 32u);
+        uint16_t accept_ratio_q15 = ge_ratio_q15_u64(out.accepted_metric_count_u32,
+                                                     (uint64_t)((out.completed_metric_count_u32 != 0u) ? out.completed_metric_count_u32 : 1u));
+        uint16_t tmp[2] = { completion_sat_q15, accept_ratio_q15 };
+        out.measured_band_q15[6] = ge_mean_q15_u16(tmp, 2u);
+    }
+    {
+        uint16_t pending_headroom_q15 = ge_headroom_q15_from_used_u32(out.pending_metric_count_u32, 32u);
+        uint16_t api_headroom_q15 = ge_headroom_q15_from_used_u32(out.pending_external_api_u32 + out.inflight_external_api_u32, 16u);
+        uint16_t data_surface_q15 = ge_ratio_q15_u64(out.corpus_text_artifact_count_u32, 64u);
+        uint16_t tmp[3] = { pending_headroom_q15, api_headroom_q15, data_surface_q15 };
+        out.measured_band_q15[7] = ge_mean_q15_u16(tmp, 3u);
+    }
+
+    out.intent_norm_q15 = ge_mean_q15_u16(out.intent_band_q15, 8u);
+    out.measured_norm_q15 = ge_mean_q15_u16(out.measured_band_q15, 8u);
+    out.residual_norm_q15 = ge_mean_abs_diff_q15_u16(out.intent_band_q15, out.measured_band_q15, 8u);
+
+    out.error_q32_32 = ge_q15_error_to_q32_32(out.measured_norm_q15, out.intent_norm_q15);
+    out.error_delta_q32_32 = out.error_q32_32 - prev_error_q32_32;
+    out.error_integral_q32_32 = ge_clamp_i64_local(prev_integral_q32_32 + out.error_q32_32,
+                                                   -(8LL << 32),
+                                                   +(8LL << 32));
+    out.error_delta_norm_q15 = ge_abs_q32_32_to_q15_sat(out.error_delta_q32_32);
+    out.error_integral_norm_q15 = ge_abs_q32_32_to_q15_sat(out.error_integral_q32_32);
+
+    uint32_t authority_u32 = (uint32_t)out.residual_norm_q15 +
+                             ((uint32_t)out.error_delta_norm_q15 / 2u) +
+                             ((uint32_t)out.error_integral_norm_q15 / 4u);
+    if (authority_u32 > 32767u) authority_u32 = 32767u;
+    out.controller_authority_q15 = (uint16_t)authority_u32;
+}
+
+static std::string ge_format_process_substrate_status_line(const EwProcessSubstrateTelemetry& t,
+                                                           const char* prefix_ascii) {
+    std::ostringstream oss;
+    oss << (prefix_ascii ? prefix_ascii : "PROCESS_SUBSTRATE_STATUS")
+        << " valid=" << t.valid_u32
+        << " tick=" << t.tick_u64
+        << " spectral_anchor=" << t.spectral_anchor_id_u32
+        << " coherence_anchor=" << t.coherence_anchor_id_u32
+        << " fanout=" << t.fanout_budget_u32
+        << " intent_q15=" << t.intent_norm_q15
+        << " Emean_q15=" << t.energy_mean_q15
+        << " Epeak_q15=" << t.energy_peak_q15
+        << " LeakAbs_q15=" << t.leakage_abs_q15
+        << " residual_q15=" << t.residual_norm_q15
+        << " dErr_q15=" << t.error_delta_norm_q15
+        << " intErr_q15=" << t.error_integral_norm_q15
+        << " ctrl_q15=" << t.controller_authority_q15
+        << " dt_q32_32=" << t.dt_scale_q32_32
+        << " visc_q32_32=" << t.viscosity_bias_q32_32
+        << " err_q32_32=" << t.error_q32_32
+        << " derr_q32_32=" << t.error_delta_q32_32
+        << " ierr_q32_32=" << t.error_integral_q32_32
+        << " gpuF_q15=" << t.gpu_freq_norm_q15
+        << " gpuA_q15=" << t.gpu_amp_norm_q15
+        << " gpuV_q15=" << t.gpu_volt_norm_q15
+        << " intf_q15=" << t.interference_norm_q15
+        << " coh_q15=" << t.coherence_norm_q15
+        << " obs_q15=" << t.observer_norm_q15
+        << " vib_q15=" << t.source_vibration_q15
+        << " calctrl_q15=" << t.calibration_authority_q15
+        << " calerr_q32_32=" << t.calibration_error_q32_32
+        << " calderr_q32_32=" << t.calibration_delta_q32_32
+        << " calierr_q32_32=" << t.calibration_integral_q32_32
+        << " gain_q15=" << t.op_gain_q15
+        << " phase_q15=" << t.op_phase_bias_q15
+        << " learn_q15=" << t.learning_coupling_q15
+        << " phys_q15=" << t.phys_coherence_q15
+        << " lrncoh_q15=" << t.learning_coherence_q15
+        << " tempcoh_q15=" << t.temporal_coherence_q15
+        << " V=" << t.last_v_code_u16
+        << " I=" << t.last_i_code_u16
+        << " pending=" << (uint32_t)t.residual_pending_u8
+        << " hold=" << (uint32_t)t.hold_tick_u8
+        << " commit=" << (uint32_t)t.last_commit_u8;
+    return oss.str();
+}
+
+static std::string ge_format_ai_substrate_status_line(const EwAiSubstrateTelemetry& t,
+                                                      const char* prefix_ascii) {
+    std::ostringstream oss;
+    oss << (prefix_ascii ? prefix_ascii : "AI_SUBSTRATE_STATUS")
+        << " valid=" << t.valid_u32
+        << " tick=" << t.tick_u64
+        << " class=" << t.class_id_u32
+        << " sig9=" << t.sig9_u64
+        << " obs=" << t.observation_seq_u64
+        << " cmd_obs=" << t.dispatched_observation_seq_u64
+        << " conf_q32_32=" << t.confidence_q32_32
+        << " attract_q32_32=" << t.attractor_strength_q32_32
+        << " cmds=" << t.command_count_u32
+        << " actions=" << t.action_log_count_u32
+        << " carrier_q63=" << t.carrier_pulse_q63
+        << " totalw_q63=" << t.carrier_total_weight_q63
+        << " pending_api=" << t.pending_external_api_u32
+        << " inflight_api=" << t.inflight_external_api_u32
+        << " fanout=" << t.fanout_budget_u32
+        << " ant=" << t.anticipation_flags_u16
+        << " ctrl_q15=" << t.controller_authority_q15
+        << " gain_q15=" << t.op_gain_q15
+        << " phase_q15=" << t.op_phase_bias_q15
+        << " b0=" << t.carrier_band_q15[0]
+        << " b1=" << t.carrier_band_q15[1]
+        << " b2=" << t.carrier_band_q15[2]
+        << " b3=" << t.carrier_band_q15[3]
+        << " b4=" << t.carrier_band_q15[4]
+        << " b5=" << t.carrier_band_q15[5]
+        << " b6=" << t.carrier_band_q15[6]
+        << " b7=" << t.carrier_band_q15[7]
+        << " kind=" << t.last_action_kind_u16
+        << " profile=" << t.last_action_profile_u16
+        << " anchor=" << t.last_target_anchor_id_u32
+        << " f=" << t.last_f_code_i32
+        << " a=" << t.last_a_code_u16
+        << " v=" << t.last_v_code_u16
+        << " i=" << t.last_i_code_u16;
+    return oss.str();
+}
+
+static std::string ge_format_ai_data_substrate_status_line(const EwAiDataSubstrateTelemetry& t,
+                                                           const char* prefix_ascii) {
+    std::ostringstream oss;
+    oss << (prefix_ascii ? prefix_ascii : "AI_DATA_SUBSTRATE_STATUS")
+        << " valid=" << t.valid_u32
+        << " tick=" << t.tick_u64
+        << " corpus=" << t.corpus_artifact_count_u32
+        << " corpus_txt=" << t.corpus_text_artifact_count_u32
+        << " manifest=" << t.manifest_record_count_u32
+        << " pending_metrics=" << t.pending_metric_count_u32
+        << " completed_metrics=" << t.completed_metric_count_u32
+        << " accepted_metrics=" << t.accepted_metric_count_u32
+        << " lex=" << t.language_word_count_u32
+        << " pron=" << t.language_pron_count_u32
+        << " rel=" << t.language_relation_count_u32
+        << " concept=" << t.language_concept_count_u32
+        << " speech=" << t.language_speech_utt_count_u32
+        << " pemdas=" << t.math_pemdas_cases_passed_u32 << "/" << t.math_pemdas_cases_total_u32
+        << " graph=" << t.math_graph_packets_emitted_u32
+        << " khan_pages=" << t.math_khan_pages_seen_u32
+        << " khan_chars=" << t.math_khan_chars_ingested_u32
+        << " pending_api=" << t.pending_external_api_u32
+        << " inflight_api=" << t.inflight_external_api_u32
+        << " intent_q15=" << t.intent_norm_q15
+        << " measured_q15=" << t.measured_norm_q15
+        << " residual_q15=" << t.residual_norm_q15
+        << " dErr_q15=" << t.error_delta_norm_q15
+        << " intErr_q15=" << t.error_integral_norm_q15
+        << " ctrl_q15=" << t.controller_authority_q15
+        << " err_q32_32=" << t.error_q32_32
+        << " derr_q32_32=" << t.error_delta_q32_32
+        << " ierr_q32_32=" << t.error_integral_q32_32
+        << " t0=" << t.intent_band_q15[0]
+        << " t1=" << t.intent_band_q15[1]
+        << " t2=" << t.intent_band_q15[2]
+        << " t3=" << t.intent_band_q15[3]
+        << " t4=" << t.intent_band_q15[4]
+        << " t5=" << t.intent_band_q15[5]
+        << " t6=" << t.intent_band_q15[6]
+        << " t7=" << t.intent_band_q15[7]
+        << " m0=" << t.measured_band_q15[0]
+        << " m1=" << t.measured_band_q15[1]
+        << " m2=" << t.measured_band_q15[2]
+        << " m3=" << t.measured_band_q15[3]
+        << " m4=" << t.measured_band_q15[4]
+        << " m5=" << t.measured_band_q15[5]
+        << " m6=" << t.measured_band_q15[6]
+        << " m7=" << t.measured_band_q15[7];
+    return oss.str();
 }
 // Build a view matrix (row-major 4x4) in Q16.16 from a camera pose expressed as
 // (pos_q16_16, quat_q16_16). Quaternion is interpreted as camera->world rotation.
@@ -2504,6 +2937,7 @@ bool SubstrateManager::submit_external_api_response_chunk(
 
 void SubstrateManager::observe_text_line(const std::string& utf8_line) {
     // Store observation inside substrate memory for phase operators.
+    observation_seq_u64 += 1u;
     last_observation_text = utf8_line;
 
     // Route through crawler with deterministic labels.
@@ -2628,6 +3062,39 @@ void SubstrateManager::ui_submit_user_text_line(const std::string& utf8_line) {
         } else {
             (void)corpus_allowlist_update_from_user_text(md);
         }
+        return;
+    }
+
+    if (utf8_line.rfind("/process_substrate_status", 0) == 0 ||
+        utf8_line.rfind("process_substrate_status:", 0) == 0) {
+        emit_ui_line(ge_format_process_substrate_status_line(process_substrate_telemetry,
+                                                             "PROCESS_SUBSTRATE_STATUS"));
+        return;
+    }
+    if (utf8_line.rfind("/ai_status", 0) == 0 ||
+        utf8_line.rfind("ai_status:", 0) == 0 ||
+        utf8_line.rfind("/ai_substrate_status", 0) == 0 ||
+        utf8_line.rfind("ai_substrate_status:", 0) == 0) {
+        emit_ui_line(ge_format_ai_substrate_status_line(ai_substrate_telemetry,
+                                                        "AI_SUBSTRATE_STATUS"));
+        return;
+    }
+    if (utf8_line.rfind("/ai_data_status", 0) == 0 ||
+        utf8_line.rfind("ai_data_status:", 0) == 0 ||
+        utf8_line.rfind("/ai_data_substrate_status", 0) == 0 ||
+        utf8_line.rfind("ai_data_substrate_status:", 0) == 0) {
+        emit_ui_line(ge_format_ai_data_substrate_status_line(ai_data_substrate_telemetry,
+                                                             "AI_DATA_SUBSTRATE_STATUS"));
+        return;
+    }
+    if (utf8_line.rfind("/research_status", 0) == 0 ||
+        utf8_line.rfind("research_status:", 0) == 0) {
+        emit_ui_line(ge_format_process_substrate_status_line(process_substrate_telemetry,
+                                                             "PROCESS_SUBSTRATE_STATUS"));
+        emit_ui_line(ge_format_ai_substrate_status_line(ai_substrate_telemetry,
+                                                        "AI_SUBSTRATE_STATUS"));
+        emit_ui_line(ge_format_ai_data_substrate_status_line(ai_data_substrate_telemetry,
+                                                             "AI_DATA_SUBSTRATE_STATUS"));
         return;
     }
 
@@ -7732,6 +8199,15 @@ if (ap && ap->object_id_u64 != 0u) {
         canonical_tick = prev_tick_u64 + 1u;
     }
 
+    ge_update_process_substrate_telemetry(*this);
+    ge_update_ai_substrate_telemetry(*this);
+    ge_update_ai_data_substrate_telemetry(*this);
+
+    if ((canonical_tick_u64() % 360u) == 0u && process_substrate_telemetry.valid_u32 != 0u) {
+        emit_ui_line(ge_format_process_substrate_status_line(process_substrate_telemetry,
+                                                             "PROCESS_SUBSTRATE_STATUS"));
+    }
+
     // Deterministic measurement-frame projection is stored onto anchors.
     // This makes frame_gamma_turns_q observable as a basis shift, while
     // remaining a pure frame mismatch (no energy coupling).
@@ -8193,6 +8669,96 @@ if (ap && ap->object_id_u64 != 0u) {
         a.payload += "class_id_u32: " + std::to_string(neural_ai.status().class_id_u32) + "\n";
         a.payload += "confidence_q32_32: " + std::to_string(neural_ai.status().confidence_q32_32) + "\n";
         a.payload += "sig9_u64: " + std::to_string(neural_ai.status().sig9_u64) + "\n";
+        a.payload += "observation_seq_u64: " + std::to_string(observation_seq_u64) + "\n";
+        a.payload += "command_observation_seq_u64: " + std::to_string(ai_last_command_observation_seq_u64) + "\n";
+
+        a.payload += "\n# Process Substrate\n\n";
+        a.payload += "valid_u32: " + std::to_string(process_substrate_telemetry.valid_u32) + "\n";
+        a.payload += "spectral_anchor_id_u32: " + std::to_string(process_substrate_telemetry.spectral_anchor_id_u32) + "\n";
+        a.payload += "coherence_anchor_id_u32: " + std::to_string(process_substrate_telemetry.coherence_anchor_id_u32) + "\n";
+        a.payload += "fanout_budget_u32: " + std::to_string(process_substrate_telemetry.fanout_budget_u32) + "\n";
+        a.payload += "intent_norm_q15: " + std::to_string((uint32_t)process_substrate_telemetry.intent_norm_q15) + "\n";
+        a.payload += "energy_mean_q15: " + std::to_string((uint32_t)process_substrate_telemetry.energy_mean_q15) + "\n";
+        a.payload += "energy_peak_q15: " + std::to_string((uint32_t)process_substrate_telemetry.energy_peak_q15) + "\n";
+        a.payload += "leakage_abs_q15: " + std::to_string((uint32_t)process_substrate_telemetry.leakage_abs_q15) + "\n";
+        a.payload += "residual_norm_q15: " + std::to_string((uint32_t)process_substrate_telemetry.residual_norm_q15) + "\n";
+        a.payload += "controller_authority_q15: " + std::to_string((uint32_t)process_substrate_telemetry.controller_authority_q15) + "\n";
+        a.payload += "dt_scale_q32_32: " + std::to_string(process_substrate_telemetry.dt_scale_q32_32) + "\n";
+        a.payload += "viscosity_bias_q32_32: " + std::to_string(process_substrate_telemetry.viscosity_bias_q32_32) + "\n";
+        a.payload += "gpu_freq_norm_q15: " + std::to_string((uint32_t)process_substrate_telemetry.gpu_freq_norm_q15) + "\n";
+        a.payload += "gpu_amp_norm_q15: " + std::to_string((uint32_t)process_substrate_telemetry.gpu_amp_norm_q15) + "\n";
+        a.payload += "gpu_volt_norm_q15: " + std::to_string((uint32_t)process_substrate_telemetry.gpu_volt_norm_q15) + "\n";
+        a.payload += "interference_norm_q15: " + std::to_string((uint32_t)process_substrate_telemetry.interference_norm_q15) + "\n";
+        a.payload += "coherence_norm_q15: " + std::to_string((uint32_t)process_substrate_telemetry.coherence_norm_q15) + "\n";
+        a.payload += "observer_norm_q15: " + std::to_string((uint32_t)process_substrate_telemetry.observer_norm_q15) + "\n";
+        a.payload += "source_vibration_q15: " + std::to_string((uint32_t)process_substrate_telemetry.source_vibration_q15) + "\n";
+        a.payload += "calibration_authority_q15: " + std::to_string((uint32_t)process_substrate_telemetry.calibration_authority_q15) + "\n";
+        a.payload += "calibration_error_q32_32: " + std::to_string(process_substrate_telemetry.calibration_error_q32_32) + "\n";
+        a.payload += "calibration_delta_q32_32: " + std::to_string(process_substrate_telemetry.calibration_delta_q32_32) + "\n";
+        a.payload += "calibration_integral_q32_32: " + std::to_string(process_substrate_telemetry.calibration_integral_q32_32) + "\n";
+        if (process_substrate_telemetry.valid_u32 != 0u &&
+            process_substrate_telemetry.spectral_anchor_id_u32 != 0u &&
+            process_substrate_telemetry.spectral_anchor_id_u32 < anchors.size() &&
+            anchors[process_substrate_telemetry.spectral_anchor_id_u32].kind_u32 == EW_ANCHOR_KIND_SPECTRAL_FIELD) {
+            const EwSpectralFieldAnchorState& ss =
+                anchors[process_substrate_telemetry.spectral_anchor_id_u32].spectral_field_state;
+            for (uint32_t i = 0; i < 8u; ++i) {
+                a.payload += std::string("interference_band_q15_") + std::to_string((unsigned long long)i) + ": " +
+                             std::to_string((uint32_t)ss.calibration_summary.interference_band_q15[i]) + "\n";
+                a.payload += std::string("coherence_band_q15_") + std::to_string((unsigned long long)i) + ": " +
+                             std::to_string((uint32_t)ss.calibration_summary.coherence_band_q15[i]) + "\n";
+            }
+        }
+
+        a.payload += "\n# AI Backend\n\n";
+        a.payload += "command_count_u32: " + std::to_string(ai_substrate_telemetry.command_count_u32) + "\n";
+        a.payload += "action_log_count_u32: " + std::to_string(ai_substrate_telemetry.action_log_count_u32) + "\n";
+        a.payload += "carrier_pulse_q63: " + std::to_string(ai_substrate_telemetry.carrier_pulse_q63) + "\n";
+        a.payload += "carrier_total_weight_q63: " + std::to_string(ai_substrate_telemetry.carrier_total_weight_q63) + "\n";
+        a.payload += "pending_external_api_u32: " + std::to_string(ai_substrate_telemetry.pending_external_api_u32) + "\n";
+        a.payload += "inflight_external_api_u32: " + std::to_string(ai_substrate_telemetry.inflight_external_api_u32) + "\n";
+        a.payload += "fanout_budget_u32: " + std::to_string(ai_substrate_telemetry.fanout_budget_u32) + "\n";
+        a.payload += "anticipation_flags_u16: " + std::to_string((uint32_t)ai_substrate_telemetry.anticipation_flags_u16) + "\n";
+        a.payload += "controller_authority_q15: " + std::to_string((uint32_t)ai_substrate_telemetry.controller_authority_q15) + "\n";
+        a.payload += "op_gain_q15: " + std::to_string((uint32_t)ai_substrate_telemetry.op_gain_q15) + "\n";
+        a.payload += "op_phase_bias_q15: " + std::to_string((uint32_t)ai_substrate_telemetry.op_phase_bias_q15) + "\n";
+        for (uint32_t i = 0; i < 8u; ++i) {
+            a.payload += std::string("carrier_band_q15_") + std::to_string((unsigned long long)i) + ": " +
+                         std::to_string((uint32_t)ai_substrate_telemetry.carrier_band_q15[i]) + "\n";
+        }
+
+        a.payload += "\n# AI Data Substrate\n\n";
+        a.payload += "corpus_artifact_count_u32: " + std::to_string(ai_data_substrate_telemetry.corpus_artifact_count_u32) + "\n";
+        a.payload += "corpus_text_artifact_count_u32: " + std::to_string(ai_data_substrate_telemetry.corpus_text_artifact_count_u32) + "\n";
+        a.payload += "manifest_record_count_u32: " + std::to_string(ai_data_substrate_telemetry.manifest_record_count_u32) + "\n";
+        a.payload += "pending_metric_count_u32: " + std::to_string(ai_data_substrate_telemetry.pending_metric_count_u32) + "\n";
+        a.payload += "completed_metric_count_u32: " + std::to_string(ai_data_substrate_telemetry.completed_metric_count_u32) + "\n";
+        a.payload += "accepted_metric_count_u32: " + std::to_string(ai_data_substrate_telemetry.accepted_metric_count_u32) + "\n";
+        a.payload += "language_word_count_u32: " + std::to_string(ai_data_substrate_telemetry.language_word_count_u32) + "\n";
+        a.payload += "language_pron_count_u32: " + std::to_string(ai_data_substrate_telemetry.language_pron_count_u32) + "\n";
+        a.payload += "language_relation_count_u32: " + std::to_string(ai_data_substrate_telemetry.language_relation_count_u32) + "\n";
+        a.payload += "language_concept_count_u32: " + std::to_string(ai_data_substrate_telemetry.language_concept_count_u32) + "\n";
+        a.payload += "language_speech_utt_count_u32: " + std::to_string(ai_data_substrate_telemetry.language_speech_utt_count_u32) + "\n";
+        a.payload += "math_pemdas_cases_passed_u32: " + std::to_string(ai_data_substrate_telemetry.math_pemdas_cases_passed_u32) + "\n";
+        a.payload += "math_pemdas_cases_total_u32: " + std::to_string(ai_data_substrate_telemetry.math_pemdas_cases_total_u32) + "\n";
+        a.payload += "math_graph_packets_emitted_u32: " + std::to_string(ai_data_substrate_telemetry.math_graph_packets_emitted_u32) + "\n";
+        a.payload += "math_khan_pages_seen_u32: " + std::to_string(ai_data_substrate_telemetry.math_khan_pages_seen_u32) + "\n";
+        a.payload += "math_khan_chars_ingested_u32: " + std::to_string(ai_data_substrate_telemetry.math_khan_chars_ingested_u32) + "\n";
+        a.payload += "intent_norm_q15: " + std::to_string((uint32_t)ai_data_substrate_telemetry.intent_norm_q15) + "\n";
+        a.payload += "measured_norm_q15: " + std::to_string((uint32_t)ai_data_substrate_telemetry.measured_norm_q15) + "\n";
+        a.payload += "residual_norm_q15: " + std::to_string((uint32_t)ai_data_substrate_telemetry.residual_norm_q15) + "\n";
+        a.payload += "error_delta_norm_q15: " + std::to_string((uint32_t)ai_data_substrate_telemetry.error_delta_norm_q15) + "\n";
+        a.payload += "error_integral_norm_q15: " + std::to_string((uint32_t)ai_data_substrate_telemetry.error_integral_norm_q15) + "\n";
+        a.payload += "controller_authority_q15: " + std::to_string((uint32_t)ai_data_substrate_telemetry.controller_authority_q15) + "\n";
+        a.payload += "error_q32_32: " + std::to_string(ai_data_substrate_telemetry.error_q32_32) + "\n";
+        a.payload += "error_delta_q32_32: " + std::to_string(ai_data_substrate_telemetry.error_delta_q32_32) + "\n";
+        a.payload += "error_integral_q32_32: " + std::to_string(ai_data_substrate_telemetry.error_integral_q32_32) + "\n";
+        for (uint32_t i = 0; i < 8u; ++i) {
+            a.payload += std::string("intent_band_q15_") + std::to_string((unsigned long long)i) + ": " +
+                         std::to_string((uint32_t)ai_data_substrate_telemetry.intent_band_q15[i]) + "\n";
+            a.payload += std::string("measured_band_q15_") + std::to_string((unsigned long long)i) + ": " +
+                         std::to_string((uint32_t)ai_data_substrate_telemetry.measured_band_q15[i]) + "\n";
+        }
 
         if (ai_action_log_count_u32 > 0) {
             const uint32_t idx = (ai_action_log_head_u32 + AI_ACTION_LOG_CAP - 1u) % AI_ACTION_LOG_CAP;
@@ -8214,6 +8780,10 @@ if (ap && ap->object_id_u64 != 0u) {
         a.denial_code_u32 = cr.denial_code_u32;
         (void)inspector_fields.upsert(a);
     }
+
+    ai_commands_count_u32 = 0u;
+    ai_pulse_q63 = 0;
+    ai_total_weight_q63 = 0;
 
     // Inputs are consumed only on successful tick boundary.
     // ------------------------------------------------------------------
@@ -8977,5 +9547,26 @@ bool SubstrateManager::get_render_xr_eye_packet(uint32_t eye_index_u32, EwRender
     if (!out || eye_index_u32 >= 2u) return false;
     if (render_xr_eye_packet_tick_u64[eye_index_u32] == 0u) return false;
     *out = render_xr_eye_packet[eye_index_u32];
+    return true;
+}
+
+bool SubstrateManager::get_process_substrate_telemetry(EwProcessSubstrateTelemetry* out) const {
+    if (!out) return false;
+    if (process_substrate_telemetry.valid_u32 == 0u) return false;
+    *out = process_substrate_telemetry;
+    return true;
+}
+
+bool SubstrateManager::get_ai_substrate_telemetry(EwAiSubstrateTelemetry* out) const {
+    if (!out) return false;
+    if (ai_substrate_telemetry.valid_u32 == 0u) return false;
+    *out = ai_substrate_telemetry;
+    return true;
+}
+
+bool SubstrateManager::get_ai_data_substrate_telemetry(EwAiDataSubstrateTelemetry* out) const {
+    if (!out) return false;
+    if (ai_data_substrate_telemetry.valid_u32 == 0u) return false;
+    *out = ai_data_substrate_telemetry;
     return true;
 }

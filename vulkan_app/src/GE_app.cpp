@@ -297,14 +297,45 @@ void refresh_fixed_cache() {
     uint32_t research_visual_stream_hz_u32 = 360u;
     size_t research_visual_max_points = 20000u;
     uint64_t research_visual_last_tick_u64 = 0u;
+    uint64_t research_guidance_last_pulse_tick_u64 = 0u;
+    uint64_t research_gpu_prediction_last_tick_u64 = 0u;
     uint8_t research_output_mode_u8 = 1u; // 1=frequency/all, 2=vector-only extrapolation
     bool research_stov_mode = false;
+    bool research_live_boot_enabled = true;
+    bool research_guidance_enabled = true;
+    bool research_live_compute_enabled = true;
+    bool research_live_compute_active = false;
+    bool research_basic_trial_enabled = false;
+    bool research_basic_trial_expired = false;
+    bool research_basic_trial_expiry_announced = false;
+    bool research_guidance_has_pulse_history = false;
+    bool research_guidance_watchdog_fault = false;
     float research_param_a = 0.19f;
     float research_param_f = 0.245f;
     float research_param_i = 0.35f;
     float research_param_v = 0.35f;
     uint32_t research_lattice_edge_u32 = 256u;
+    uint32_t research_gpu_prediction_axis_resolution_u32 = 6u;
+    uint32_t research_gpu_prediction_refresh_ticks_u32 = 120u;
+    uint32_t research_basic_trial_minutes_u32 = 60u;
+    uint32_t research_guidance_watchdog_fault_count_u32 = 0u;
+    uint64_t research_guidance_watchdog_last_fault_tick_u64 = 0u;
+    uint64_t research_live_compute_activation_tick_u64 = 0u;
+    uint64_t research_basic_trial_start_tick_u64 = 0u;
+    uint64_t research_basic_trial_end_tick_u64 = 0u;
     genesis::VirtualStateDrive research_runtime_vsd;
+    genesis::GeResearchRuntimeGuidance research_guidance;
+    genesis::GeResearchGpuAdaptiveCalibration research_gpu_calibration;
+    genesis::GeResearchLiveComputePlan research_live_compute_plan;
+    std::vector<genesis::GeResearchInterferencePredictionCell> research_gpu_predictions;
+    uint64_t research_sx_q32_32_u64 = 1ull << 32u;
+    uint64_t research_sy_q32_32_u64 = 1ull << 32u;
+    uint64_t research_sz_q32_32_u64 = 1ull << 32u;
+    double research_lattice_probe_energy_norm = 0.0;
+    double research_lattice_probe_flux_norm = 0.0;
+    double research_lattice_probe_interference_norm = 0.0;
+    double research_lattice_probe_temporal_coupling_norm = 0.0;
+    std::chrono::steady_clock::time_point research_basic_trial_start_time{};
 
     void PushLocalUiLine(const std::string& line_utf8) {
         if (line_utf8.empty()) return;
@@ -325,6 +356,243 @@ void refresh_fixed_cache() {
         const uint64_t n = (uint64_t)std::max<uint32_t>(step_u32, 1u);
         const uint64_t edge = 256ull * n * n;
         return ClampLatticeEdge((uint32_t)std::min<uint64_t>(edge, 20000ull));
+    }
+
+    static double ClampNorm01(double v) {
+        if (v < 0.0) return 0.0;
+        if (v > 1.0) return 1.0;
+        return v;
+    }
+
+    static uint16_t PackNormU16(double v) {
+        const double n = ClampNorm01(v);
+        return (uint16_t)std::lround(n * 65535.0);
+    }
+
+    static int32_t PackFreqCode(double v) {
+        const double n = ClampNorm01(v);
+        return (int32_t)std::lround(n * 4096.0);
+    }
+
+    static uint64_t PackFreqHz(double v) {
+        const uint64_t hz = (uint64_t)std::llround(ClampNorm01(v) * 4096.0);
+        return std::max<uint64_t>(hz, 1u);
+    }
+
+    static double NormFromAbs(double v) {
+        const double av = std::abs(v);
+        return av / (1.0 + av);
+    }
+
+    static uint64_t PackPositiveQ32_32(double v) {
+        const double clamped = std::max(0.0, v);
+        const long double scaled = (long double)clamped * 4294967296.0L;
+        if (scaled >= (long double)UINT64_MAX) return UINT64_MAX;
+        return (uint64_t)std::llround((double)scaled);
+    }
+
+    static double UnpackPositiveQ32_32(uint64_t v) {
+        return (double)v / 4294967296.0;
+    }
+
+    static uint32_t ClampResearchBasicTrialMinutes(uint32_t minutes_u32) {
+        return std::max<uint32_t>(1u, std::min<uint32_t>(minutes_u32, 240u));
+    }
+
+    static uint32_t ResearchBasicTrialMaxStreamHz() {
+        return 120u;
+    }
+
+    static uint32_t ResearchBasicTrialMaxLatticeEdge() {
+        return 1024u;
+    }
+
+    double ResearchBasicTrialRemainingSeconds() const {
+        if (!research_basic_trial_enabled || research_basic_trial_expired) return 0.0;
+        if (research_basic_trial_start_tick_u64 == 0u && research_basic_trial_end_tick_u64 == 0u) return 0.0;
+        const auto now = std::chrono::steady_clock::now();
+        const double elapsed_seconds =
+            std::chrono::duration<double>(now - research_basic_trial_start_time).count();
+        const double total_seconds = (double)research_basic_trial_minutes_u32 * 60.0;
+        return std::max(0.0, total_seconds - elapsed_seconds);
+    }
+
+    bool ResearchBasicTrialAllowsMutation() const {
+        return !research_basic_trial_enabled || !research_basic_trial_expired;
+    }
+
+    static bool ResearchCommandMatchesPrefix(const std::string& utf8, const char* prefix_ascii) {
+        return utf8.rfind(prefix_ascii, 0) == 0;
+    }
+
+    static bool ResearchCommandLooksLikeStatus(const std::string& utf8) {
+        return ResearchCommandMatchesPrefix(utf8, "/basic_trial_status") ||
+               ResearchCommandMatchesPrefix(utf8, "basic_trial_status:") ||
+               ResearchCommandMatchesPrefix(utf8, "/meta_basic_mode_status") ||
+               ResearchCommandMatchesPrefix(utf8, "meta_basic_mode_status:") ||
+               ResearchCommandMatchesPrefix(utf8, "/sim_freq_status") ||
+               ResearchCommandMatchesPrefix(utf8, "sim_freq_status:") ||
+               ResearchCommandMatchesPrefix(utf8, "/research_status") ||
+               ResearchCommandMatchesPrefix(utf8, "research_status:") ||
+               ResearchCommandMatchesPrefix(utf8, "/research_guidance_status") ||
+               ResearchCommandMatchesPrefix(utf8, "research_guidance_status:") ||
+               ResearchCommandMatchesPrefix(utf8, "/research_gpu_calibration_status") ||
+               ResearchCommandMatchesPrefix(utf8, "research_gpu_calibration_status:") ||
+               ResearchCommandMatchesPrefix(utf8, "/research_live_compute_status") ||
+               ResearchCommandMatchesPrefix(utf8, "research_live_compute_status:") ||
+               ResearchCommandMatchesPrefix(utf8, "/process_substrate_status") ||
+               ResearchCommandMatchesPrefix(utf8, "process_substrate_status:") ||
+               ResearchCommandMatchesPrefix(utf8, "/ai_status") ||
+               ResearchCommandMatchesPrefix(utf8, "ai_status:") ||
+               ResearchCommandMatchesPrefix(utf8, "/ai_substrate_status") ||
+               ResearchCommandMatchesPrefix(utf8, "ai_substrate_status:") ||
+               ResearchCommandMatchesPrefix(utf8, "/ai_data_status") ||
+               ResearchCommandMatchesPrefix(utf8, "ai_data_status:") ||
+               ResearchCommandMatchesPrefix(utf8, "/ai_data_substrate_status") ||
+               ResearchCommandMatchesPrefix(utf8, "ai_data_substrate_status:");
+    }
+
+    bool ResearchBasicTrialShouldBlockAdvancedCommand(const std::string& utf8) const {
+        if (!research_basic_trial_enabled) return false;
+        if (ResearchCommandLooksLikeStatus(utf8)) return false;
+        return ResearchCommandMatchesPrefix(utf8, "/research_reload") ||
+               ResearchCommandMatchesPrefix(utf8, "research_reload:") ||
+               ResearchCommandMatchesPrefix(utf8, "/sim_freq_reload") ||
+               ResearchCommandMatchesPrefix(utf8, "sim_freq_reload:") ||
+               ResearchCommandMatchesPrefix(utf8, "/research_live_mode") ||
+               ResearchCommandMatchesPrefix(utf8, "research_live_mode:") ||
+               ResearchCommandMatchesPrefix(utf8, "/research_live_compute") ||
+               ResearchCommandMatchesPrefix(utf8, "research_live_compute:") ||
+               ResearchCommandMatchesPrefix(utf8, "/research_gpu_prediction_axis") ||
+               ResearchCommandMatchesPrefix(utf8, "research_gpu_prediction_axis:") ||
+               ResearchCommandMatchesPrefix(utf8, "/research_gpu_prediction_refresh") ||
+               ResearchCommandMatchesPrefix(utf8, "research_gpu_prediction_refresh:") ||
+               ResearchCommandMatchesPrefix(utf8, "/sim_freq_run") ||
+               ResearchCommandMatchesPrefix(utf8, "sim_freq_run:");
+    }
+
+    void PushResearchBasicTrialBlocked(const std::string& target_utf8,
+                                       const std::string& reason_utf8) {
+        std::ostringstream oss;
+        oss << "META_BASIC_TRIAL:blocked target=" << target_utf8
+            << " reason=" << reason_utf8
+            << " remaining_s=" << ResearchBasicTrialRemainingSeconds();
+        PushLocalUiLine(oss.str());
+    }
+
+    static bool IsFiniteResearchQuartet(const genesis::GeResearchPulseQuartet& q) {
+        return std::isfinite(q.F) &&
+               std::isfinite(q.A) &&
+               std::isfinite(q.I) &&
+               std::isfinite(q.V);
+    }
+
+    void UpdateResearchAxisScaleState(const genesis::GeResearchPulseQuartet& quartet) {
+        const double sx = std::max(0.125, 0.50 + 1.50 * ClampNorm01(quartet.F));
+        const double sy = std::max(0.125, 0.50 + 1.50 * ClampNorm01(quartet.A));
+        const double sz = std::max(0.125, 0.45 + 0.85 * ClampNorm01(quartet.F) + 0.70 * ClampNorm01(quartet.A));
+        research_sx_q32_32_u64 = PackPositiveQ32_32(sx);
+        research_sy_q32_32_u64 = PackPositiveQ32_32(sy);
+        research_sz_q32_32_u64 = PackPositiveQ32_32(sz);
+    }
+
+    void UpdateResearchPredictionLatticeProbe(const EwProcessSubstrateTelemetry* telemetry_opt,
+                                              const genesis::GeResearchPulseQuartet& desired) {
+        UpdateResearchAxisScaleState(desired);
+
+        const double gpu_freq_norm =
+            telemetry_opt ? ((double)telemetry_opt->gpu_freq_norm_q15 / 65535.0) : desired.F;
+        const double gpu_amp_norm =
+            telemetry_opt ? ((double)telemetry_opt->gpu_amp_norm_q15 / 65535.0) : desired.A;
+        const double gpu_curr_norm =
+            telemetry_opt ? ((double)telemetry_opt->last_i_code_u16 / 65535.0) : desired.I;
+        const double gpu_volt_norm =
+            telemetry_opt ? ((double)telemetry_opt->gpu_volt_norm_q15 / 65535.0) : desired.V;
+        const double interference_norm =
+            telemetry_opt ? ((double)telemetry_opt->interference_norm_q15 / 65535.0) : 0.0;
+        const double coherence_norm =
+            telemetry_opt ? ((double)telemetry_opt->coherence_norm_q15 / 65535.0) : 0.0;
+        const double source_vibration_norm =
+            telemetry_opt ? ((double)telemetry_opt->source_vibration_q15 / 65535.0) : 0.0;
+
+        const double sx = UnpackPositiveQ32_32(research_sx_q32_32_u64);
+        const double sy = UnpackPositiveQ32_32(research_sy_q32_32_u64);
+        const double sz = UnpackPositiveQ32_32(research_sz_q32_32_u64);
+        const double text_drive_n =
+            ClampNorm01(0.62 * ClampNorm01(desired.F * sx) + 0.20 * gpu_freq_norm + 0.18 * interference_norm);
+        const double image_drive_n =
+            ClampNorm01(0.60 * ClampNorm01(desired.A * sy) + 0.22 * gpu_amp_norm + 0.18 * gpu_volt_norm);
+        const double audio_drive_n =
+            ClampNorm01(0.56 * ClampNorm01(desired.I * sz) + 0.24 * gpu_curr_norm + 0.20 * source_vibration_norm);
+
+        lattice.inject_text_amplitude_q32_32(q32_32_from_f32((float)text_drive_n));
+        lattice.inject_image_amplitude_q32_32(q32_32_from_f32((float)image_drive_n));
+        lattice.inject_audio_amplitude_q32_32(q32_32_from_f32((float)audio_drive_n));
+        lattice.step_one_tick();
+
+        const std::vector<float>& e_curr = lattice.E_curr();
+        const std::vector<float>& flux = lattice.flux();
+        if (e_curr.empty() || flux.empty() || e_curr.size() != flux.size()) {
+            research_lattice_probe_energy_norm = 0.0;
+            research_lattice_probe_flux_norm = 0.0;
+            research_lattice_probe_interference_norm = 0.0;
+            research_lattice_probe_temporal_coupling_norm = 0.0;
+            return;
+        }
+
+        constexpr int gx = 128;
+        constexpr int gy = 128;
+        constexpr int gz = 128;
+        const auto idx = [](int x, int y, int z) -> size_t {
+            return (size_t)((z * gy + y) * gx + x);
+        };
+        const int cx = gx / 2;
+        const int cy = gy / 2;
+        const int cz = gz / 2;
+        double sum_energy = 0.0;
+        double sum_flux = 0.0;
+        double sum_gradient = 0.0;
+        size_t sample_count = 0u;
+        for (int z = cz - 1; z <= cz + 1; ++z) {
+            for (int y = cy - 1; y <= cy + 1; ++y) {
+                for (int x = cx - 1; x <= cx + 1; ++x) {
+                    const size_t i = idx(x, y, z);
+                    const size_t ixm = idx(x - 1, y, z);
+                    const size_t ixp = idx(x + 1, y, z);
+                    const size_t iym = idx(x, y - 1, z);
+                    const size_t iyp = idx(x, y + 1, z);
+                    const size_t izm = idx(x, y, z - 1);
+                    const size_t izp = idx(x, y, z + 1);
+                    const double e_abs = std::abs((double)e_curr[i]);
+                    const double f_abs = std::abs((double)flux[i]);
+                    const double gradient =
+                        std::abs((double)e_curr[ixp] - (double)e_curr[ixm]) +
+                        std::abs((double)e_curr[iyp] - (double)e_curr[iym]) +
+                        std::abs((double)e_curr[izp] - (double)e_curr[izm]);
+                    sum_energy += e_abs;
+                    sum_flux += f_abs;
+                    sum_gradient += gradient;
+                    ++sample_count;
+                }
+            }
+        }
+
+        const double inv_count = (sample_count > 0u) ? (1.0 / (double)sample_count) : 0.0;
+        research_lattice_probe_energy_norm = NormFromAbs(sum_energy * inv_count);
+        research_lattice_probe_flux_norm = NormFromAbs(sum_flux * inv_count);
+        const double gradient_norm = NormFromAbs(sum_gradient * inv_count);
+        research_lattice_probe_interference_norm =
+            ClampNorm01(0.34 * research_lattice_probe_energy_norm +
+                        0.30 * gradient_norm +
+                        0.20 * research_lattice_probe_flux_norm +
+                        0.10 * coherence_norm +
+                        0.06 * source_vibration_norm);
+        research_lattice_probe_temporal_coupling_norm =
+            ClampNorm01(0.40 * research_lattice_probe_interference_norm +
+                        0.24 * source_vibration_norm +
+                        0.18 * research_lattice_probe_flux_norm +
+                        0.10 * coherence_norm +
+                        0.08 * interference_norm);
     }
 
     void PersistResearchRuntimeState() {
@@ -349,6 +617,111 @@ void refresh_fixed_cache() {
         (void)research_runtime_vsd.put_u64("photon/runtime/stov_mode",
                                            "runtime stov toggle",
                                            research_stov_mode ? 1u : 0u);
+        (void)research_runtime_vsd.put_u64("photon/runtime/live_boot_mode",
+                                           "1=auto boot from research archive",
+                                           research_live_boot_enabled ? 1u : 0u);
+        (void)research_runtime_vsd.put_u64("photon/runtime/guidance_enabled",
+                                           "1=apply research guidance correction loop",
+                                           research_guidance_enabled ? 1u : 0u);
+        (void)research_runtime_vsd.put_u64("photon/runtime/live_compute_enabled",
+                                           "1=allow substrate to go live after calibration readiness",
+                                           research_live_compute_enabled ? 1u : 0u);
+        (void)research_runtime_vsd.put_u64("photon/runtime/live_compute_active",
+                                           "1=substrate is actively running live compute mode",
+                                           research_live_compute_active ? 1u : 0u);
+        (void)research_runtime_vsd.put_u64("photon/runtime/basic_trial_enabled",
+                                           "1=basic trial mode is enabled for limited play access",
+                                           research_basic_trial_enabled ? 1u : 0u);
+        (void)research_runtime_vsd.put_u64("photon/runtime/basic_trial_expired",
+                                           "1=basic trial play window has expired",
+                                           research_basic_trial_expired ? 1u : 0u);
+        (void)research_runtime_vsd.put_u64("photon/runtime/basic_trial_minutes",
+                                           "configured basic trial duration in minutes",
+                                           (uint64_t)research_basic_trial_minutes_u32);
+        (void)research_runtime_vsd.put_u64("photon/runtime/basic_trial_start_tick",
+                                           "tick when basic trial mode was enabled",
+                                           research_basic_trial_start_tick_u64);
+        (void)research_runtime_vsd.put_u64("photon/runtime/basic_trial_end_tick",
+                                           "tick when basic trial mode should expire",
+                                           research_basic_trial_end_tick_u64);
+        (void)research_runtime_vsd.put_f64("photon/runtime/basic_trial_remaining_seconds",
+                                           "remaining wall-clock seconds in the active basic trial",
+                                           ResearchBasicTrialRemainingSeconds());
+        (void)research_runtime_vsd.put_u64("photon/runtime/live_compute_activation_tick",
+                                           "tick when live compute mode last activated",
+                                           research_live_compute_activation_tick_u64);
+        (void)research_runtime_vsd.put_f64("photon/runtime/live_compute_readiness_norm",
+                                           "live compute readiness score",
+                                           research_live_compute_plan.readiness_norm);
+        (void)research_runtime_vsd.put_f64("photon/runtime/live_compute_interference_ledger_norm",
+                                           "compact interference ledger strength",
+                                           research_live_compute_plan.interference_ledger_norm);
+        (void)research_runtime_vsd.put_f64("photon/runtime/live_compute_extrapolation_norm",
+                                           "encoding-schema extrapolation strength",
+                                           research_live_compute_plan.encoded_extrapolation_norm);
+        (void)research_runtime_vsd.put_u64("photon/runtime/live_compute_spectral_id",
+                                           "active live compute trajectory spectral id",
+                                           research_live_compute_plan.trajectory_spectral_id_u64);
+        (void)research_runtime_vsd.put_u64("photon/runtime/guidance_watchdog_fault",
+                                           "1=guidance watchdog faulted on last evaluation",
+                                           research_guidance_watchdog_fault ? 1u : 0u);
+        (void)research_runtime_vsd.put_u64("photon/runtime/guidance_watchdog_fault_count",
+                                           "count of guidance watchdog faults",
+                                           (uint64_t)research_guidance_watchdog_fault_count_u32);
+        (void)research_runtime_vsd.put_u64("photon/runtime/gpu_prediction_axis_resolution",
+                                           "axis resolution for gpu adaptive prediction sweep",
+                                           (uint64_t)research_gpu_prediction_axis_resolution_u32);
+        (void)research_runtime_vsd.put_u64("photon/runtime/gpu_prediction_refresh_ticks",
+                                           "tick cadence for gpu adaptive prediction refresh",
+                                           (uint64_t)research_gpu_prediction_refresh_ticks_u32);
+        (void)research_runtime_vsd.put_u64("photon/runtime/gpu_prediction_count",
+                                           "cached gpu adaptive prediction count",
+                                           (uint64_t)research_gpu_predictions.size());
+        (void)research_runtime_vsd.put_u64("photon/runtime/gpu_prediction_last_tick",
+                                           "last tick gpu adaptive predictions were rebuilt",
+                                           research_gpu_prediction_last_tick_u64);
+        (void)research_runtime_vsd.put_u64("photon/runtime/sx_q32_32",
+                                           "x-axis scale derived from pulse frequency",
+                                           research_sx_q32_32_u64);
+        (void)research_runtime_vsd.put_u64("photon/runtime/sy_q32_32",
+                                           "y-axis scale derived from pulse amplitude",
+                                           research_sy_q32_32_u64);
+        (void)research_runtime_vsd.put_u64("photon/runtime/sz_q32_32",
+                                           "z-axis scale derived from joint frequency and amplitude",
+                                           research_sz_q32_32_u64);
+        (void)research_runtime_vsd.put_f64("photon/runtime/prediction_lattice_energy_norm",
+                                           "center-lattice energy norm used by prediction probe",
+                                           research_lattice_probe_energy_norm);
+        (void)research_runtime_vsd.put_f64("photon/runtime/prediction_lattice_flux_norm",
+                                           "center-lattice flux norm used by prediction probe",
+                                           research_lattice_probe_flux_norm);
+        (void)research_runtime_vsd.put_f64("photon/runtime/prediction_lattice_interference_norm",
+                                           "lattice-backed interference norm fed into gpu prediction",
+                                           research_lattice_probe_interference_norm);
+        (void)research_runtime_vsd.put_f64("photon/runtime/prediction_lattice_temporal_coupling_norm",
+                                           "lattice-backed temporal coupling norm fed into next pulse correction",
+                                           research_lattice_probe_temporal_coupling_norm);
+        (void)research_runtime_vsd.put_f64("photon/runtime/gpu_prediction_best_lattice_interference_norm",
+                                           "best lattice interference norm from prediction surface",
+                                           research_gpu_calibration.best_lattice_interference_norm);
+        (void)research_runtime_vsd.put_f64("photon/runtime/gpu_prediction_best_temporal_coupling_norm",
+                                           "best lattice temporal coupling norm from prediction surface",
+                                           research_gpu_calibration.best_temporal_coupling_norm);
+        (void)research_runtime_vsd.put_f64("photon/runtime/gpu_prediction_next_pulse_correction_norm",
+                                           "temporal correction strength applied to the next gpu pulse",
+                                           research_gpu_calibration.next_pulse_correction_norm);
+        (void)research_runtime_vsd.put_f64("photon/runtime/gpu_prediction_next_pulse_f",
+                                           "next gpu pulse frequency derived from predicted interference",
+                                           research_gpu_calibration.next_pulse_quartet.F);
+        (void)research_runtime_vsd.put_f64("photon/runtime/gpu_prediction_next_pulse_a",
+                                           "next gpu pulse amplitude derived from predicted interference",
+                                           research_gpu_calibration.next_pulse_quartet.A);
+        (void)research_runtime_vsd.put_f64("photon/runtime/gpu_prediction_next_pulse_i",
+                                           "next gpu pulse amperage derived from predicted interference",
+                                           research_gpu_calibration.next_pulse_quartet.I);
+        (void)research_runtime_vsd.put_f64("photon/runtime/gpu_prediction_next_pulse_v",
+                                           "next gpu pulse voltage derived from predicted interference",
+                                           research_gpu_calibration.next_pulse_quartet.V);
         (void)research_runtime_vsd.put_u64("photon/runtime/stream_hz",
                                            "visual stream hz",
                                            (uint64_t)research_visual_stream_hz_u32);
@@ -388,6 +761,12 @@ void refresh_fixed_cache() {
         research_param_f = std::max(0.0f, f);
         research_param_i = std::max(0.0f, i);
         research_param_v = std::max(0.0f, v);
+        genesis::GeResearchPulseQuartet quartet{};
+        quartet.F = (double)research_param_f;
+        quartet.A = (double)research_param_a;
+        quartet.I = (double)research_param_i;
+        quartet.V = (double)research_param_v;
+        UpdateResearchAxisScaleState(quartet);
         PersistResearchRuntimeState();
         if (announce) {
             std::ostringstream oss;
@@ -429,6 +808,699 @@ void refresh_fixed_cache() {
         }
     }
 
+    bool ResearchQuartetWithinCalibratedWindow(const genesis::GeResearchPulseQuartet& q) const {
+        return genesis::ge_has_research_runtime_guidance(research_archive) &&
+               q.F >= research_archive.pulse_window_min_quartet.F &&
+               q.F <= research_archive.pulse_window_max_quartet.F &&
+               q.A >= research_archive.pulse_window_min_quartet.A &&
+               q.A <= research_archive.pulse_window_max_quartet.A &&
+               q.I >= research_archive.pulse_window_min_quartet.I &&
+               q.I <= research_archive.pulse_window_max_quartet.I &&
+               q.V >= research_archive.pulse_window_min_quartet.V &&
+               q.V <= research_archive.pulse_window_max_quartet.V;
+    }
+
+    void RecordResearchGuidanceFault(uint64_t tick_u64, const std::string& reason_utf8, bool announce) {
+        const bool was_faulted = research_guidance_watchdog_fault;
+        research_guidance_watchdog_fault = true;
+        ++research_guidance_watchdog_fault_count_u32;
+        research_guidance_watchdog_last_fault_tick_u64 = tick_u64;
+        PersistResearchRuntimeState();
+        if (announce && !was_faulted) {
+            std::ostringstream oss;
+            oss << "RESEARCH_FREQ:watchdog fault=" << research_guidance_watchdog_fault_count_u32
+                << " tick=" << tick_u64
+                << " reason=" << reason_utf8;
+            PushLocalUiLine(oss.str());
+        }
+    }
+
+    void ClearResearchGuidanceFault() {
+        if (!research_guidance_watchdog_fault) return;
+        research_guidance_watchdog_fault = false;
+        PersistResearchRuntimeState();
+    }
+
+    void EmitResearchPulseQuartet(const genesis::GeResearchPulseQuartet& quartet,
+                                  const EwProcessSubstrateTelemetry* telemetry_opt) {
+        sm.submit_gpu_pulse_sample_v2(PackFreqHz(quartet.F), 4096u,
+                                      (uint32_t)PackNormU16(quartet.A), 65535u,
+                                      (uint32_t)PackNormU16(quartet.V), 65535u);
+
+        const uint64_t tick_u64 = sm.canonical_tick_u64();
+        const uint32_t cadence_u32 = std::max<uint32_t>(1u, research_guidance.correction_cadence_ticks_u32);
+        const bool emit_pulse =
+            !research_guidance_has_pulse_history ||
+            (tick_u64 >= research_guidance_last_pulse_tick_u64 + (uint64_t)cadence_u32);
+        if (!emit_pulse) return;
+
+        Pulse pulse{};
+        pulse.anchor_id =
+            (telemetry_opt && telemetry_opt->spectral_anchor_id_u32 != 0u)
+                ? telemetry_opt->spectral_anchor_id_u32
+                : sm.spectral_field_anchor_id_u32;
+        if (pulse.anchor_id == 0u) return;
+
+        pulse.f_code = PackFreqCode(quartet.F);
+        pulse.a_code = PackNormU16(quartet.A);
+        pulse.i_code = PackNormU16(quartet.I);
+        pulse.v_code = PackNormU16(quartet.V);
+        pulse.profile_id = EW_PROFILE_CORE_EVOLUTION;
+        pulse.causal_tag = 91u;
+        pulse.tick = tick_u64;
+        sm.submit_pulse(pulse);
+        research_guidance_last_pulse_tick_u64 = tick_u64;
+        research_guidance_has_pulse_history = true;
+    }
+
+    void ApplyResearchLiveBootPreset(bool announce) {
+        if (!research_live_boot_enabled) return;
+        if (!genesis::ge_has_research_runtime_guidance(research_archive)) return;
+
+        const genesis::GeResearchPulseQuartet& center = research_archive.run043_center_quartet;
+        research_guidance_enabled = true;
+        research_live_compute_enabled = true;
+        research_live_compute_active = false;
+        research_visual_stream_enabled = true;
+        research_use_compute_audio = true;
+        research_output_mode_u8 = 1u;
+        research_stov_mode = false;
+        research_param_f = (float)center.F;
+        research_param_a = (float)center.A;
+        research_param_i = (float)center.I;
+        research_param_v = (float)center.V;
+        research_visual_stream_hz_u32 = 360u;
+        research_lattice_edge_u32 = ClampLatticeEdge(std::max<uint32_t>(research_lattice_edge_u32, 1024u));
+        research_visual_max_points =
+            (size_t)std::max<uint32_t>(256u, std::min<uint32_t>(20000u, research_lattice_edge_u32));
+        research_guidance = genesis::GeResearchRuntimeGuidance{};
+        research_gpu_calibration = genesis::GeResearchGpuAdaptiveCalibration{};
+        research_live_compute_plan = genesis::GeResearchLiveComputePlan{};
+        research_gpu_predictions.clear();
+        research_guidance_last_pulse_tick_u64 = 0u;
+        research_gpu_prediction_last_tick_u64 = 0u;
+        research_live_compute_activation_tick_u64 = 0u;
+        research_guidance_has_pulse_history = false;
+        research_guidance_watchdog_fault = false;
+        research_guidance_watchdog_fault_count_u32 = 0u;
+        research_guidance_watchdog_last_fault_tick_u64 = 0u;
+        UpdateResearchAxisScaleState(center);
+        PersistResearchRuntimeState();
+
+        if (announce) {
+            std::ostringstream oss;
+            oss << "RESEARCH_FREQ:live_boot=on preset=run43_center"
+                << " lattice_edge=" << research_lattice_edge_u32
+                << " stream_hz=" << research_visual_stream_hz_u32
+                << " A=" << research_param_a
+                << " F=" << research_param_f
+                << " I=" << research_param_i
+                << " V=" << research_param_v;
+            PushLocalUiLine(oss.str());
+        }
+    }
+
+    void ApplyResearchBasicTrialPreset(uint32_t minutes_u32, bool announce) {
+        if (!genesis::ge_has_research_runtime_guidance(research_archive)) {
+            if (announce) {
+                PushLocalUiLine("META_BASIC_TRIAL:unavailable reason=guidance_missing");
+            }
+            return;
+        }
+        research_basic_trial_enabled = true;
+        research_basic_trial_expired = false;
+        research_basic_trial_expiry_announced = false;
+        research_basic_trial_minutes_u32 = ClampResearchBasicTrialMinutes(minutes_u32);
+        research_basic_trial_start_time = std::chrono::steady_clock::now();
+        research_basic_trial_start_tick_u64 = sm.canonical_tick_u64();
+        research_basic_trial_end_tick_u64 =
+            research_basic_trial_start_tick_u64 + (uint64_t)research_basic_trial_minutes_u32 * 60u * 360u;
+
+        research_live_boot_enabled = false;
+        research_guidance_enabled = true;
+        research_live_compute_enabled = false;
+        research_live_compute_active = false;
+        research_visual_stream_enabled = true;
+        research_use_compute_audio = true;
+        research_output_mode_u8 = 1u;
+        research_stov_mode = false;
+        research_visual_stream_hz_u32 =
+            std::min<uint32_t>(research_visual_stream_hz_u32, ResearchBasicTrialMaxStreamHz());
+        if (research_visual_stream_hz_u32 < 60u) research_visual_stream_hz_u32 = 60u;
+        research_lattice_edge_u32 =
+            ClampLatticeEdge(std::min<uint32_t>(std::max<uint32_t>(research_lattice_edge_u32, 512u),
+                                                ResearchBasicTrialMaxLatticeEdge()));
+        research_visual_max_points =
+            (size_t)std::max<uint32_t>(256u, std::min<uint32_t>(20000u, research_lattice_edge_u32));
+        research_gpu_prediction_axis_resolution_u32 =
+            std::min<uint32_t>(research_gpu_prediction_axis_resolution_u32, 4u);
+        research_gpu_prediction_refresh_ticks_u32 =
+            std::max<uint32_t>(180u, research_gpu_prediction_refresh_ticks_u32);
+
+        genesis::GeResearchPulseQuartet center = research_archive.run043_center_quartet;
+        if (genesis::ge_has_research_runtime_guidance(research_archive)) {
+            center.F = std::max(research_archive.pulse_window_min_quartet.F,
+                                std::min(research_archive.pulse_window_max_quartet.F, center.F));
+            center.A = std::max(research_archive.pulse_window_min_quartet.A,
+                                std::min(research_archive.pulse_window_max_quartet.A, center.A));
+            center.I = std::max(research_archive.pulse_window_min_quartet.I,
+                                std::min(research_archive.pulse_window_max_quartet.I, center.I));
+            center.V = std::max(research_archive.pulse_window_min_quartet.V,
+                                std::min(research_archive.pulse_window_max_quartet.V, center.V));
+        }
+        research_param_f = (float)center.F;
+        research_param_a = (float)center.A;
+        research_param_i = (float)center.I;
+        research_param_v = (float)center.V;
+        research_guidance = genesis::GeResearchRuntimeGuidance{};
+        research_gpu_calibration = genesis::GeResearchGpuAdaptiveCalibration{};
+        research_live_compute_plan = genesis::GeResearchLiveComputePlan{};
+        research_gpu_predictions.clear();
+        research_guidance_last_pulse_tick_u64 = 0u;
+        research_gpu_prediction_last_tick_u64 = 0u;
+        research_guidance_has_pulse_history = false;
+        research_guidance_watchdog_fault = false;
+        research_guidance_watchdog_fault_count_u32 = 0u;
+        research_guidance_watchdog_last_fault_tick_u64 = 0u;
+        UpdateResearchAxisScaleState(center);
+        PersistResearchRuntimeState();
+
+        if (announce) {
+            std::ostringstream oss;
+            oss << "META_BASIC_TRIAL:on minutes=" << research_basic_trial_minutes_u32
+                << " stream_hz=" << research_visual_stream_hz_u32
+                << " lattice_edge=" << research_lattice_edge_u32
+                << " live_compute=off"
+                << " guidance=on"
+                << " A=" << research_param_a
+                << " F=" << research_param_f
+                << " I=" << research_param_i
+                << " V=" << research_param_v;
+            PushLocalUiLine(oss.str());
+        }
+    }
+
+    void DisableResearchBasicTrial(bool announce) {
+        research_basic_trial_enabled = false;
+        research_basic_trial_expired = false;
+        research_basic_trial_expiry_announced = false;
+        research_basic_trial_start_tick_u64 = 0u;
+        research_basic_trial_end_tick_u64 = 0u;
+        PersistResearchRuntimeState();
+        if (announce) {
+            PushLocalUiLine("META_BASIC_TRIAL:off");
+        }
+    }
+
+    void UpdateResearchBasicTrialState() {
+        if (!research_basic_trial_enabled || research_basic_trial_expired) return;
+        if (ResearchBasicTrialRemainingSeconds() > 0.0) return;
+        research_basic_trial_expired = true;
+        research_live_compute_enabled = false;
+        research_live_compute_active = false;
+        PersistResearchRuntimeState();
+        if (!research_basic_trial_expiry_announced) {
+            research_basic_trial_expiry_announced = true;
+            PushLocalUiLine("META_BASIC_TRIAL:expired mode=status_only");
+        }
+    }
+
+    std::string BuildResearchBasicTrialStatusLine() const {
+        std::ostringstream oss;
+        oss.setf(std::ios::fixed);
+        oss.precision(2);
+        oss << "META_BASIC_TRIAL enabled=" << (research_basic_trial_enabled ? 1 : 0)
+            << " expired=" << (research_basic_trial_expired ? 1 : 0)
+            << " minutes=" << research_basic_trial_minutes_u32
+            << " start_tick=" << research_basic_trial_start_tick_u64
+            << " end_tick=" << research_basic_trial_end_tick_u64
+            << " remaining_s=" << ResearchBasicTrialRemainingSeconds()
+            << " max_stream_hz=" << ResearchBasicTrialMaxStreamHz()
+            << " max_lattice_edge=" << ResearchBasicTrialMaxLatticeEdge()
+            << " live_compute=" << (research_live_compute_enabled ? 1 : 0);
+        return oss.str();
+    }
+
+    std::string BuildResearchGuidanceStatusLine() const {
+        std::ostringstream oss;
+        oss.setf(std::ios::fixed);
+        oss.precision(6);
+        oss << "RESEARCH_GUIDANCE valid=" << (research_guidance.valid ? 1 : 0)
+            << " live_boot=" << (research_live_boot_enabled ? 1 : 0)
+            << " enabled=" << (research_guidance_enabled ? 1 : 0)
+            << " watchdog=" << (research_guidance_watchdog_fault ? 1 : 0)
+            << " watchdog_count=" << research_guidance_watchdog_fault_count_u32
+            << " watchdog_tick=" << research_guidance_watchdog_last_fault_tick_u64
+            << " cadence=" << research_guidance.correction_cadence_ticks_u32
+            << " last_pulse_tick=" << research_guidance_last_pulse_tick_u64
+            << " certainty=" << research_guidance.certainty_norm
+            << " exactness=" << research_guidance.exactness_norm
+            << " recurrence=" << research_guidance.recurrence_norm
+            << " tensor=" << research_guidance.tensor_gradient_norm
+            << " packet=" << research_guidance.packet_coherence_norm
+            << " observer=" << research_guidance.observer_coupling_norm
+            << " temporal=" << research_guidance.temporal_coupling_norm
+            << " memory=" << research_guidance.source_memory_norm
+            << " ctrl=" << research_guidance.correction_authority_norm
+            << " score=" << research_guidance.predicted_silicon_score
+            << " trap=" << research_guidance.predicted_trap_ratio
+            << " coh=" << research_guidance.predicted_coherence
+            << " inertia=" << research_guidance.predicted_inertia
+            << " curv=" << research_guidance.predicted_curvature
+            << " desiredF=" << research_guidance.desired_quartet.F
+            << " desiredA=" << research_guidance.desired_quartet.A
+            << " desiredI=" << research_guidance.desired_quartet.I
+            << " desiredV=" << research_guidance.desired_quartet.V
+            << " corrF=" << research_guidance.corrected_quartet.F
+            << " corrA=" << research_guidance.corrected_quartet.A
+            << " corrI=" << research_guidance.corrected_quartet.I
+            << " corrV=" << research_guidance.corrected_quartet.V
+            << " gradF=" << research_guidance.gradient_quartet.F
+            << " gradA=" << research_guidance.gradient_quartet.A
+            << " gradI=" << research_guidance.gradient_quartet.I
+            << " gradV=" << research_guidance.gradient_quartet.V;
+        return oss.str();
+    }
+
+    std::string BuildResearchGpuCalibrationStatusLine() const {
+        std::ostringstream oss;
+        oss.setf(std::ios::fixed);
+        oss.precision(6);
+        oss << "RESEARCH_GPU_CALIBRATION valid=" << (research_gpu_calibration.valid ? 1 : 0)
+            << " axis=" << research_gpu_prediction_axis_resolution_u32
+            << " refresh_ticks=" << research_gpu_prediction_refresh_ticks_u32
+            << " pred_count=" << research_gpu_predictions.size()
+            << " pred_tick=" << research_gpu_prediction_last_tick_u64
+            << " gpuF=" << research_gpu_calibration.observed_gpu_freq_norm
+            << " gpuA=" << research_gpu_calibration.observed_gpu_amp_norm
+            << " gpuI=" << research_gpu_calibration.observed_gpu_curr_norm
+            << " gpuV=" << research_gpu_calibration.observed_gpu_volt_norm
+            << " intf=" << research_gpu_calibration.observed_interference_norm
+            << " coh=" << research_gpu_calibration.observed_coherence_norm
+            << " vib=" << research_gpu_calibration.observed_source_vibration_norm
+            << " sx=" << UnpackPositiveQ32_32(research_sx_q32_32_u64)
+            << " sy=" << UnpackPositiveQ32_32(research_sy_q32_32_u64)
+            << " sz=" << UnpackPositiveQ32_32(research_sz_q32_32_u64)
+            << " probeE=" << research_lattice_probe_energy_norm
+            << " probeFlux=" << research_lattice_probe_flux_norm
+            << " probeIntf=" << research_lattice_probe_interference_norm
+            << " probeTemp=" << research_lattice_probe_temporal_coupling_norm
+            << " conf=" << research_gpu_calibration.prediction_confidence_norm
+            << " align=" << research_gpu_calibration.best_gpu_alignment_norm
+            << " vec=" << research_gpu_calibration.best_vector_coupling_norm
+            << " bestIntf=" << research_gpu_calibration.best_interference_norm
+            << " bestLatIntf=" << research_gpu_calibration.best_lattice_interference_norm
+            << " bestTemp=" << research_gpu_calibration.best_temporal_coupling_norm
+            << " bestScore=" << research_gpu_calibration.best_silicon_score
+            << " bestTrap=" << research_gpu_calibration.best_trap_ratio
+            << " bestCoh=" << research_gpu_calibration.best_coherence
+            << " bestInertia=" << research_gpu_calibration.best_inertia
+            << " bestCurv=" << research_gpu_calibration.best_curvature
+            << " bestID=" << research_gpu_calibration.best_trajectory_spectral_id_u64
+            << " latX=" << research_gpu_calibration.best_lattice_x_u32
+            << " latY=" << research_gpu_calibration.best_lattice_y_u32
+            << " latZ=" << research_gpu_calibration.best_lattice_z_u32
+            << " bestF=" << research_gpu_calibration.best_quartet.F
+            << " bestA=" << research_gpu_calibration.best_quartet.A
+            << " bestI=" << research_gpu_calibration.best_quartet.I
+            << " bestV=" << research_gpu_calibration.best_quartet.V
+            << " adaptF=" << research_gpu_calibration.adapted_quartet.F
+            << " adaptA=" << research_gpu_calibration.adapted_quartet.A
+            << " adaptI=" << research_gpu_calibration.adapted_quartet.I
+            << " adaptV=" << research_gpu_calibration.adapted_quartet.V
+            << " nextCorr=" << research_gpu_calibration.next_pulse_correction_norm
+            << " nextF=" << research_gpu_calibration.next_pulse_quartet.F
+            << " nextA=" << research_gpu_calibration.next_pulse_quartet.A
+            << " nextI=" << research_gpu_calibration.next_pulse_quartet.I
+            << " nextV=" << research_gpu_calibration.next_pulse_quartet.V;
+        return oss.str();
+    }
+
+    std::string BuildResearchLiveComputeStatusLine() const {
+        std::ostringstream oss;
+        oss.setf(std::ios::fixed);
+        oss.precision(6);
+        oss << "RESEARCH_LIVE_COMPUTE valid=" << (research_live_compute_plan.valid ? 1 : 0)
+            << " enabled=" << (research_live_compute_enabled ? 1 : 0)
+            << " active=" << (research_live_compute_active ? 1 : 0)
+            << " ready=" << (research_live_compute_plan.ready ? 1 : 0)
+            << " activation_tick=" << research_live_compute_activation_tick_u64
+            << " readiness=" << research_live_compute_plan.readiness_norm
+            << " ledger=" << research_live_compute_plan.interference_ledger_norm
+            << " extrap=" << research_live_compute_plan.encoded_extrapolation_norm
+            << " score_align=" << research_live_compute_plan.score_alignment_norm
+            << " trap_align=" << research_live_compute_plan.trap_alignment_norm
+            << " coh_align=" << research_live_compute_plan.coherence_alignment_norm
+            << " spectral_id=" << research_live_compute_plan.trajectory_spectral_id_u64
+            << " computeF=" << research_live_compute_plan.compute_quartet.F
+            << " computeA=" << research_live_compute_plan.compute_quartet.A
+            << " computeI=" << research_live_compute_plan.compute_quartet.I
+            << " computeV=" << research_live_compute_plan.compute_quartet.V;
+        return oss.str();
+    }
+
+    void PersistResearchGpuPredictionSurface() {
+        if (!research_gpu_calibration.valid) return;
+        std::filesystem::path root = research_archive.root_dir;
+        if (root.empty()) root = std::filesystem::current_path() / "ResearchConfinement";
+        std::error_code ec;
+        std::filesystem::create_directories(root, ec);
+        const std::filesystem::path out = root / "gpu_kernel_interference_prediction_surface.json";
+        std::ofstream f(out, std::ios::out | std::ios::trunc);
+        if (!f.good()) return;
+
+        f << "{\n";
+        f << "  \"model\": \"gpu_adaptive_lattice_interference_prediction_surface\",\n";
+        f << "  \"axis_resolution\": " << research_gpu_prediction_axis_resolution_u32 << ",\n";
+        f << "  \"prediction_count\": " << research_gpu_predictions.size() << ",\n";
+        f << "  \"prediction_tick\": " << research_gpu_prediction_last_tick_u64 << ",\n";
+        f << "  \"observed_gpu\": {\n";
+        f << "    \"F\": " << research_gpu_calibration.observed_gpu_freq_norm << ",\n";
+        f << "    \"A\": " << research_gpu_calibration.observed_gpu_amp_norm << ",\n";
+        f << "    \"I\": " << research_gpu_calibration.observed_gpu_curr_norm << ",\n";
+        f << "    \"V\": " << research_gpu_calibration.observed_gpu_volt_norm << "\n";
+        f << "  },\n";
+        f << "  \"observed_field\": {\n";
+        f << "    \"interference\": " << research_gpu_calibration.observed_interference_norm << ",\n";
+        f << "    \"coherence\": " << research_gpu_calibration.observed_coherence_norm << ",\n";
+        f << "    \"source_vibration\": " << research_gpu_calibration.observed_source_vibration_norm << "\n";
+        f << "  },\n";
+        f << "  \"axis_scales_q32_32\": {\n";
+        f << "    \"sx\": " << research_sx_q32_32_u64 << ",\n";
+        f << "    \"sy\": " << research_sy_q32_32_u64 << ",\n";
+        f << "    \"sz\": " << research_sz_q32_32_u64 << "\n";
+        f << "  },\n";
+        f << "  \"prediction_lattice_probe\": {\n";
+        f << "    \"energy_norm\": " << research_lattice_probe_energy_norm << ",\n";
+        f << "    \"flux_norm\": " << research_lattice_probe_flux_norm << ",\n";
+        f << "    \"interference_norm\": " << research_lattice_probe_interference_norm << ",\n";
+        f << "    \"temporal_coupling_norm\": " << research_lattice_probe_temporal_coupling_norm << "\n";
+        f << "  },\n";
+        f << "  \"best_prediction\": {\n";
+        f << "    \"trajectory_spectral_id\": " << research_gpu_calibration.best_trajectory_spectral_id_u64 << ",\n";
+        f << "    \"prediction_confidence\": " << research_gpu_calibration.prediction_confidence_norm << ",\n";
+        f << "    \"gpu_alignment\": " << research_gpu_calibration.best_gpu_alignment_norm << ",\n";
+        f << "    \"vector_coupling\": " << research_gpu_calibration.best_vector_coupling_norm << ",\n";
+        f << "    \"predicted_interference\": " << research_gpu_calibration.best_interference_norm << ",\n";
+        f << "    \"lattice_interference\": " << research_gpu_calibration.best_lattice_interference_norm << ",\n";
+        f << "    \"temporal_coupling\": " << research_gpu_calibration.best_temporal_coupling_norm << ",\n";
+        f << "    \"predicted_score\": " << research_gpu_calibration.best_silicon_score << ",\n";
+        f << "    \"predicted_trap_ratio\": " << research_gpu_calibration.best_trap_ratio << ",\n";
+        f << "    \"predicted_coherence\": " << research_gpu_calibration.best_coherence << ",\n";
+        f << "    \"lattice_coord\": {\"x\": " << research_gpu_calibration.best_lattice_x_u32
+          << ", \"y\": " << research_gpu_calibration.best_lattice_y_u32
+          << ", \"z\": " << research_gpu_calibration.best_lattice_z_u32 << "},\n";
+        f << "    \"quartet\": {\n";
+        f << "      \"F\": " << research_gpu_calibration.best_quartet.F << ",\n";
+        f << "      \"A\": " << research_gpu_calibration.best_quartet.A << ",\n";
+        f << "      \"I\": " << research_gpu_calibration.best_quartet.I << ",\n";
+        f << "      \"V\": " << research_gpu_calibration.best_quartet.V << "\n";
+        f << "    },\n";
+        f << "    \"adapted_quartet\": {\n";
+        f << "      \"F\": " << research_gpu_calibration.adapted_quartet.F << ",\n";
+        f << "      \"A\": " << research_gpu_calibration.adapted_quartet.A << ",\n";
+        f << "      \"I\": " << research_gpu_calibration.adapted_quartet.I << ",\n";
+        f << "      \"V\": " << research_gpu_calibration.adapted_quartet.V << "\n";
+        f << "    },\n";
+        f << "    \"next_pulse_quartet\": {\n";
+        f << "      \"F\": " << research_gpu_calibration.next_pulse_quartet.F << ",\n";
+        f << "      \"A\": " << research_gpu_calibration.next_pulse_quartet.A << ",\n";
+        f << "      \"I\": " << research_gpu_calibration.next_pulse_quartet.I << ",\n";
+        f << "      \"V\": " << research_gpu_calibration.next_pulse_quartet.V << "\n";
+        f << "    }\n";
+        f << "  },\n";
+        f << "  \"predictions\": [\n";
+        for (size_t i = 0u; i < research_gpu_predictions.size(); ++i) {
+            const auto& p = research_gpu_predictions[i];
+            f << "    {\n";
+            f << "      \"trajectory_spectral_id\": " << p.trajectory_spectral_id_u64 << ",\n";
+            f << "      \"quartet\": {\"F\": " << p.quartet.F
+              << ", \"A\": " << p.quartet.A
+              << ", \"I\": " << p.quartet.I
+              << ", \"V\": " << p.quartet.V << "},\n";
+            f << "      \"predicted_interference\": " << p.predicted_interference_norm << ",\n";
+            f << "      \"predicted_score\": " << p.predicted_score << ",\n";
+            f << "      \"predicted_trap_ratio\": " << p.predicted_trap_ratio << ",\n";
+            f << "      \"predicted_coherence\": " << p.predicted_coherence << ",\n";
+            f << "      \"predicted_inertia\": " << p.predicted_inertia << ",\n";
+            f << "      \"predicted_curvature\": " << p.predicted_curvature << ",\n";
+            f << "      \"gpu_alignment\": " << p.gpu_alignment_norm << ",\n";
+            f << "      \"vector_coupling\": " << p.vector_coupling_norm << ",\n";
+            f << "      \"lattice_interference\": " << p.lattice_interference_norm << ",\n";
+            f << "      \"lattice_temporal_coupling\": " << p.lattice_temporal_coupling_norm << ",\n";
+            f << "      \"lattice_coord\": {\"x\": " << p.lattice_x_u32
+              << ", \"y\": " << p.lattice_y_u32
+              << ", \"z\": " << p.lattice_z_u32 << "},\n";
+            f << "      \"certainty\": " << p.certainty_norm << "\n";
+            f << "    }" << ((i + 1u < research_gpu_predictions.size()) ? "," : "") << "\n";
+        }
+        f << "  ]\n";
+        f << "}\n";
+    }
+
+    void PersistResearchLiveComputeInterferenceLedger() {
+        if (!research_live_compute_plan.valid) return;
+        std::filesystem::path root = research_archive.root_dir;
+        if (root.empty()) root = std::filesystem::current_path() / "ResearchConfinement";
+        std::error_code ec;
+        std::filesystem::create_directories(root, ec);
+        const std::filesystem::path out = root / "live_compute_interference_ledger.json";
+        std::ofstream f(out, std::ios::out | std::ios::trunc);
+        if (!f.good()) return;
+
+        f << "{\n";
+        f << "  \"model\": \"live_compute_interference_ledger\",\n";
+        f << "  \"live_compute_enabled\": " << (research_live_compute_enabled ? 1 : 0) << ",\n";
+        f << "  \"live_compute_active\": " << (research_live_compute_active ? 1 : 0) << ",\n";
+        f << "  \"activation_tick\": " << research_live_compute_activation_tick_u64 << ",\n";
+        f << "  \"trajectory_spectral_id\": " << research_live_compute_plan.trajectory_spectral_id_u64 << ",\n";
+        f << "  \"readiness_norm\": " << research_live_compute_plan.readiness_norm << ",\n";
+        f << "  \"interference_ledger_norm\": " << research_live_compute_plan.interference_ledger_norm << ",\n";
+        f << "  \"encoded_extrapolation_norm\": " << research_live_compute_plan.encoded_extrapolation_norm << ",\n";
+        f << "  \"score_alignment_norm\": " << research_live_compute_plan.score_alignment_norm << ",\n";
+        f << "  \"trap_alignment_norm\": " << research_live_compute_plan.trap_alignment_norm << ",\n";
+        f << "  \"coherence_alignment_norm\": " << research_live_compute_plan.coherence_alignment_norm << ",\n";
+        f << "  \"compute_quartet\": {\n";
+        f << "    \"F\": " << research_live_compute_plan.compute_quartet.F << ",\n";
+        f << "    \"A\": " << research_live_compute_plan.compute_quartet.A << ",\n";
+        f << "    \"I\": " << research_live_compute_plan.compute_quartet.I << ",\n";
+        f << "    \"V\": " << research_live_compute_plan.compute_quartet.V << "\n";
+        f << "  }\n";
+        f << "}\n";
+    }
+
+    void UpdateResearchLiveComputeState() {
+        const bool active_before = research_live_compute_active;
+        research_live_compute_plan = genesis::GeResearchLiveComputePlan{};
+        if (!research_live_compute_enabled) {
+            research_live_compute_active = false;
+            if (active_before != research_live_compute_active) PersistResearchRuntimeState();
+            return;
+        }
+        if (!genesis::ge_build_research_live_compute_plan(research_archive,
+                                                          research_gpu_calibration,
+                                                          research_guidance,
+                                                          research_live_compute_plan)) {
+            research_live_compute_active = false;
+            if (active_before != research_live_compute_active) PersistResearchRuntimeState();
+            return;
+        }
+
+        const double activate_threshold = 0.72;
+        const double release_threshold = 0.58;
+        const bool can_activate =
+            research_live_compute_plan.ready && !research_guidance_watchdog_fault;
+        if (!research_live_compute_active) {
+            if (can_activate || research_live_compute_plan.readiness_norm >= activate_threshold) {
+                research_live_compute_active = true;
+                research_live_compute_activation_tick_u64 = sm.canonical_tick_u64();
+                PushLocalUiLine("RESEARCH_FREQ:live_compute=on");
+            }
+        } else if (research_guidance_watchdog_fault ||
+                   research_live_compute_plan.readiness_norm < release_threshold) {
+            research_live_compute_active = false;
+            PushLocalUiLine("RESEARCH_FREQ:live_compute=off");
+        }
+
+        const bool should_persist =
+            (active_before != research_live_compute_active) ||
+            (sm.canonical_tick_u64() == research_gpu_prediction_last_tick_u64);
+        if (should_persist) {
+            PersistResearchLiveComputeInterferenceLedger();
+            PersistResearchRuntimeState();
+        }
+    }
+
+    void UpdateResearchGpuAdaptiveCalibration(const EwProcessSubstrateTelemetry* telemetry_opt) {
+        if (!genesis::ge_has_research_runtime_guidance(research_archive)) {
+            research_gpu_calibration = genesis::GeResearchGpuAdaptiveCalibration{};
+            research_gpu_predictions.clear();
+            return;
+        }
+
+        const uint64_t tick_u64 = sm.canonical_tick_u64();
+        if (research_gpu_calibration.valid &&
+            research_gpu_prediction_last_tick_u64 != 0u &&
+            tick_u64 < research_gpu_prediction_last_tick_u64 + (uint64_t)std::max<uint32_t>(1u, research_gpu_prediction_refresh_ticks_u32)) {
+            return;
+        }
+
+        const double gpu_freq_norm =
+            telemetry_opt ? ((double)telemetry_opt->gpu_freq_norm_q15 / 65535.0) : (double)research_param_f;
+        const double gpu_amp_norm =
+            telemetry_opt ? ((double)telemetry_opt->gpu_amp_norm_q15 / 65535.0) : (double)research_param_a;
+        const double gpu_curr_norm =
+            telemetry_opt ? ((double)telemetry_opt->last_i_code_u16 / 65535.0) : (double)research_param_i;
+        const double gpu_volt_norm =
+            telemetry_opt ? ((double)telemetry_opt->gpu_volt_norm_q15 / 65535.0) : (double)research_param_v;
+        const double interference_norm =
+            telemetry_opt ? ((double)telemetry_opt->interference_norm_q15 / 65535.0) : 0.0;
+        const double coherence_norm =
+            telemetry_opt ? ((double)telemetry_opt->coherence_norm_q15 / 65535.0) : 0.0;
+        const double source_vibration_norm =
+            telemetry_opt ? ((double)telemetry_opt->source_vibration_q15 / 65535.0) : 0.0;
+
+        genesis::GeResearchPulseQuartet desired{};
+        desired.F = (double)research_param_f;
+        desired.A = (double)research_param_a;
+        desired.I = (double)research_param_i;
+        desired.V = (double)research_param_v;
+        UpdateResearchPredictionLatticeProbe(telemetry_opt, desired);
+
+        const double prediction_interference_norm =
+            ClampNorm01(0.58 * interference_norm + 0.42 * research_lattice_probe_interference_norm);
+        const double prediction_coherence_norm =
+            ClampNorm01(0.74 * coherence_norm + 0.26 * research_lattice_probe_temporal_coupling_norm);
+        const double prediction_source_vibration_norm =
+            ClampNorm01(0.68 * source_vibration_norm + 0.32 * research_lattice_probe_temporal_coupling_norm);
+
+        genesis::GeResearchGpuAdaptiveCalibration next_calibration{};
+        std::vector<genesis::GeResearchInterferencePredictionCell> next_predictions;
+        if (!genesis::ge_build_research_gpu_interference_predictions(
+                research_archive,
+                desired,
+                gpu_freq_norm,
+                gpu_amp_norm,
+                gpu_curr_norm,
+                gpu_volt_norm,
+                prediction_interference_norm,
+                prediction_coherence_norm,
+                prediction_source_vibration_norm,
+                research_gpu_prediction_axis_resolution_u32,
+                next_calibration,
+                &next_predictions)) {
+            research_gpu_calibration = genesis::GeResearchGpuAdaptiveCalibration{};
+            research_gpu_predictions.clear();
+            return;
+        }
+
+        research_gpu_calibration = std::move(next_calibration);
+        research_gpu_predictions = std::move(next_predictions);
+        research_gpu_prediction_last_tick_u64 = tick_u64;
+        PersistResearchGpuPredictionSurface();
+        PersistResearchRuntimeState();
+    }
+
+    void UpdateResearchTemporalGuidance() {
+        research_guidance = genesis::GeResearchRuntimeGuidance{};
+        if (!research_guidance_enabled) return;
+        if (!genesis::ge_has_research_runtime_guidance(research_archive)) return;
+
+        EwProcessSubstrateTelemetry telemetry{};
+        const bool has_process_telemetry = sm.get_process_substrate_telemetry(&telemetry);
+        const double residual_norm =
+            has_process_telemetry ? ((double)telemetry.residual_norm_q15 / 65535.0) : 0.0;
+        const double interference_norm =
+            has_process_telemetry ? ((double)telemetry.interference_norm_q15 / 65535.0) : 0.0;
+        const double coherence_norm =
+            has_process_telemetry ? ((double)telemetry.coherence_norm_q15 / 65535.0) : 0.0;
+        const double source_vibration_norm =
+            has_process_telemetry ? ((double)telemetry.source_vibration_q15 / 65535.0) : 0.0;
+
+        UpdateResearchGpuAdaptiveCalibration(has_process_telemetry ? &telemetry : nullptr);
+
+        genesis::GeResearchPulseQuartet desired{};
+        desired.F = (double)research_param_f;
+        desired.A = (double)research_param_a;
+        desired.I = (double)research_param_i;
+        desired.V = (double)research_param_v;
+        if (research_gpu_calibration.valid) {
+            const double blend =
+                ClampNorm01(0.18 + 0.42 * research_gpu_calibration.prediction_confidence_norm +
+                            0.20 * research_gpu_calibration.best_gpu_alignment_norm +
+                            0.20 * research_gpu_calibration.best_interference_norm);
+            desired.F = desired.F + (research_gpu_calibration.adapted_quartet.F - desired.F) * blend;
+            desired.A = desired.A + (research_gpu_calibration.adapted_quartet.A - desired.A) * blend;
+            desired.I = desired.I + (research_gpu_calibration.adapted_quartet.I - desired.I) * blend;
+            desired.V = desired.V + (research_gpu_calibration.adapted_quartet.V - desired.V) * blend;
+        }
+
+        if (!genesis::ge_build_research_runtime_guidance(research_archive,
+                                                         desired,
+                                                         residual_norm,
+                                                         interference_norm,
+                                                         coherence_norm,
+                                                         source_vibration_norm,
+                                                         research_guidance)) {
+            UpdateResearchLiveComputeState();
+            RecordResearchGuidanceFault(sm.canonical_tick_u64(), "build_failed", true);
+            EmitResearchPulseQuartet(research_archive.run043_center_quartet,
+                                     has_process_telemetry ? &telemetry : nullptr);
+            return;
+        }
+
+        UpdateResearchLiveComputeState();
+
+        const bool metrics_finite =
+            std::isfinite(research_guidance.predicted_silicon_score) &&
+            std::isfinite(research_guidance.predicted_trap_ratio) &&
+            std::isfinite(research_guidance.predicted_coherence) &&
+            std::isfinite(research_guidance.predicted_inertia) &&
+            std::isfinite(research_guidance.predicted_curvature);
+        const genesis::GeResearchPulseQuartet& corrected = research_guidance.corrected_quartet;
+        const bool corrected_valid =
+            research_guidance.valid &&
+            IsFiniteResearchQuartet(corrected) &&
+            ResearchQuartetWithinCalibratedWindow(corrected) &&
+            metrics_finite;
+        if (!corrected_valid) {
+            RecordResearchGuidanceFault(sm.canonical_tick_u64(), "out_of_window", true);
+            research_guidance.corrected_quartet = research_archive.run043_center_quartet;
+            EmitResearchPulseQuartet(research_archive.run043_center_quartet,
+                                     has_process_telemetry ? &telemetry : nullptr);
+            return;
+        }
+
+        ClearResearchGuidanceFault();
+        genesis::GeResearchPulseQuartet emit_quartet =
+            (research_live_compute_active && research_live_compute_plan.valid)
+                ? research_live_compute_plan.compute_quartet
+                : corrected;
+        if (research_gpu_calibration.valid) {
+            const double temporal_prediction_blend =
+                ClampNorm01(0.14 +
+                            0.28 * research_guidance.temporal_coupling_norm +
+                            0.24 * research_gpu_calibration.best_temporal_coupling_norm +
+                            0.22 * research_gpu_calibration.next_pulse_correction_norm +
+                            0.12 * research_lattice_probe_temporal_coupling_norm);
+            emit_quartet.F =
+                emit_quartet.F + (research_gpu_calibration.next_pulse_quartet.F - emit_quartet.F) * temporal_prediction_blend;
+            emit_quartet.A =
+                emit_quartet.A + (research_gpu_calibration.next_pulse_quartet.A - emit_quartet.A) * temporal_prediction_blend;
+            emit_quartet.I =
+                emit_quartet.I + (research_gpu_calibration.next_pulse_quartet.I - emit_quartet.I) * temporal_prediction_blend;
+            emit_quartet.V =
+                emit_quartet.V + (research_gpu_calibration.next_pulse_quartet.V - emit_quartet.V) * temporal_prediction_blend;
+        }
+        if (!IsFiniteResearchQuartet(emit_quartet) || !ResearchQuartetWithinCalibratedWindow(emit_quartet)) {
+            RecordResearchGuidanceFault(sm.canonical_tick_u64(), "next_pulse_out_of_window", true);
+            EmitResearchPulseQuartet(research_archive.run043_center_quartet,
+                                     has_process_telemetry ? &telemetry : nullptr);
+            return;
+        }
+        EmitResearchPulseQuartet(emit_quartet, has_process_telemetry ? &telemetry : nullptr);
+    }
+
     void SyncResearchWatchState() {
         research_watch_file.clear();
         research_cmd_file.clear();
@@ -458,7 +1530,46 @@ void refresh_fixed_cache() {
             research_archive = std::move(next_archive);
             research_points.clear();
             research_audio_frame = genesis::GeResearchAudioFrame{};
+            research_guidance = genesis::GeResearchRuntimeGuidance{};
+            research_gpu_calibration = genesis::GeResearchGpuAdaptiveCalibration{};
+            research_live_compute_plan = genesis::GeResearchLiveComputePlan{};
+            research_gpu_predictions.clear();
+            research_guidance_last_pulse_tick_u64 = 0u;
+            research_gpu_prediction_last_tick_u64 = 0u;
+            research_guidance_has_pulse_history = false;
+            research_live_compute_active = false;
+            research_live_compute_activation_tick_u64 = 0u;
+            research_guidance_watchdog_fault = false;
             SyncResearchWatchState();
+            if (research_basic_trial_enabled) {
+                research_live_boot_enabled = false;
+                research_guidance_enabled = true;
+                research_live_compute_enabled = false;
+                research_live_compute_active = false;
+                research_visual_stream_hz_u32 =
+                    std::min<uint32_t>(research_visual_stream_hz_u32, ResearchBasicTrialMaxStreamHz());
+                research_lattice_edge_u32 =
+                    ClampLatticeEdge(std::min<uint32_t>(research_lattice_edge_u32, ResearchBasicTrialMaxLatticeEdge()));
+                if (genesis::ge_has_research_runtime_guidance(research_archive)) {
+                    research_param_f = (float)std::max(research_archive.pulse_window_min_quartet.F,
+                                                      std::min(research_archive.pulse_window_max_quartet.F, (double)research_param_f));
+                    research_param_a = (float)std::max(research_archive.pulse_window_min_quartet.A,
+                                                      std::min(research_archive.pulse_window_max_quartet.A, (double)research_param_a));
+                    research_param_i = (float)std::max(research_archive.pulse_window_min_quartet.I,
+                                                      std::min(research_archive.pulse_window_max_quartet.I, (double)research_param_i));
+                    research_param_v = (float)std::max(research_archive.pulse_window_min_quartet.V,
+                                                      std::min(research_archive.pulse_window_max_quartet.V, (double)research_param_v));
+                }
+                genesis::GeResearchPulseQuartet q{};
+                q.F = (double)research_param_f;
+                q.A = (double)research_param_a;
+                q.I = (double)research_param_i;
+                q.V = (double)research_param_v;
+                UpdateResearchAxisScaleState(q);
+                PersistResearchRuntimeState();
+            } else {
+                ApplyResearchLiveBootPreset(false);
+            }
             if (announce) {
                 std::ostringstream oss;
                 oss << "RESEARCH_FREQ:reloaded packets="
@@ -606,6 +1717,7 @@ void refresh_fixed_cache() {
         research_archive = genesis::ge_load_research_confinement_archive();
         research_points.reserve(20000u);
         SyncResearchWatchState();
+        ApplyResearchLiveBootPreset(research_archive.loaded);
         PersistResearchRuntimeState();
 
 // ------------------------------------------------------------
@@ -686,6 +1798,8 @@ void refresh_fixed_cache() {
 
     
     void Tick() {
+    UpdateResearchBasicTrialState();
+    UpdateResearchTemporalGuidance();
     sm.tick();
     PollResearchArchiveHotReload();
     PollResearchCommandFile();
@@ -810,9 +1924,257 @@ void refresh_fixed_cache() {
     }
 
     void SubmitUiLine(const std::string& utf8) {
+        UpdateResearchBasicTrialState();
+        auto push_process_substrate_status_local = [&]() {
+            EwProcessSubstrateTelemetry telemetry{};
+            if (!sm.get_process_substrate_telemetry(&telemetry)) {
+                std::ostringstream oss;
+                oss << "PROCESS_SUBSTRATE_STATUS valid=0"
+                    << " tick=" << sm.canonical_tick_u64();
+            PushLocalUiLine(oss.str());
+            PushLocalUiLine(BuildResearchGpuCalibrationStatusLine());
+            return;
+        }
+            std::ostringstream oss;
+            oss << "PROCESS_SUBSTRATE_STATUS valid=" << telemetry.valid_u32
+                << " tick=" << telemetry.tick_u64
+                << " spectral_anchor=" << telemetry.spectral_anchor_id_u32
+                << " coherence_anchor=" << telemetry.coherence_anchor_id_u32
+                << " fanout=" << telemetry.fanout_budget_u32
+                << " intent_q15=" << telemetry.intent_norm_q15
+                << " Emean_q15=" << telemetry.energy_mean_q15
+                << " Epeak_q15=" << telemetry.energy_peak_q15
+                << " LeakAbs_q15=" << telemetry.leakage_abs_q15
+                << " residual_q15=" << telemetry.residual_norm_q15
+                << " dErr_q15=" << telemetry.error_delta_norm_q15
+                << " intErr_q15=" << telemetry.error_integral_norm_q15
+                << " ctrl_q15=" << telemetry.controller_authority_q15
+                << " dt_q32_32=" << telemetry.dt_scale_q32_32
+                << " visc_q32_32=" << telemetry.viscosity_bias_q32_32
+                << " err_q32_32=" << telemetry.error_q32_32
+                << " derr_q32_32=" << telemetry.error_delta_q32_32
+                << " ierr_q32_32=" << telemetry.error_integral_q32_32
+                << " gpuF_q15=" << telemetry.gpu_freq_norm_q15
+                << " gpuA_q15=" << telemetry.gpu_amp_norm_q15
+                << " gpuV_q15=" << telemetry.gpu_volt_norm_q15
+                << " intf_q15=" << telemetry.interference_norm_q15
+                << " coh_q15=" << telemetry.coherence_norm_q15
+                << " obs_q15=" << telemetry.observer_norm_q15
+                << " vib_q15=" << telemetry.source_vibration_q15
+                << " calctrl_q15=" << telemetry.calibration_authority_q15
+                << " calerr_q32_32=" << telemetry.calibration_error_q32_32
+                << " calderr_q32_32=" << telemetry.calibration_delta_q32_32
+                << " calierr_q32_32=" << telemetry.calibration_integral_q32_32
+                << " gain_q15=" << telemetry.op_gain_q15
+                << " phase_q15=" << telemetry.op_phase_bias_q15
+                << " learn_q15=" << telemetry.learning_coupling_q15
+                << " phys_q15=" << telemetry.phys_coherence_q15
+                << " lrncoh_q15=" << telemetry.learning_coherence_q15
+                << " tempcoh_q15=" << telemetry.temporal_coherence_q15
+                << " V=" << telemetry.last_v_code_u16
+                << " I=" << telemetry.last_i_code_u16
+                << " pending=" << (uint32_t)telemetry.residual_pending_u8
+                << " hold=" << (uint32_t)telemetry.hold_tick_u8
+                << " commit=" << (uint32_t)telemetry.last_commit_u8;
+            PushLocalUiLine(oss.str());
+        };
+        auto push_ai_substrate_status_local = [&]() {
+            EwAiSubstrateTelemetry telemetry{};
+            if (!sm.get_ai_substrate_telemetry(&telemetry)) {
+                std::ostringstream oss;
+                oss << "AI_SUBSTRATE_STATUS valid=0"
+                    << " tick=" << sm.canonical_tick_u64();
+                PushLocalUiLine(oss.str());
+                return;
+            }
+            std::ostringstream oss;
+            oss << "AI_SUBSTRATE_STATUS valid=" << telemetry.valid_u32
+                << " tick=" << telemetry.tick_u64
+                << " class=" << telemetry.class_id_u32
+                << " sig9=" << telemetry.sig9_u64
+                << " obs=" << telemetry.observation_seq_u64
+                << " cmd_obs=" << telemetry.dispatched_observation_seq_u64
+                << " conf_q32_32=" << telemetry.confidence_q32_32
+                << " attract_q32_32=" << telemetry.attractor_strength_q32_32
+                << " cmds=" << telemetry.command_count_u32
+                << " actions=" << telemetry.action_log_count_u32
+                << " carrier_q63=" << telemetry.carrier_pulse_q63
+                << " totalw_q63=" << telemetry.carrier_total_weight_q63
+                << " pending_api=" << telemetry.pending_external_api_u32
+                << " inflight_api=" << telemetry.inflight_external_api_u32
+                << " fanout=" << telemetry.fanout_budget_u32
+                << " ant=" << telemetry.anticipation_flags_u16
+                << " ctrl_q15=" << telemetry.controller_authority_q15
+                << " gain_q15=" << telemetry.op_gain_q15
+                << " phase_q15=" << telemetry.op_phase_bias_q15
+                << " b0=" << telemetry.carrier_band_q15[0]
+                << " b1=" << telemetry.carrier_band_q15[1]
+                << " b2=" << telemetry.carrier_band_q15[2]
+                << " b3=" << telemetry.carrier_band_q15[3]
+                << " b4=" << telemetry.carrier_band_q15[4]
+                << " b5=" << telemetry.carrier_band_q15[5]
+                << " b6=" << telemetry.carrier_band_q15[6]
+                << " b7=" << telemetry.carrier_band_q15[7]
+                << " kind=" << telemetry.last_action_kind_u16
+                << " profile=" << telemetry.last_action_profile_u16
+                << " anchor=" << telemetry.last_target_anchor_id_u32
+                << " f=" << telemetry.last_f_code_i32
+                << " a=" << telemetry.last_a_code_u16
+                << " v=" << telemetry.last_v_code_u16
+                << " i=" << telemetry.last_i_code_u16;
+            PushLocalUiLine(oss.str());
+        };
+        auto push_ai_data_substrate_status_local = [&]() {
+            EwAiDataSubstrateTelemetry telemetry{};
+            if (!sm.get_ai_data_substrate_telemetry(&telemetry)) {
+                std::ostringstream oss;
+                oss << "AI_DATA_SUBSTRATE_STATUS valid=0"
+                    << " tick=" << sm.canonical_tick_u64();
+                PushLocalUiLine(oss.str());
+                return;
+            }
+            std::ostringstream oss;
+            oss << "AI_DATA_SUBSTRATE_STATUS valid=" << telemetry.valid_u32
+                << " tick=" << telemetry.tick_u64
+                << " corpus=" << telemetry.corpus_artifact_count_u32
+                << " corpus_txt=" << telemetry.corpus_text_artifact_count_u32
+                << " manifest=" << telemetry.manifest_record_count_u32
+                << " pending_metrics=" << telemetry.pending_metric_count_u32
+                << " completed_metrics=" << telemetry.completed_metric_count_u32
+                << " accepted_metrics=" << telemetry.accepted_metric_count_u32
+                << " lex=" << telemetry.language_word_count_u32
+                << " pron=" << telemetry.language_pron_count_u32
+                << " rel=" << telemetry.language_relation_count_u32
+                << " concept=" << telemetry.language_concept_count_u32
+                << " speech=" << telemetry.language_speech_utt_count_u32
+                << " pemdas=" << telemetry.math_pemdas_cases_passed_u32
+                << "/" << telemetry.math_pemdas_cases_total_u32
+                << " graph=" << telemetry.math_graph_packets_emitted_u32
+                << " khan_pages=" << telemetry.math_khan_pages_seen_u32
+                << " khan_chars=" << telemetry.math_khan_chars_ingested_u32
+                << " pending_api=" << telemetry.pending_external_api_u32
+                << " inflight_api=" << telemetry.inflight_external_api_u32
+                << " intent_q15=" << telemetry.intent_norm_q15
+                << " measured_q15=" << telemetry.measured_norm_q15
+                << " residual_q15=" << telemetry.residual_norm_q15
+                << " dErr_q15=" << telemetry.error_delta_norm_q15
+                << " intErr_q15=" << telemetry.error_integral_norm_q15
+                << " ctrl_q15=" << telemetry.controller_authority_q15
+                << " err_q32_32=" << telemetry.error_q32_32
+                << " derr_q32_32=" << telemetry.error_delta_q32_32
+                << " ierr_q32_32=" << telemetry.error_integral_q32_32
+                << " t0=" << telemetry.intent_band_q15[0]
+                << " t1=" << telemetry.intent_band_q15[1]
+                << " t2=" << telemetry.intent_band_q15[2]
+                << " t3=" << telemetry.intent_band_q15[3]
+                << " t4=" << telemetry.intent_band_q15[4]
+                << " t5=" << telemetry.intent_band_q15[5]
+                << " t6=" << telemetry.intent_band_q15[6]
+                << " t7=" << telemetry.intent_band_q15[7]
+                << " m0=" << telemetry.measured_band_q15[0]
+                << " m1=" << telemetry.measured_band_q15[1]
+                << " m2=" << telemetry.measured_band_q15[2]
+                << " m3=" << telemetry.measured_band_q15[3]
+                << " m4=" << telemetry.measured_band_q15[4]
+                << " m5=" << telemetry.measured_band_q15[5]
+                << " m6=" << telemetry.measured_band_q15[6]
+                << " m7=" << telemetry.measured_band_q15[7];
+            PushLocalUiLine(oss.str());
+        };
+
+        if (utf8.rfind("/basic_trial_status", 0) == 0 || utf8.rfind("basic_trial_status:", 0) == 0 ||
+            utf8.rfind("/meta_basic_mode_status", 0) == 0 || utf8.rfind("meta_basic_mode_status:", 0) == 0) {
+            PushLocalUiLine(BuildResearchBasicTrialStatusLine());
+            return;
+        }
+        if (utf8.rfind("/basic_trial", 0) == 0 || utf8.rfind("basic_trial:", 0) == 0 ||
+            utf8.rfind("/meta_basic_mode", 0) == 0 || utf8.rfind("meta_basic_mode:", 0) == 0 ||
+            utf8.rfind("/meta_basic_trial", 0) == 0 || utf8.rfind("meta_basic_trial:", 0) == 0) {
+            const bool off = (utf8.find("off") != std::string::npos ||
+                              utf8.find("OFF") != std::string::npos ||
+                              utf8.find("false") != std::string::npos ||
+                              utf8.find("FALSE") != std::string::npos);
+            uint32_t minutes_u32 = research_basic_trial_minutes_u32;
+            const std::size_t mp = utf8.find("minutes=");
+            if (mp != std::string::npos && mp + 8u < utf8.size()) {
+                minutes_u32 = (uint32_t)std::strtoul(utf8.substr(mp + 8u).c_str(), nullptr, 10);
+            }
+            if (off) {
+                DisableResearchBasicTrial(true);
+            } else {
+                ApplyResearchBasicTrialPreset(minutes_u32 == 0u ? 60u : minutes_u32, true);
+            }
+            return;
+        }
+        if (research_basic_trial_enabled && research_basic_trial_expired &&
+            !ResearchCommandLooksLikeStatus(utf8)) {
+            PushResearchBasicTrialBlocked("session", "expired");
+            return;
+        }
+        if (ResearchBasicTrialShouldBlockAdvancedCommand(utf8)) {
+            PushResearchBasicTrialBlocked("advanced", "basic_trial_mode");
+            return;
+        }
         if (utf8.rfind("/research_reload", 0) == 0 || utf8.rfind("research_reload:", 0) == 0 ||
             utf8.rfind("/sim_freq_reload", 0) == 0 || utf8.rfind("sim_freq_reload:", 0) == 0) {
             ReloadResearchArchive(true);
+            return;
+        }
+        if (utf8.rfind("/research_live_mode", 0) == 0 || utf8.rfind("research_live_mode:", 0) == 0) {
+            const bool on = (utf8.find("1") != std::string::npos ||
+                             utf8.find("on") != std::string::npos ||
+                             utf8.find("ON") != std::string::npos ||
+                             utf8.find("true") != std::string::npos ||
+                             utf8.find("TRUE") != std::string::npos);
+            research_live_boot_enabled = on;
+            research_guidance_enabled = on;
+            research_live_compute_enabled = on;
+            if (on) {
+                ApplyResearchLiveBootPreset(true);
+            } else {
+                research_live_compute_active = false;
+                PersistResearchRuntimeState();
+                PushLocalUiLine("RESEARCH_FREQ:live_boot=off guidance=off live_compute=off");
+            }
+            return;
+        }
+        if (utf8.rfind("/research_live_compute", 0) == 0 || utf8.rfind("research_live_compute:", 0) == 0) {
+            const bool on = (utf8.find("1") != std::string::npos ||
+                             utf8.find("on") != std::string::npos ||
+                             utf8.find("ON") != std::string::npos ||
+                             utf8.find("true") != std::string::npos ||
+                             utf8.find("TRUE") != std::string::npos);
+            research_live_compute_enabled = on;
+            if (!on) research_live_compute_active = false;
+            PersistResearchRuntimeState();
+            PushLocalUiLine(on ? "RESEARCH_FREQ:live_compute=armed" : "RESEARCH_FREQ:live_compute=disarmed");
+            return;
+        }
+        if (utf8.rfind("/research_gpu_prediction_axis", 0) == 0 || utf8.rfind("research_gpu_prediction_axis:", 0) == 0) {
+            const std::size_t sp = utf8.find_last_of("=:");
+            if (sp != std::string::npos && sp + 1 < utf8.size()) {
+                const uint32_t axis = (uint32_t)std::strtoul(utf8.substr(sp + 1).c_str(), nullptr, 10);
+                research_gpu_prediction_axis_resolution_u32 = std::max<uint32_t>(3u, std::min<uint32_t>(axis, 9u));
+                research_gpu_prediction_last_tick_u64 = 0u;
+                research_gpu_calibration = genesis::GeResearchGpuAdaptiveCalibration{};
+                research_gpu_predictions.clear();
+                PersistResearchRuntimeState();
+                std::ostringstream oss;
+                oss << "RESEARCH_FREQ:gpu_prediction_axis=" << research_gpu_prediction_axis_resolution_u32;
+                PushLocalUiLine(oss.str());
+            }
+            return;
+        }
+        if (utf8.rfind("/research_gpu_prediction_refresh", 0) == 0 || utf8.rfind("research_gpu_prediction_refresh:", 0) == 0) {
+            const std::size_t sp = utf8.find_last_of("=:");
+            if (sp != std::string::npos && sp + 1 < utf8.size()) {
+                const uint32_t ticks = (uint32_t)std::strtoul(utf8.substr(sp + 1).c_str(), nullptr, 10);
+                research_gpu_prediction_refresh_ticks_u32 = std::max<uint32_t>(1u, std::min<uint32_t>(ticks, 3600u));
+                PersistResearchRuntimeState();
+                std::ostringstream oss;
+                oss << "RESEARCH_FREQ:gpu_prediction_refresh=" << research_gpu_prediction_refresh_ticks_u32;
+                PushLocalUiLine(oss.str());
+            }
             return;
         }
         if (utf8.rfind("/sim_freq_run", 0) == 0 || utf8.rfind("sim_freq_run:", 0) == 0) {
@@ -837,6 +2199,63 @@ void refresh_fixed_cache() {
                 << " I=" << research_param_i
                 << " V=" << research_param_v;
             PushLocalUiLine(oss.str());
+            PushLocalUiLine(BuildResearchBasicTrialStatusLine());
+            PushLocalUiLine(BuildResearchGuidanceStatusLine());
+            PushLocalUiLine(BuildResearchGpuCalibrationStatusLine());
+            PushLocalUiLine(BuildResearchLiveComputeStatusLine());
+            return;
+        }
+        if (utf8.rfind("/process_substrate_status", 0) == 0 || utf8.rfind("process_substrate_status:", 0) == 0) {
+            push_process_substrate_status_local();
+            return;
+        }
+        if (utf8.rfind("/ai_status", 0) == 0 || utf8.rfind("ai_status:", 0) == 0 ||
+            utf8.rfind("/ai_substrate_status", 0) == 0 || utf8.rfind("ai_substrate_status:", 0) == 0) {
+            push_ai_substrate_status_local();
+            return;
+        }
+        if (utf8.rfind("/ai_data_status", 0) == 0 || utf8.rfind("ai_data_status:", 0) == 0 ||
+            utf8.rfind("/ai_data_substrate_status", 0) == 0 || utf8.rfind("ai_data_substrate_status:", 0) == 0) {
+            push_ai_data_substrate_status_local();
+            return;
+        }
+        if (utf8.rfind("/research_status", 0) == 0 || utf8.rfind("research_status:", 0) == 0) {
+            std::ostringstream oss;
+            oss << "RESEARCH_FREQ:loaded=" << (research_archive.loaded ? 1 : 0)
+                << " packets=" << research_archive.packet_path_classes.size()
+                << " tensor=" << research_archive.tensor6d_cells.size()
+                << " vectors=" << research_archive.vector_excitations.size()
+                << " audio=" << research_archive.audio_waveform.size()
+                << " stream_hz=" << research_visual_stream_hz_u32
+                << " stream_tick=" << research_visual_last_tick_u64
+                << " stream_points=" << research_points.size()
+                << " mode=" << ((research_output_mode_u8 == 2u) ? "vector" : "frequency")
+                << " stov=" << (research_stov_mode ? 1 : 0)
+                << " lattice_edge=" << research_lattice_edge_u32
+                << " A=" << research_param_a
+                << " F=" << research_param_f
+                << " I=" << research_param_i
+                << " V=" << research_param_v;
+            PushLocalUiLine(oss.str());
+            PushLocalUiLine(BuildResearchBasicTrialStatusLine());
+            PushLocalUiLine(BuildResearchGuidanceStatusLine());
+            PushLocalUiLine(BuildResearchGpuCalibrationStatusLine());
+            PushLocalUiLine(BuildResearchLiveComputeStatusLine());
+            push_process_substrate_status_local();
+            push_ai_substrate_status_local();
+            push_ai_data_substrate_status_local();
+            return;
+        }
+        if (utf8.rfind("/research_guidance_status", 0) == 0 || utf8.rfind("research_guidance_status:", 0) == 0) {
+            PushLocalUiLine(BuildResearchGuidanceStatusLine());
+            return;
+        }
+        if (utf8.rfind("/research_gpu_calibration_status", 0) == 0 || utf8.rfind("research_gpu_calibration_status:", 0) == 0) {
+            PushLocalUiLine(BuildResearchGpuCalibrationStatusLine());
+            return;
+        }
+        if (utf8.rfind("/research_live_compute_status", 0) == 0 || utf8.rfind("research_live_compute_status:", 0) == 0) {
+            PushLocalUiLine(BuildResearchLiveComputeStatusLine());
             return;
         }
         if (utf8.rfind("/sim_mode", 0) == 0 || utf8.rfind("sim_mode:", 0) == 0) {
@@ -860,7 +2279,11 @@ void refresh_fixed_cache() {
             const std::size_t sp = utf8.find_last_of("=:");
             if (sp != std::string::npos && sp + 1 < utf8.size()) {
                 const uint32_t hz = (uint32_t)std::strtoul(utf8.substr(sp + 1).c_str(), nullptr, 10);
-                SetResearchStreamHz(hz, true);
+                const uint32_t bounded_hz =
+                    research_basic_trial_enabled
+                        ? std::min<uint32_t>(hz, ResearchBasicTrialMaxStreamHz())
+                        : hz;
+                SetResearchStreamHz(bounded_hz, true);
             }
             return;
         }
@@ -868,7 +2291,11 @@ void refresh_fixed_cache() {
             const std::size_t sp = utf8.find_last_of("=:");
             if (sp != std::string::npos && sp + 1 < utf8.size()) {
                 const uint32_t edge = (uint32_t)std::strtoul(utf8.substr(sp + 1).c_str(), nullptr, 10);
-                SetResearchLatticeEdge(edge, true);
+                const uint32_t bounded_edge =
+                    research_basic_trial_enabled
+                        ? std::min<uint32_t>(edge, ResearchBasicTrialMaxLatticeEdge())
+                        : edge;
+                SetResearchLatticeEdge(bounded_edge, true);
             }
             return;
         }
@@ -894,6 +2321,17 @@ void refresh_fixed_cache() {
                     else if (k == "F" || k == "f") f = val;
                     else if (k == "I" || k == "i") i = val;
                     else if (k == "V" || k == "v") v = val;
+                }
+                if (research_basic_trial_enabled &&
+                    genesis::ge_has_research_runtime_guidance(research_archive)) {
+                    a = (float)std::max((double)research_archive.pulse_window_min_quartet.A,
+                                        std::min((double)research_archive.pulse_window_max_quartet.A, (double)a));
+                    f = (float)std::max((double)research_archive.pulse_window_min_quartet.F,
+                                        std::min((double)research_archive.pulse_window_max_quartet.F, (double)f));
+                    i = (float)std::max((double)research_archive.pulse_window_min_quartet.I,
+                                        std::min((double)research_archive.pulse_window_max_quartet.I, (double)i));
+                    v = (float)std::max((double)research_archive.pulse_window_min_quartet.V,
+                                        std::min((double)research_archive.pulse_window_max_quartet.V, (double)v));
                 }
                 SetResearchParams(a, f, i, v, true);
             }

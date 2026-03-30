@@ -91,6 +91,8 @@ struct EwSpectralFieldAnchorState {
     EwIntentSummary intent_summary;
     EwMeasuredSummary measured_summary;
     EwResidualSummary temporal_residual;
+    EwCalculusSummary calculus_summary;
+    EwFrequencyInterferenceCalibrationSummary calibration_summary;
 
     // Bounded trajectory/actuation slots (overwrite per tick).
     EwActuationPacket actuation_slots[EW_SPECTRAL_TRAJ_SLOTS];

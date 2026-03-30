@@ -1,0 +1,27 @@
+// photon_vector_excitation_sample.json
+[
+  {"x":0,"y":0,"z":0,"vec_x":16,"vec_y":21,"vec_z":24,"spin":[0,0,1],"oam_twist":-0.998771},
+  {"x":1,"y":0,"z":0,"vec_x":1,"vec_y":14,"vec_z":19,"spin":[0,0,1],"oam_twist":-0.499068},
+  {"x":2,"y":0,"z":0,"vec_x":7,"vec_y":15,"vec_z":20,"spin":[0,0,1],"oam_twist":0.49506},
+  {"x":3,"y":0,"z":0,"vec_x":17,"vec_y":21,"vec_z":25,"spin":[0,0,1],"oam_twist":0.998893},
+  {"x":4,"y":0,"z":0,"vec_x":4,"vec_y":15,"vec_z":20,"spin":[0,0,1],"oam_twist":-0.998144},
+  {"x":5,"y":0,"z":0,"vec_x":10,"vec_y":17,"vec_z":21,"spin":[0,0,1],"oam_twist":-0.499068},
+  {"x":6,"y":0,"z":0,"vec_x":18,"vec_y":22,"vec_z":26,"spin":[0,0,1],"oam_twist":0.499284},
+  {"x":7,"y":0,"z":0,"vec_x":8,"vec_y":16,"vec_z":21,"spin":[0,0,1],"oam_twist":0.998132},
+  {"x":8,"y":0,"z":0,"vec_x":11,"vec_y":18,"vec_z":22,"spin":[0,0,1],"oam_twist":-0.998144},
+  {"x":9,"y":0,"z":0,"vec_x":19,"vec_y":23,"vec_z":26,"spin":[0,0,1],"oam_twist":-0.494678},
+  {"x":10,"y":0,"z":0,"vec_x":10,"vec_y":17,"vec_z":22,"spin":[0,0,1],"oam_twist":0.499067},
+  {"x":11,"y":0,"z":0,"vec_x":13,"vec_y":19,"vec_z":23,"spin":[0,0,1],"oam_twist":0.998132},
+  {"x":12,"y":0,"z":0,"vec_x":20,"vec_y":24,"vec_z":27,"spin":[0,0,1],"oam_twist":-0.989376},
+  {"x":13,"y":0,"z":0,"vec_x":12,"vec_y":18,"vec_z":23,"spin":[0,0,1],"oam_twist":-0.499059},
+  {"x":14,"y":0,"z":0,"vec_x":14,"vec_y":19,"vec_z":23,"spin":[0,0,1],"oam_twist":0.499067},
+  {"x":15,"y":0,"z":0,"vec_x":21,"vec_y":24,"vec_z":28,"spin":[0,0,1],"oam_twist":0.989039},
+  {"x":16,"y":0,"z":0,"vec_x":14,"vec_y":19,"vec_z":24,"spin":[0,0,1],"oam_twist":-0.998743},
+  {"x":17,"y":0,"z":0,"vec_x":15,"vec_y":20,"vec_z":24,"spin":[0,0,1],"oam_twist":-0.499059},
+  {"x":18,"y":0,"z":0,"vec_x":21,"vec_y":25,"vec_z":28,"spin":[0,0,1],"oam_twist":0.493642},
+  {"x":19,"y":0,"z":0,"vec_x":15,"vec_y":20,"vec_z":24,"spin":[0,0,1],"oam_twist":0.998766},
+  {"x":20,"y":0,"z":0,"vec_x":17,"vec_y":21,"vec_z":25,"spin":[0,0,1],"oam_twist":-0.998543},
+  {"x":21,"y":0,"z":0,"vec_x":22,"vec_y":26,"vec_z":29,"spin":[0,0,1],"oam_twist":-0.490812},
+  {"x":22,"y":0,"z":0,"vec_x":16,"vec_y":21,"vec_z":25,"spin":[0,0,1],"oam_twist":0.499284},
+  {"x":23,"y":0,"z":0,"vec_x":18,"vec_y":22,"vec_z":25,"spin":[0,0,1],"oam_twist":0.998539}
+]

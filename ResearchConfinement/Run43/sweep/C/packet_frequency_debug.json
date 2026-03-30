@@ -1,0 +1,27 @@
+// packet_frequency_debug.json
+[
+  {"packet_id":0,"cohort":"D_track","dominant_bin":19,"bin10_mag":0.114113,"bin10_phase_rad":0.542314,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":1,"cohort":"I_accum","dominant_bin":10,"bin10_mag":0.113627,"bin10_phase_rad":0.418656,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":2,"cohort":"L_smooth","dominant_bin":13,"bin10_mag":0.126994,"bin10_phase_rad":-0.706552,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":3,"cohort":"D_track","dominant_bin":20,"bin10_mag":0.110899,"bin10_phase_rad":-0.193779,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":4,"cohort":"I_accum","dominant_bin":12,"bin10_mag":0.11107,"bin10_phase_rad":0.66989,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":5,"cohort":"L_smooth","dominant_bin":15,"bin10_mag":0.124039,"bin10_phase_rad":-0.713146,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":6,"cohort":"D_track","dominant_bin":21,"bin10_mag":0.107677,"bin10_phase_rad":0.277001,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":7,"cohort":"I_accum","dominant_bin":14,"bin10_mag":0.108486,"bin10_phase_rad":-0.00854202,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":8,"cohort":"L_smooth","dominant_bin":16,"bin10_mag":0.121044,"bin10_phase_rad":0.590691,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":9,"cohort":"D_track","dominant_bin":21,"bin10_mag":0.104453,"bin10_phase_rad":0.281802,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":10,"cohort":"I_accum","dominant_bin":15,"bin10_mag":0.105877,"bin10_phase_rad":-0.643202,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":11,"cohort":"L_smooth","dominant_bin":17,"bin10_mag":0.118017,"bin10_phase_rad":-0.164119,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":12,"cohort":"D_track","dominant_bin":22,"bin10_mag":0.101233,"bin10_phase_rad":0.537433,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":13,"cohort":"I_accum","dominant_bin":16,"bin10_mag":0.103249,"bin10_phase_rad":-0.643691,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":14,"cohort":"L_smooth","dominant_bin":17,"bin10_mag":0.114963,"bin10_phase_rad":0.327862,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":15,"cohort":"D_track","dominant_bin":23,"bin10_mag":0.0980223,"bin10_phase_rad":-0.270554,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":16,"cohort":"I_accum","dominant_bin":18,"bin10_mag":0.100606,"bin10_phase_rad":0.664077,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":17,"cohort":"L_smooth","dominant_bin":18,"bin10_mag":0.111888,"bin10_phase_rad":0.316535,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":18,"cohort":"D_track","dominant_bin":23,"bin10_mag":0.0948272,"bin10_phase_rad":-0.782432,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":19,"cohort":"I_accum","dominant_bin":18,"bin10_mag":0.0979535,"bin10_phase_rad":-0.0794189,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":20,"cohort":"L_smooth","dominant_bin":20,"bin10_mag":0.108799,"bin10_phase_rad":0.584318,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":21,"cohort":"D_track","dominant_bin":24,"bin10_mag":0.0916527,"bin10_phase_rad":-0.777033,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":22,"cohort":"I_accum","dominant_bin":19,"bin10_mag":0.0952956,"bin10_phase_rad":0.40917,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]},
+  {"packet_id":23,"cohort":"L_smooth","dominant_bin":20,"bin10_mag":0.105701,"bin10_phase_rad":-0.0605192,"vector_curl_deg":0.0,"color_hex":"#66aaff","top_bins":[]}
+]

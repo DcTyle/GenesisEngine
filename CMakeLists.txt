@@ -363,6 +363,11 @@ add_executable(ew_ai_headless_run EXCLUDE_FROM_ALL
 )
 target_link_libraries(ew_ai_headless_run PRIVATE EigenWareCore)
 
+add_executable(ew_research_live_day_sim EXCLUDE_FROM_ALL
+    src/tools/research_live_day_sim_main.cpp
+)
+target_link_libraries(ew_research_live_day_sim PRIVATE EigenWareCore)
+
 add_executable(ew_hydrate_workspace EXCLUDE_FROM_ALL
     src/tools/hydrate_workspace_main.cpp
 )

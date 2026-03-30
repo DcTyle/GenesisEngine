@@ -99,8 +99,29 @@ uint64_t ge_compute_state_fingerprint_9d(const SubstrateManager* sm) {
             fold(h, (uint64_t)ss.temporal_residual.measured_hash_u64);
             fold(h, (uint64_t)ss.temporal_residual.residual_q32_32);
             fold(h, (uint64_t)ss.temporal_residual.residual_norm_q15);
+            fold(h, (uint64_t)ss.calculus_summary.error_q32_32);
+            fold(h, (uint64_t)ss.calculus_summary.error_delta_q32_32);
+            fold(h, (uint64_t)ss.calculus_summary.error_integral_q32_32);
+            fold(h, (uint64_t)ss.calculus_summary.error_delta_norm_q15);
+            fold(h, (uint64_t)ss.calculus_summary.error_integral_norm_q15);
+            fold(h, (uint64_t)ss.calculus_summary.controller_authority_q15);
+            fold(h, (uint64_t)ss.calculus_summary.controller_hold_u8);
+            fold(h, (uint64_t)ss.calculus_summary.last_commit_u8);
+            fold(h, (uint64_t)ss.calibration_summary.calibration_error_q32_32);
+            fold(h, (uint64_t)ss.calibration_summary.calibration_delta_q32_32);
+            fold(h, (uint64_t)ss.calibration_summary.calibration_integral_q32_32);
+            fold(h, (uint64_t)ss.calibration_summary.gpu_freq_norm_q15);
+            fold(h, (uint64_t)ss.calibration_summary.gpu_amp_norm_q15);
+            fold(h, (uint64_t)ss.calibration_summary.gpu_volt_norm_q15);
+            fold(h, (uint64_t)ss.calibration_summary.interference_norm_q15);
+            fold(h, (uint64_t)ss.calibration_summary.coherence_norm_q15);
+            fold(h, (uint64_t)ss.calibration_summary.observer_norm_q15);
+            fold(h, (uint64_t)ss.calibration_summary.source_vibration_q15);
+            fold(h, (uint64_t)ss.calibration_summary.calibration_authority_q15);
             fold(h, (uint64_t)ss.intent_summary.intent_norm_q15);
             for (uint32_t kk = 0u; kk < 8u; ++kk) fold(h, (uint64_t)ss.intent_summary.band_mag_q15[kk]);
+            for (uint32_t kk = 0u; kk < 8u; ++kk) fold(h, (uint64_t)ss.calibration_summary.interference_band_q15[kk]);
+            for (uint32_t kk = 0u; kk < 8u; ++kk) fold(h, (uint64_t)ss.calibration_summary.coherence_band_q15[kk]);
         }
         if (a.kind_u32 == EW_ANCHOR_KIND_COHERENCE_BUS) {
             const EwCoherenceBusAnchorState& bs = a.coherence_bus_state;

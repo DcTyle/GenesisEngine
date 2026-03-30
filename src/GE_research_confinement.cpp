@@ -59,6 +59,56 @@ static float ge_clamp01f_local(float v) {
     return v;
 }
 
+static double ge_clamp01d_local(double v) {
+    if (v < 0.0) return 0.0;
+    if (v > 1.0) return 1.0;
+    return v;
+}
+
+static double ge_clampd_local(double v, double lo, double hi) {
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+static double ge_absd_local(double v) {
+    return (v < 0.0) ? -v : v;
+}
+
+static double ge_lerpd_local(double a, double b, double t) {
+    return a + (b - a) * t;
+}
+
+static double ge_softsign_local(double v) {
+    const double av = ge_absd_local(v);
+    return (av > 0.0) ? (v / (1.0 + av)) : 0.0;
+}
+
+static double ge_norm_from_abs_local(double v) {
+    const double av = ge_absd_local(v);
+    return av / (1.0 + av);
+}
+
+static double ge_quartet_distance_norm_local(const GeResearchPulseQuartet& a,
+                                             const GeResearchPulseQuartet& b,
+                                             const GeResearchPulseQuartet& qmin,
+                                             const GeResearchPulseQuartet& qmax) {
+    const double spanF = std::max(qmax.F - qmin.F, 1.0e-9);
+    const double spanA = std::max(qmax.A - qmin.A, 1.0e-9);
+    const double spanI = std::max(qmax.I - qmin.I, 1.0e-9);
+    const double spanV = std::max(qmax.V - qmin.V, 1.0e-9);
+    const double dF = ge_absd_local(a.F - b.F) / spanF;
+    const double dA = ge_absd_local(a.A - b.A) / spanA;
+    const double dI = ge_absd_local(a.I - b.I) / spanI;
+    const double dV = ge_absd_local(a.V - b.V) / spanV;
+    return ge_clamp01d_local((dF + dA + dI + dV) * 0.25);
+}
+
+static uint64_t ge_mix_u64_local(uint64_t h, uint64_t v) {
+    h ^= v + 0x9E3779B97F4A7C15ull + (h << 6u) + (h >> 2u);
+    return h;
+}
+
 static uint32_t ge_clamp_u32_i32(int32_t v, int32_t lo, int32_t hi) {
     if (v < lo) return (uint32_t)lo;
     if (v > hi) return (uint32_t)hi;
@@ -152,15 +202,6 @@ static bool ge_parse_uint32_ascii(const std::string& text, uint32_t& out_value) 
         const unsigned long v = std::stoul(text);
         if (v > 0xFFFFFFFFul) return false;
         out_value = static_cast<uint32_t>(v);
-        return true;
-    } catch (...) {
-        return false;
-    }
-}
-
-static bool ge_parse_uint64_ascii(const std::string& text, uint64_t& out_value) {
-    try {
-        out_value = std::stoull(text);
         return true;
     } catch (...) {
         return false;
@@ -352,6 +393,154 @@ static bool ge_extract_json_object(const std::string& text,
         }
     }
     return false;
+}
+
+static bool ge_parse_pulse_quartet_object(const std::string& text,
+                                          GeResearchPulseQuartet& out_quartet) {
+    GeResearchPulseQuartet out{};
+    const bool ok =
+        ge_extract_json_number(text, "F", out.F) &&
+        ge_extract_json_number(text, "A", out.A) &&
+        ge_extract_json_number(text, "I", out.I) &&
+        ge_extract_json_number(text, "V", out.V);
+    if (!ok) return false;
+    out_quartet = out;
+    return true;
+}
+
+static bool ge_parse_pulse_window_object(const std::string& text,
+                                         GeResearchPulseQuartet& out_min,
+                                         GeResearchPulseQuartet& out_max) {
+    std::string freq_obj;
+    std::string amp_obj;
+    std::string ampere_obj;
+    std::string volt_obj;
+    if (!ge_extract_json_object(text, "frequency", freq_obj) ||
+        !ge_extract_json_object(text, "amplitude", amp_obj) ||
+        !ge_extract_json_object(text, "amperage", ampere_obj) ||
+        !ge_extract_json_object(text, "voltage", volt_obj)) {
+        return false;
+    }
+
+    GeResearchPulseQuartet qmin{};
+    GeResearchPulseQuartet qmax{};
+    const bool ok =
+        ge_extract_json_number(freq_obj, "min", qmin.F) &&
+        ge_extract_json_number(freq_obj, "max", qmax.F) &&
+        ge_extract_json_number(amp_obj, "min", qmin.A) &&
+        ge_extract_json_number(amp_obj, "max", qmax.A) &&
+        ge_extract_json_number(ampere_obj, "min", qmin.I) &&
+        ge_extract_json_number(ampere_obj, "max", qmax.I) &&
+        ge_extract_json_number(volt_obj, "min", qmin.V) &&
+        ge_extract_json_number(volt_obj, "max", qmax.V);
+    if (!ok) return false;
+
+    out_min = qmin;
+    out_max = qmax;
+    return true;
+}
+
+static bool ge_parse_metric_model_object(const std::string& text,
+                                         const char* key_ascii,
+                                         GeResearchQuadraticMetricModel& out_model) {
+    std::string model_object;
+    if (!ge_extract_json_object(text, key_ascii, model_object)) return false;
+
+    std::string jacobian_obj;
+    std::string hessian_diag_obj;
+    std::string hessian_cross_obj;
+    if (!ge_extract_json_object(model_object, "jacobian", jacobian_obj) ||
+        !ge_extract_json_object(model_object, "hessian_diag", hessian_diag_obj) ||
+        !ge_extract_json_object(model_object, "hessian_cross", hessian_cross_obj)) {
+        return false;
+    }
+
+    GeResearchQuadraticMetricModel model{};
+    (void)ge_extract_json_string(model_object, "metric", model.metric_utf8);
+    (void)ge_extract_json_string(model_object, "deviation_formula", model.deviation_formula_utf8);
+    const bool ok =
+        ge_extract_json_number(model_object, "center_value", model.center_value) &&
+        ge_parse_pulse_quartet_object(jacobian_obj, model.jacobian) &&
+        ge_parse_pulse_quartet_object(hessian_diag_obj, model.hessian_diag) &&
+        ge_extract_json_number(hessian_cross_obj, "FA", model.hessian_FA) &&
+        ge_extract_json_number(hessian_cross_obj, "FI", model.hessian_FI) &&
+        ge_extract_json_number(hessian_cross_obj, "FV", model.hessian_FV) &&
+        ge_extract_json_number(hessian_cross_obj, "AI", model.hessian_AI) &&
+        ge_extract_json_number(hessian_cross_obj, "AV", model.hessian_AV) &&
+        ge_extract_json_number(hessian_cross_obj, "IV", model.hessian_IV);
+    if (!ok) return false;
+
+    out_model = model;
+    return true;
+}
+
+static bool ge_parse_run043_summary_file(const std::filesystem::path& path,
+                                         GeResearchConfinementArchive& archive) {
+    std::string text;
+    if (!ge_read_text_file(path, text)) return false;
+
+    std::string center_obj;
+    std::string delta_obj;
+    std::string models_obj;
+    std::string validation_obj;
+    if (!ge_extract_json_object(text, "center_quartet", center_obj) ||
+        !ge_extract_json_object(text, "delta_quartet", delta_obj) ||
+        !ge_extract_json_object(text, "models", models_obj) ||
+        !ge_extract_json_object(text, "validation_error", validation_obj)) {
+        return false;
+    }
+
+    if (!ge_parse_pulse_quartet_object(center_obj, archive.run043_center_quartet) ||
+        !ge_parse_pulse_quartet_object(delta_obj, archive.run043_delta_quartet) ||
+        !ge_parse_metric_model_object(models_obj, "silicon_score", archive.run043_silicon_score_model) ||
+        !ge_parse_metric_model_object(models_obj, "trap_ratio", archive.run043_trap_ratio_model) ||
+        !ge_parse_metric_model_object(models_obj, "coherence", archive.run043_coherence_model) ||
+        !ge_parse_metric_model_object(models_obj, "inertia", archive.run043_inertia_model) ||
+        !ge_parse_metric_model_object(models_obj, "curvature", archive.run043_curvature_model)) {
+        return false;
+    }
+
+    if (!ge_extract_json_number(validation_obj, "silicon_score_mae", archive.run043_validation_error.silicon_score_mae) ||
+        !ge_extract_json_number(validation_obj, "silicon_score_rmse", archive.run043_validation_error.silicon_score_rmse)) {
+        return false;
+    }
+
+    archive.run043_loaded = true;
+    return true;
+}
+
+static bool ge_parse_temporal_coupling_schema_file(const std::filesystem::path& path,
+                                                   GeResearchConfinementArchive& archive) {
+    std::string text;
+    if (!ge_read_text_file(path, text)) return false;
+
+    std::string pulse_codes_obj;
+    std::string normalized_window_obj;
+    std::string collapse_gates_obj;
+    if (!ge_extract_json_object(text, "pulse_codes", pulse_codes_obj) ||
+        !ge_extract_json_object(pulse_codes_obj, "normalized_window", normalized_window_obj) ||
+        !ge_extract_json_object(text, "collapse_gates", collapse_gates_obj)) {
+        return false;
+    }
+
+    if (!ge_extract_json_number(pulse_codes_obj, "f_code", archive.run043_center_quartet.F) ||
+        !ge_extract_json_number(pulse_codes_obj, "a_code", archive.run043_center_quartet.A) ||
+        !ge_extract_json_number(pulse_codes_obj, "i_code", archive.run043_center_quartet.I) ||
+        !ge_extract_json_number(pulse_codes_obj, "v_code", archive.run043_center_quartet.V)) {
+        return false;
+    }
+    if (!ge_parse_pulse_window_object(normalized_window_obj,
+                                      archive.pulse_window_min_quartet,
+                                      archive.pulse_window_max_quartet)) {
+        return false;
+    }
+    if (!ge_extract_json_number(collapse_gates_obj, "gate_coherence", archive.temporal_collapse_gates.gate_coherence) ||
+        !ge_extract_json_number(collapse_gates_obj, "gate_trap", archive.temporal_collapse_gates.gate_trap) ||
+        !ge_extract_json_number(collapse_gates_obj, "gate_score", archive.temporal_collapse_gates.gate_score)) {
+        return false;
+    }
+
+    return true;
 }
 
 static bool ge_parse_task_summary(const std::string& text,
@@ -1115,6 +1304,16 @@ GeResearchConfinementArchive ge_load_research_confinement_archive() {
         return archive;
     }
 
+    if (!ge_parse_run043_summary_file(root / "Run43" / "run_043_derivation_summary.json", archive)) {
+        archive.load_error_utf8 = "unable to parse Run43 operator fit summary";
+        return archive;
+    }
+
+    if (!ge_parse_temporal_coupling_schema_file(root / "temporal_coupling_encoding_schema_2060.json", archive)) {
+        archive.load_error_utf8 = "unable to parse temporal coupling encoding schema";
+        return archive;
+    }
+
     if (!ge_parse_history_csv(root / "Run41" / "D_track_best_history_sampled.csv", archive.run041_d_track) ||
         !ge_parse_history_csv(root / "Run41" / "I_accum_best_history_sampled.csv", archive.run041_i_accum) ||
         !ge_parse_history_csv(root / "Run41" / "L_smooth_best_history_sampled.csv", archive.run041_l_smooth)) {
@@ -1205,6 +1404,22 @@ bool ge_validate_research_confinement_archive(const GeResearchConfinementArchive
         archive.vector_excitations.empty() || archive.tensor_glyphs.empty() ||
         archive.shader_texture.empty() || archive.audio_waveform.empty()) {
         out_message_utf8 = "missing photon-native realtime output samples";
+        return false;
+    }
+    if (!ge_has_research_runtime_guidance(archive)) {
+        out_message_utf8 = "missing Run43 temporal guidance operators";
+        return false;
+    }
+    if (!(archive.pulse_window_min_quartet.F < archive.pulse_window_max_quartet.F) ||
+        !(archive.pulse_window_min_quartet.A < archive.pulse_window_max_quartet.A) ||
+        !(archive.pulse_window_min_quartet.I < archive.pulse_window_max_quartet.I) ||
+        !(archive.pulse_window_min_quartet.V < archive.pulse_window_max_quartet.V)) {
+        out_message_utf8 = "invalid temporal coupling pulse window";
+        return false;
+    }
+    if (archive.run043_validation_error.silicon_score_rmse <= 0.0 ||
+        archive.run043_validation_error.silicon_score_mae <= 0.0) {
+        out_message_utf8 = "Run43 validation error was not loaded";
         return false;
     }
 
@@ -1412,6 +1627,850 @@ void ge_build_research_audio_frame(const GeResearchConfinementArchive& archive,
         out_frame.mean_abs_amplitude = accum_abs / (float)out_frame.interleaved_pcm16.size();
         out_frame.peak_abs_amplitude = peak_abs;
     }
+}
+
+bool ge_has_research_runtime_guidance(const GeResearchConfinementArchive& archive) {
+    return archive.loaded &&
+           archive.run043_loaded &&
+           archive.run043_validation_error.silicon_score_rmse > 0.0 &&
+           archive.temporal_collapse_gates.gate_coherence > 0.0 &&
+           archive.temporal_collapse_gates.gate_trap > 0.0 &&
+           archive.temporal_collapse_gates.gate_score > 0.0 &&
+           archive.pulse_window_min_quartet.F < archive.pulse_window_max_quartet.F &&
+           archive.pulse_window_min_quartet.A < archive.pulse_window_max_quartet.A &&
+           archive.pulse_window_min_quartet.I < archive.pulse_window_max_quartet.I &&
+           archive.pulse_window_min_quartet.V < archive.pulse_window_max_quartet.V;
+}
+
+double ge_compute_research_tensor_gradient_norm(const GeResearchConfinementArchive& archive) {
+    if (archive.tensor6d_cells.empty()) return 0.0;
+
+    double accum = 0.0;
+    for (const GeResearchTensor6DCell& cell : archive.tensor6d_cells) {
+        const double freq_sum =
+            ge_absd_local(cell.freq_x) + ge_absd_local(cell.freq_y) + ge_absd_local(cell.freq_z);
+        const double spin_sum =
+            ge_absd_local(cell.spin_x) + ge_absd_local(cell.spin_y) + ge_absd_local(cell.spin_z);
+        const double dynamics_sum =
+            ge_absd_local(cell.dtheta_dt) + 0.5 * ge_absd_local(cell.d2theta_dt2);
+        const double gradient_n =
+            0.24 * ge_clamp01d_local(cell.phase_coherence) +
+            0.18 * ge_norm_from_abs_local(cell.curvature) +
+            0.16 * ge_norm_from_abs_local(cell.flux) +
+            0.14 * ge_norm_from_abs_local(cell.inertia + cell.higgs_inertia) +
+            0.14 * ge_norm_from_abs_local(freq_sum) +
+            0.14 * ge_norm_from_abs_local(dynamics_sum + spin_sum + ge_absd_local(cell.oam_twist));
+        accum += ge_clamp01d_local(gradient_n);
+    }
+
+    return ge_clamp01d_local(accum / (double)archive.tensor6d_cells.size());
+}
+
+double ge_compute_research_packet_coherence_norm(const GeResearchConfinementArchive& archive) {
+    if (archive.packet_path_classes.empty()) return 0.0;
+
+    double accum = 0.0;
+    for (const GeResearchPacketPathClassification& sample : archive.packet_path_classes) {
+        const double packet_n =
+            0.42 * ge_clamp01d_local(sample.coherence_score) +
+            0.33 * ge_clamp01d_local(sample.phase_lock_score) +
+            0.15 * (sample.shared_path ? 1.0 : 0.0) +
+            0.10 * ge_norm_from_abs_local(sample.curvature_depth);
+        accum += ge_clamp01d_local(packet_n);
+    }
+
+    return ge_clamp01d_local(accum / (double)archive.packet_path_classes.size());
+}
+
+double ge_compute_research_observer_coupling_norm(const GeResearchConfinementArchive& archive) {
+    const auto accumulate_track = [](const std::vector<GeResearchTrajectorySample>& samples,
+                                     double& accum,
+                                     size_t& count) {
+        for (const GeResearchTrajectorySample& sample : samples) {
+            const double feedback_n =
+                ge_norm_from_abs_local(sample.noise_feedback - sample.sent_signal);
+            const double phase_n = ge_clamp01d_local(ge_absd_local(sample.phase_error));
+            const double lattice_n = ge_norm_from_abs_local(sample.lattice_distance_a);
+            const double energy_n = ge_norm_from_abs_local(sample.energy_drift);
+            const double observer_n =
+                0.35 * feedback_n +
+                0.30 * (1.0 - phase_n) +
+                0.20 * (1.0 - lattice_n) +
+                0.15 * (1.0 - energy_n);
+            accum += ge_clamp01d_local(observer_n);
+            ++count;
+        }
+    };
+
+    double accum = 0.0;
+    size_t count = 0u;
+    accumulate_track(archive.run041_d_track, accum, count);
+    accumulate_track(archive.run041_i_accum, accum, count);
+    accumulate_track(archive.run041_l_smooth, accum, count);
+    if (count == 0u) return 0.0;
+    return ge_clamp01d_local(accum / (double)count);
+}
+
+double ge_compute_research_recurrence_norm(const GeResearchConfinementArchive& archive) {
+    if (archive.run041_tasks.empty()) return 0.0;
+
+    double accum = 0.0;
+    size_t count = 0u;
+    for (const GeResearchTaskSummary& task : archive.run041_tasks) {
+        const GeResearchTaskSummary* baseline = ge_find_task_summary(archive.run040_tasks, task.task_utf8);
+        const double composite_gain_n =
+            baseline
+                ? ge_clamp01d_local((task.composite_score - baseline->composite_score) /
+                                    std::max(ge_absd_local(baseline->composite_score), 0.05))
+                : ge_clamp01d_local(task.composite_score);
+        const double task_n =
+            0.25 * ge_clamp01d_local(task.recurrence_alignment) +
+            0.20 * ge_clamp01d_local(task.conservation_alignment) +
+            0.20 * ge_clamp01d_local(task.phase_lock_fraction) +
+            0.15 * ge_clamp01d_local(task.joint_lock_fraction) +
+            0.10 * ge_clamp01d_local(task.lattice_lock_fraction) +
+            0.10 * composite_gain_n;
+        accum += ge_clamp01d_local(task_n);
+        ++count;
+    }
+
+    return (count > 0u) ? ge_clamp01d_local(accum / (double)count) : 0.0;
+}
+
+double ge_evaluate_research_metric_model(const GeResearchQuadraticMetricModel& model,
+                                         const GeResearchPulseQuartet& center_quartet,
+                                         const GeResearchPulseQuartet& quartet) {
+    const double dF = quartet.F - center_quartet.F;
+    const double dA = quartet.A - center_quartet.A;
+    const double dI = quartet.I - center_quartet.I;
+    const double dV = quartet.V - center_quartet.V;
+
+    return model.center_value +
+           model.jacobian.F * dF +
+           model.jacobian.A * dA +
+           model.jacobian.I * dI +
+           model.jacobian.V * dV +
+           0.5 * model.hessian_diag.F * dF * dF +
+           0.5 * model.hessian_diag.A * dA * dA +
+           0.5 * model.hessian_diag.I * dI * dI +
+           0.5 * model.hessian_diag.V * dV * dV +
+           model.hessian_FA * dF * dA +
+           model.hessian_FI * dF * dI +
+           model.hessian_FV * dF * dV +
+           model.hessian_AI * dA * dI +
+           model.hessian_AV * dA * dV +
+           model.hessian_IV * dI * dV;
+}
+
+bool ge_compute_research_metric_gradient(const GeResearchQuadraticMetricModel& model,
+                                         const GeResearchPulseQuartet& center_quartet,
+                                         const GeResearchPulseQuartet& quartet,
+                                         GeResearchPulseQuartet& out_gradient) {
+    const double dF = quartet.F - center_quartet.F;
+    const double dA = quartet.A - center_quartet.A;
+    const double dI = quartet.I - center_quartet.I;
+    const double dV = quartet.V - center_quartet.V;
+
+    out_gradient = GeResearchPulseQuartet{};
+    out_gradient.F = model.jacobian.F +
+                     model.hessian_diag.F * dF +
+                     model.hessian_FA * dA +
+                     model.hessian_FI * dI +
+                     model.hessian_FV * dV;
+    out_gradient.A = model.jacobian.A +
+                     model.hessian_diag.A * dA +
+                     model.hessian_FA * dF +
+                     model.hessian_AI * dI +
+                     model.hessian_AV * dV;
+    out_gradient.I = model.jacobian.I +
+                     model.hessian_diag.I * dI +
+                     model.hessian_FI * dF +
+                     model.hessian_AI * dA +
+                     model.hessian_IV * dV;
+    out_gradient.V = model.jacobian.V +
+                     model.hessian_diag.V * dV +
+                     model.hessian_FV * dF +
+                     model.hessian_AV * dA +
+                     model.hessian_IV * dI;
+    return true;
+}
+
+bool ge_build_research_runtime_guidance(const GeResearchConfinementArchive& archive,
+                                        const GeResearchPulseQuartet& desired_quartet,
+                                        double residual_norm_01,
+                                        double interference_norm_01,
+                                        double substrate_coherence_norm_01,
+                                        double source_vibration_norm_01,
+                                        GeResearchRuntimeGuidance& out_guidance) {
+    out_guidance = GeResearchRuntimeGuidance{};
+    if (!ge_has_research_runtime_guidance(archive)) return false;
+
+    const GeResearchPulseQuartet center = archive.run043_center_quartet;
+    const GeResearchPulseQuartet delta = archive.run043_delta_quartet;
+
+    GeResearchPulseQuartet clamped_desired = desired_quartet;
+    clamped_desired.F = ge_clampd_local(clamped_desired.F,
+                                        archive.pulse_window_min_quartet.F,
+                                        archive.pulse_window_max_quartet.F);
+    clamped_desired.A = ge_clampd_local(clamped_desired.A,
+                                        archive.pulse_window_min_quartet.A,
+                                        archive.pulse_window_max_quartet.A);
+    clamped_desired.I = ge_clampd_local(clamped_desired.I,
+                                        archive.pulse_window_min_quartet.I,
+                                        archive.pulse_window_max_quartet.I);
+    clamped_desired.V = ge_clampd_local(clamped_desired.V,
+                                        archive.pulse_window_min_quartet.V,
+                                        archive.pulse_window_max_quartet.V);
+
+    const double tensor_norm = ge_compute_research_tensor_gradient_norm(archive);
+    const double packet_norm = ge_compute_research_packet_coherence_norm(archive);
+    const double observer_archive_norm = ge_compute_research_observer_coupling_norm(archive);
+    const double recurrence_norm = ge_compute_research_recurrence_norm(archive);
+    const double residual_n = ge_clamp01d_local(residual_norm_01);
+    const double interference_n = ge_clamp01d_local(interference_norm_01);
+    const double substrate_coherence_n = ge_clamp01d_local(substrate_coherence_norm_01);
+    const double source_vibration_n = ge_clamp01d_local(source_vibration_norm_01);
+
+    const double observer_input_n =
+        ge_clamp01d_local(0.35 * residual_n +
+                          0.35 * interference_n +
+                          0.15 * (1.0 - substrate_coherence_n) +
+                          0.15 * source_vibration_n);
+    const double source_memory_n =
+        ge_clamp01d_local(0.60 * recurrence_norm + 0.40 * source_vibration_n);
+    const double temporal_coupling_n =
+        ge_clamp01d_local(0.20 * tensor_norm +
+                          0.20 * packet_norm +
+                          0.18 * observer_archive_norm +
+                          0.14 * recurrence_norm +
+                          0.14 * substrate_coherence_n +
+                          0.14 * source_memory_n);
+
+    const double memory_blend =
+        ge_clamp01d_local(0.08 + 0.32 * source_memory_n + 0.18 * observer_input_n);
+
+    GeResearchPulseQuartet base_quartet{};
+    base_quartet.F = ge_lerpd_local(clamped_desired.F, center.F, memory_blend);
+    base_quartet.A = ge_lerpd_local(clamped_desired.A, center.A, memory_blend);
+    base_quartet.I = ge_lerpd_local(clamped_desired.I, center.I, memory_blend);
+    base_quartet.V = ge_lerpd_local(clamped_desired.V, center.V, memory_blend);
+
+    const double base_score =
+        ge_evaluate_research_metric_model(archive.run043_silicon_score_model, center, base_quartet);
+    const double base_trap =
+        ge_evaluate_research_metric_model(archive.run043_trap_ratio_model, center, base_quartet);
+    const double base_coherence =
+        ge_evaluate_research_metric_model(archive.run043_coherence_model, center, base_quartet);
+
+    const double score_gap =
+        std::max(0.0, archive.temporal_collapse_gates.gate_score - base_score);
+    const double coherence_gap =
+        std::max(0.0, archive.temporal_collapse_gates.gate_coherence - base_coherence);
+    const double trap_gap =
+        std::max(0.0, archive.temporal_collapse_gates.gate_trap - base_trap);
+
+    GeResearchPulseQuartet score_grad{};
+    GeResearchPulseQuartet trap_grad{};
+    GeResearchPulseQuartet coherence_grad{};
+    (void)ge_compute_research_metric_gradient(archive.run043_silicon_score_model, center, base_quartet, score_grad);
+    (void)ge_compute_research_metric_gradient(archive.run043_trap_ratio_model, center, base_quartet, trap_grad);
+    (void)ge_compute_research_metric_gradient(archive.run043_coherence_model, center, base_quartet, coherence_grad);
+
+    const double score_weight = 0.65 + 1.50 * score_gap;
+    const double coherence_weight = 0.45 + 1.50 * coherence_gap;
+    const double trap_weight = 0.35 + 1.25 * trap_gap;
+
+    GeResearchPulseQuartet utility_grad{};
+    utility_grad.F = score_weight * score_grad.F +
+                     coherence_weight * coherence_grad.F +
+                     trap_weight * trap_grad.F;
+    utility_grad.A = score_weight * score_grad.A +
+                     coherence_weight * coherence_grad.A +
+                     trap_weight * trap_grad.A;
+    utility_grad.I = score_weight * score_grad.I +
+                     coherence_weight * coherence_grad.I +
+                     trap_weight * trap_grad.I;
+    utility_grad.V = score_weight * score_grad.V +
+                     coherence_weight * coherence_grad.V +
+                     trap_weight * trap_grad.V;
+
+    const double correction_authority_n =
+        ge_clamp01d_local(0.12 +
+                          0.44 * observer_input_n +
+                          0.22 * ge_clamp01d_local((score_gap + coherence_gap + trap_gap) * 2.0) +
+                          0.22 * (1.0 - temporal_coupling_n));
+
+    GeResearchPulseQuartet corrected = base_quartet;
+    corrected.F += delta.F * correction_authority_n * ge_softsign_local(utility_grad.F * 24.0);
+    corrected.A += delta.A * correction_authority_n * ge_softsign_local(utility_grad.A * 18.0);
+    corrected.I += delta.I * correction_authority_n * ge_softsign_local(utility_grad.I * 16.0);
+    corrected.V += delta.V * correction_authority_n * ge_softsign_local(utility_grad.V * 16.0);
+
+    corrected.F = ge_clampd_local(corrected.F,
+                                  archive.pulse_window_min_quartet.F,
+                                  archive.pulse_window_max_quartet.F);
+    corrected.A = ge_clampd_local(corrected.A,
+                                  archive.pulse_window_min_quartet.A,
+                                  archive.pulse_window_max_quartet.A);
+    corrected.I = ge_clampd_local(corrected.I,
+                                  archive.pulse_window_min_quartet.I,
+                                  archive.pulse_window_max_quartet.I);
+    corrected.V = ge_clampd_local(corrected.V,
+                                  archive.pulse_window_min_quartet.V,
+                                  archive.pulse_window_max_quartet.V);
+
+    const double predicted_score =
+        ge_evaluate_research_metric_model(archive.run043_silicon_score_model, center, corrected);
+    const double predicted_trap =
+        ge_evaluate_research_metric_model(archive.run043_trap_ratio_model, center, corrected);
+    const double predicted_coherence =
+        ge_evaluate_research_metric_model(archive.run043_coherence_model, center, corrected);
+    const double predicted_inertia =
+        ge_evaluate_research_metric_model(archive.run043_inertia_model, center, corrected);
+    const double predicted_curvature =
+        ge_evaluate_research_metric_model(archive.run043_curvature_model, center, corrected);
+
+    const double score_alignment =
+        ge_clamp01d_local(predicted_score / std::max(archive.temporal_collapse_gates.gate_score, 1.0e-9));
+    const double trap_alignment =
+        ge_clamp01d_local(predicted_trap / std::max(archive.temporal_collapse_gates.gate_trap, 1.0e-9));
+    const double coherence_alignment =
+        ge_clamp01d_local(predicted_coherence / std::max(archive.temporal_collapse_gates.gate_coherence, 1.0e-9));
+    const double collapse_alignment =
+        ge_clamp01d_local((score_alignment + trap_alignment + coherence_alignment) / 3.0);
+
+    const double rmse_penalty =
+        ge_clamp01d_local(archive.run043_validation_error.silicon_score_rmse * 5000.0);
+    const double exactness_n =
+        ge_clamp01d_local(1.0 -
+                          ge_clamp01d_local(0.55 * rmse_penalty +
+                                            0.25 * observer_input_n +
+                                            0.20 * (1.0 - collapse_alignment)));
+    const double certainty_n =
+        ge_clamp01d_local(0.34 * exactness_n +
+                          0.24 * collapse_alignment +
+                          0.22 * temporal_coupling_n +
+                          0.20 * (1.0 - residual_n));
+
+    const uint32_t cadence_ticks_u32 =
+        (uint32_t)std::max<int32_t>(1,
+                                    std::min<int32_t>(
+                                        24,
+                                        (int32_t)std::lround(1.0 +
+                                                             (1.0 - correction_authority_n) * 12.0 +
+                                                             certainty_n * 6.0 +
+                                                             temporal_coupling_n * 6.0)));
+
+    out_guidance.valid = true;
+    out_guidance.correction_cadence_ticks_u32 = cadence_ticks_u32;
+    out_guidance.certainty_norm = certainty_n;
+    out_guidance.exactness_norm = exactness_n;
+    out_guidance.recurrence_norm = recurrence_norm;
+    out_guidance.tensor_gradient_norm = tensor_norm;
+    out_guidance.packet_coherence_norm = packet_norm;
+    out_guidance.observer_coupling_norm =
+        ge_clamp01d_local(0.65 * observer_archive_norm + 0.35 * observer_input_n);
+    out_guidance.temporal_coupling_norm = temporal_coupling_n;
+    out_guidance.source_memory_norm = source_memory_n;
+    out_guidance.correction_authority_norm = correction_authority_n;
+    out_guidance.predicted_silicon_score = predicted_score;
+    out_guidance.predicted_trap_ratio = predicted_trap;
+    out_guidance.predicted_coherence = predicted_coherence;
+    out_guidance.predicted_inertia = predicted_inertia;
+    out_guidance.predicted_curvature = predicted_curvature;
+    out_guidance.desired_quartet = clamped_desired;
+    out_guidance.corrected_quartet = corrected;
+    out_guidance.gradient_quartet = utility_grad;
+    return true;
+}
+
+struct GeResearchPredictionLatticeSample {
+    double interference_norm = 0.0;
+    double temporal_coupling_norm = 0.0;
+    double coherence_norm = 0.0;
+    double curvature_penalty_norm = 0.0;
+    double inertia_penalty_norm = 0.0;
+    uint32_t lattice_x_u32 = 0u;
+    uint32_t lattice_y_u32 = 0u;
+    uint32_t lattice_z_u32 = 0u;
+};
+
+static GeResearchPredictionLatticeSample ge_sample_research_prediction_lattice(
+    const GeResearchConfinementArchive& archive,
+    const GeResearchPulseQuartet& qmin,
+    const GeResearchPulseQuartet& qmax,
+    const GeResearchPulseQuartet& gpu_target,
+    const GeResearchPulseQuartet& quartet,
+    double substrate_coherence_n,
+    double source_vibration_n) {
+    GeResearchPredictionLatticeSample out{};
+    if (archive.tensor6d_cells.empty()) {
+        out.interference_norm = ge_clamp01d_local(0.45 * substrate_coherence_n + 0.55 * source_vibration_n);
+        out.temporal_coupling_norm = ge_clamp01d_local(0.50 * out.interference_norm + 0.50 * source_vibration_n);
+        out.coherence_norm = ge_clamp01d_local(substrate_coherence_n);
+        return out;
+    }
+
+    uint32_t max_x_u32 = 0u;
+    uint32_t max_y_u32 = 0u;
+    uint32_t max_z_u32 = 0u;
+    for (const GeResearchTensor6DCell& cell : archive.tensor6d_cells) {
+        if (cell.x_u32 > max_x_u32) max_x_u32 = cell.x_u32;
+        if (cell.y_u32 > max_y_u32) max_y_u32 = cell.y_u32;
+        if (cell.z_u32 > max_z_u32) max_z_u32 = cell.z_u32;
+    }
+
+    const double spanF = std::max(qmax.F - qmin.F, 1.0e-9);
+    const double spanA = std::max(qmax.A - qmin.A, 1.0e-9);
+    const double spanI = std::max(qmax.I - qmin.I, 1.0e-9);
+    const double spanV = std::max(qmax.V - qmin.V, 1.0e-9);
+
+    const double qF_n = ge_clamp01d_local((quartet.F - qmin.F) / spanF);
+    const double qA_n = ge_clamp01d_local((quartet.A - qmin.A) / spanA);
+    const double qI_n = ge_clamp01d_local((quartet.I - qmin.I) / spanI);
+    const double qV_n = ge_clamp01d_local((quartet.V - qmin.V) / spanV);
+    const double gF_n = ge_clamp01d_local((gpu_target.F - qmin.F) / spanF);
+    const double gA_n = ge_clamp01d_local((gpu_target.A - qmin.A) / spanA);
+    const double gI_n = ge_clamp01d_local((gpu_target.I - qmin.I) / spanI);
+    const double gV_n = ge_clamp01d_local((gpu_target.V - qmin.V) / spanV);
+
+    const double tx_n = ge_clamp01d_local(0.52 * qF_n + 0.24 * qA_n + 0.14 * gF_n + 0.10 * gA_n);
+    const double ty_n = ge_clamp01d_local(0.52 * qI_n + 0.24 * qV_n + 0.14 * gI_n + 0.10 * gV_n);
+    const double tz_n =
+        ge_clamp01d_local(0.20 * qF_n +
+                          0.18 * qA_n +
+                          0.18 * qI_n +
+                          0.18 * qV_n +
+                          0.14 * substrate_coherence_n +
+                          0.12 * source_vibration_n);
+
+    const double max_x = std::max(1.0, (double)max_x_u32);
+    const double max_y = std::max(1.0, (double)max_y_u32);
+    const double max_z = std::max(1.0, (double)max_z_u32);
+    const double target_x = tx_n * max_x;
+    const double target_y = ty_n * max_y;
+    const double target_z = tz_n * max_z;
+
+    out.lattice_x_u32 = (uint32_t)std::llround(target_x);
+    out.lattice_y_u32 = (uint32_t)std::llround(target_y);
+    out.lattice_z_u32 = (uint32_t)std::llround(target_z);
+
+    const size_t sample_stride = std::max<size_t>(1u, archive.tensor6d_cells.size() / 768u);
+    double accum_phase = 0.0;
+    double accum_flux = 0.0;
+    double accum_curvature = 0.0;
+    double accum_inertia = 0.0;
+    double accum_dynamics = 0.0;
+    double accum_spin = 0.0;
+    double total_weight = 0.0;
+
+    for (size_t i = 0u; i < archive.tensor6d_cells.size(); i += sample_stride) {
+        const GeResearchTensor6DCell& cell = archive.tensor6d_cells[i];
+        const double dx = ((double)cell.x_u32 - target_x) / (max_x + 1.0);
+        const double dy = ((double)cell.y_u32 - target_y) / (max_y + 1.0);
+        const double dz = ((double)cell.z_u32 - target_z) / (max_z + 1.0);
+        const double dist2 = dx * dx + dy * dy + dz * dz;
+        const double spatial_weight = 1.0 / (1.0 + 96.0 * dist2);
+        if (spatial_weight <= 0.01) continue;
+
+        const double phase_n = ge_clamp01d_local(cell.phase_coherence);
+        const double dynamics_n =
+            ge_norm_from_abs_local(ge_absd_local(cell.dtheta_dt) + 0.5 * ge_absd_local(cell.d2theta_dt2));
+        const double spin_n =
+            ge_norm_from_abs_local(ge_absd_local(cell.spin_x) +
+                                   ge_absd_local(cell.spin_y) +
+                                   ge_absd_local(cell.spin_z) +
+                                   ge_absd_local(cell.oam_twist));
+        const double weight = spatial_weight * (0.35 + 0.25 * phase_n + 0.20 * dynamics_n + 0.20 * spin_n);
+
+        accum_phase += weight * phase_n;
+        accum_flux += weight * ge_absd_local(cell.flux);
+        accum_curvature += weight * ge_absd_local(cell.curvature);
+        accum_inertia += weight * ge_absd_local(cell.inertia + cell.higgs_inertia);
+        accum_dynamics += weight * (ge_absd_local(cell.dtheta_dt) + 0.5 * ge_absd_local(cell.d2theta_dt2));
+        accum_spin += weight * (ge_absd_local(cell.spin_x) +
+                                ge_absd_local(cell.spin_y) +
+                                ge_absd_local(cell.spin_z) +
+                                ge_absd_local(cell.oam_twist));
+        total_weight += weight;
+    }
+
+    if (total_weight <= 1.0e-12) {
+        out.interference_norm = ge_clamp01d_local(0.45 * substrate_coherence_n + 0.55 * source_vibration_n);
+        out.temporal_coupling_norm = ge_clamp01d_local(0.50 * out.interference_norm + 0.50 * source_vibration_n);
+        out.coherence_norm = ge_clamp01d_local(substrate_coherence_n);
+        return out;
+    }
+
+    const double phase_n = ge_clamp01d_local(accum_phase / total_weight);
+    const double flux_n = ge_norm_from_abs_local(accum_flux / total_weight);
+    const double curvature_n = ge_norm_from_abs_local(accum_curvature / total_weight);
+    const double inertia_n = ge_norm_from_abs_local(accum_inertia / total_weight);
+    const double dynamics_n = ge_norm_from_abs_local(accum_dynamics / total_weight);
+    const double spin_n = ge_norm_from_abs_local(accum_spin / total_weight);
+
+    out.coherence_norm = phase_n;
+    out.curvature_penalty_norm = curvature_n;
+    out.inertia_penalty_norm = inertia_n;
+    out.interference_norm =
+        ge_clamp01d_local(0.26 * phase_n +
+                          0.22 * flux_n +
+                          0.18 * dynamics_n +
+                          0.12 * spin_n +
+                          0.12 * (1.0 - curvature_n) +
+                          0.10 * substrate_coherence_n);
+    out.temporal_coupling_norm =
+        ge_clamp01d_local(0.30 * out.interference_norm +
+                          0.22 * dynamics_n +
+                          0.16 * phase_n +
+                          0.12 * flux_n +
+                          0.10 * source_vibration_n +
+                          0.10 * substrate_coherence_n);
+    return out;
+}
+
+bool ge_build_research_gpu_interference_predictions(
+    const GeResearchConfinementArchive& archive,
+    const GeResearchPulseQuartet& desired_quartet,
+    double gpu_freq_norm_01,
+    double gpu_amp_norm_01,
+    double gpu_curr_norm_01,
+    double gpu_volt_norm_01,
+    double interference_norm_01,
+    double substrate_coherence_norm_01,
+    double source_vibration_norm_01,
+    uint32_t axis_resolution_u32,
+    GeResearchGpuAdaptiveCalibration& out_calibration,
+    std::vector<GeResearchInterferencePredictionCell>* out_predictions) {
+    out_calibration = GeResearchGpuAdaptiveCalibration{};
+    if (out_predictions) out_predictions->clear();
+    if (!ge_has_research_runtime_guidance(archive)) return false;
+
+    const uint32_t axis_resolution = std::max<uint32_t>(3u, std::min<uint32_t>(axis_resolution_u32, 9u));
+    const GeResearchPulseQuartet qmin = archive.pulse_window_min_quartet;
+    const GeResearchPulseQuartet qmax = archive.pulse_window_max_quartet;
+    const GeResearchPulseQuartet center = archive.run043_center_quartet;
+
+    GeResearchPulseQuartet desired = desired_quartet;
+    desired.F = ge_clampd_local(desired.F, qmin.F, qmax.F);
+    desired.A = ge_clampd_local(desired.A, qmin.A, qmax.A);
+    desired.I = ge_clampd_local(desired.I, qmin.I, qmax.I);
+    desired.V = ge_clampd_local(desired.V, qmin.V, qmax.V);
+
+    const double gpu_freq_n = ge_clamp01d_local(gpu_freq_norm_01);
+    const double gpu_amp_n = ge_clamp01d_local(gpu_amp_norm_01);
+    const double gpu_curr_n = ge_clamp01d_local(gpu_curr_norm_01);
+    const double gpu_volt_n = ge_clamp01d_local(gpu_volt_norm_01);
+    const double interference_n = ge_clamp01d_local(interference_norm_01);
+    const double substrate_coherence_n = ge_clamp01d_local(substrate_coherence_norm_01);
+    const double source_vibration_n = ge_clamp01d_local(source_vibration_norm_01);
+
+    const double tensor_norm = ge_compute_research_tensor_gradient_norm(archive);
+    const double packet_norm = ge_compute_research_packet_coherence_norm(archive);
+    const double observer_norm = ge_compute_research_observer_coupling_norm(archive);
+    const double recurrence_norm = ge_compute_research_recurrence_norm(archive);
+
+    GeResearchPulseQuartet gpu_observed{};
+    gpu_observed.F = ge_lerpd_local(center.F, gpu_freq_n, 0.70);
+    gpu_observed.A = ge_lerpd_local(center.A, gpu_amp_n, 0.70);
+    gpu_observed.I = ge_lerpd_local(center.I, gpu_curr_n, 0.70);
+    gpu_observed.V = ge_lerpd_local(center.V, gpu_volt_n, 0.70);
+    gpu_observed.F = ge_clampd_local(gpu_observed.F, qmin.F, qmax.F);
+    gpu_observed.A = ge_clampd_local(gpu_observed.A, qmin.A, qmax.A);
+    gpu_observed.I = ge_clampd_local(gpu_observed.I, qmin.I, qmax.I);
+    gpu_observed.V = ge_clampd_local(gpu_observed.V, qmin.V, qmax.V);
+
+    const double observed_bias =
+        ge_clamp01d_local(0.30 + 0.30 * interference_n + 0.20 * source_vibration_n + 0.20 * (1.0 - substrate_coherence_n));
+    GeResearchPulseQuartet gpu_target{};
+    gpu_target.F = ge_lerpd_local(desired.F, gpu_observed.F, observed_bias);
+    gpu_target.A = ge_lerpd_local(desired.A, gpu_observed.A, observed_bias);
+    gpu_target.I = ge_lerpd_local(desired.I, gpu_observed.I, observed_bias);
+    gpu_target.V = ge_lerpd_local(desired.V, gpu_observed.V, observed_bias);
+
+    if (out_predictions) {
+        const size_t reserve_count =
+            (size_t)axis_resolution * (size_t)axis_resolution * (size_t)axis_resolution * (size_t)axis_resolution;
+        out_predictions->reserve(reserve_count);
+    }
+
+    double best_objective = -1.0;
+    GeResearchInterferencePredictionCell best_cell{};
+    bool best_cell_valid = false;
+
+    const auto value_for_axis = [&](double lo, double hi, uint32_t idx) -> double {
+        if (axis_resolution <= 1u) return lo;
+        const double t = (double)idx / (double)(axis_resolution - 1u);
+        return ge_lerpd_local(lo, hi, t);
+    };
+
+    for (uint32_t fi = 0u; fi < axis_resolution; ++fi) {
+        for (uint32_t ai = 0u; ai < axis_resolution; ++ai) {
+            for (uint32_t ii = 0u; ii < axis_resolution; ++ii) {
+                for (uint32_t vi = 0u; vi < axis_resolution; ++vi) {
+                    GeResearchInterferencePredictionCell cell{};
+                    cell.quartet.F = value_for_axis(qmin.F, qmax.F, fi);
+                    cell.quartet.A = value_for_axis(qmin.A, qmax.A, ai);
+                    cell.quartet.I = value_for_axis(qmin.I, qmax.I, ii);
+                    cell.quartet.V = value_for_axis(qmin.V, qmax.V, vi);
+
+                    const GeResearchPredictionLatticeSample lattice_sample =
+                        ge_sample_research_prediction_lattice(archive,
+                                                              qmin,
+                                                              qmax,
+                                                              gpu_target,
+                                                              cell.quartet,
+                                                              substrate_coherence_n,
+                                                              source_vibration_n);
+
+                    cell.predicted_score =
+                        ge_evaluate_research_metric_model(archive.run043_silicon_score_model, center, cell.quartet);
+                    cell.predicted_trap_ratio =
+                        ge_evaluate_research_metric_model(archive.run043_trap_ratio_model, center, cell.quartet);
+                    cell.predicted_coherence =
+                        ge_evaluate_research_metric_model(archive.run043_coherence_model, center, cell.quartet);
+                    cell.predicted_inertia =
+                        ge_evaluate_research_metric_model(archive.run043_inertia_model, center, cell.quartet);
+                    cell.predicted_curvature =
+                        ge_evaluate_research_metric_model(archive.run043_curvature_model, center, cell.quartet);
+
+                    const double score_align =
+                        ge_clamp01d_local(cell.predicted_score /
+                                          std::max(archive.temporal_collapse_gates.gate_score, 1.0e-9));
+                    const double trap_align =
+                        ge_clamp01d_local(cell.predicted_trap_ratio /
+                                          std::max(archive.temporal_collapse_gates.gate_trap, 1.0e-9));
+                    const double coherence_align =
+                        ge_clamp01d_local(cell.predicted_coherence /
+                                          std::max(archive.temporal_collapse_gates.gate_coherence, 1.0e-9));
+                    const double curvature_penalty =
+                        ge_clamp01d_local(0.55 * ge_norm_from_abs_local(cell.predicted_curvature -
+                                                                        archive.run043_curvature_model.center_value) +
+                                          0.45 * lattice_sample.curvature_penalty_norm);
+                    const double inertia_penalty =
+                        ge_clamp01d_local(0.55 * ge_norm_from_abs_local(cell.predicted_inertia -
+                                                                        archive.run043_inertia_model.center_value) +
+                                          0.45 * lattice_sample.inertia_penalty_norm);
+
+                    const double gpu_dist = ge_quartet_distance_norm_local(cell.quartet, gpu_target, qmin, qmax);
+                    const double desired_dist = ge_quartet_distance_norm_local(cell.quartet, desired, qmin, qmax);
+                    cell.gpu_alignment_norm =
+                        ge_clamp01d_local(1.0 - (0.65 * gpu_dist + 0.35 * desired_dist));
+
+                    cell.lattice_interference_norm = lattice_sample.interference_norm;
+                    cell.lattice_temporal_coupling_norm = lattice_sample.temporal_coupling_norm;
+                    cell.lattice_x_u32 = lattice_sample.lattice_x_u32;
+                    cell.lattice_y_u32 = lattice_sample.lattice_y_u32;
+                    cell.lattice_z_u32 = lattice_sample.lattice_z_u32;
+
+                    cell.vector_coupling_norm =
+                        ge_clamp01d_local(0.16 * tensor_norm +
+                                          0.16 * packet_norm +
+                                          0.14 * observer_norm +
+                                          0.14 * recurrence_norm +
+                                          0.14 * cell.lattice_temporal_coupling_norm +
+                                          0.10 * cell.lattice_interference_norm +
+                                          0.08 * lattice_sample.coherence_norm +
+                                          0.04 * substrate_coherence_n +
+                                          0.04 * source_vibration_n);
+
+                    cell.predicted_interference_norm =
+                        ge_clamp01d_local(0.20 * cell.gpu_alignment_norm +
+                                          0.16 * coherence_align +
+                                          0.14 * score_align +
+                                          0.12 * trap_align +
+                                          0.14 * cell.vector_coupling_norm +
+                                          0.08 * interference_n +
+                                          0.08 * cell.lattice_interference_norm +
+                                          0.06 * cell.lattice_temporal_coupling_norm -
+                                          0.08 * curvature_penalty -
+                                          0.06 * inertia_penalty);
+                    cell.certainty_norm =
+                        ge_clamp01d_local(0.28 * cell.predicted_interference_norm +
+                                          0.20 * cell.gpu_alignment_norm +
+                                          0.18 * cell.vector_coupling_norm +
+                                          0.16 * coherence_align +
+                                          0.18 * cell.lattice_temporal_coupling_norm);
+
+                    uint64_t spectral_id = 0xC6A4A7935BD1E995ull;
+                    spectral_id = ge_mix_u64_local(spectral_id, (uint64_t)(fi + 1u));
+                    spectral_id = ge_mix_u64_local(spectral_id, (uint64_t)(ai + 1u) << 8u);
+                    spectral_id = ge_mix_u64_local(spectral_id, (uint64_t)(ii + 1u) << 16u);
+                    spectral_id = ge_mix_u64_local(spectral_id, (uint64_t)(vi + 1u) << 24u);
+                    spectral_id = ge_mix_u64_local(spectral_id, (uint64_t)cell.lattice_x_u32 << 32u);
+                    spectral_id = ge_mix_u64_local(spectral_id, (uint64_t)cell.lattice_y_u32 << 16u);
+                    spectral_id = ge_mix_u64_local(spectral_id, (uint64_t)cell.lattice_z_u32);
+                    spectral_id = ge_mix_u64_local(spectral_id,
+                                                   (uint64_t)std::llround(cell.predicted_interference_norm * 1000000.0));
+                    spectral_id = ge_mix_u64_local(spectral_id,
+                                                   (uint64_t)std::llround(cell.vector_coupling_norm * 1000000.0));
+                    cell.trajectory_spectral_id_u64 = spectral_id;
+
+                    const double objective =
+                        0.34 * cell.predicted_interference_norm +
+                        0.20 * cell.gpu_alignment_norm +
+                        0.16 * cell.vector_coupling_norm +
+                        0.14 * cell.certainty_norm +
+                        0.08 * cell.lattice_interference_norm +
+                        0.08 * cell.lattice_temporal_coupling_norm;
+
+                    if (!best_cell_valid || objective > best_objective) {
+                        best_objective = objective;
+                        best_cell = cell;
+                        best_cell_valid = true;
+                    }
+
+                    if (out_predictions) out_predictions->push_back(cell);
+                }
+            }
+        }
+    }
+
+    if (!best_cell_valid) return false;
+
+    const double adaptation_blend =
+        ge_clamp01d_local(0.14 +
+                          0.28 * best_cell.certainty_norm +
+                          0.20 * best_cell.lattice_temporal_coupling_norm +
+                          0.20 * interference_n +
+                          0.18 * source_vibration_n);
+    GeResearchPulseQuartet adapted{};
+    adapted.F = ge_lerpd_local(desired.F, best_cell.quartet.F, adaptation_blend);
+    adapted.A = ge_lerpd_local(desired.A, best_cell.quartet.A, adaptation_blend);
+    adapted.I = ge_lerpd_local(desired.I, best_cell.quartet.I, adaptation_blend);
+    adapted.V = ge_lerpd_local(desired.V, best_cell.quartet.V, adaptation_blend);
+    adapted.F = ge_clampd_local(adapted.F, qmin.F, qmax.F);
+    adapted.A = ge_clampd_local(adapted.A, qmin.A, qmax.A);
+    adapted.I = ge_clampd_local(adapted.I, qmin.I, qmax.I);
+    adapted.V = ge_clampd_local(adapted.V, qmin.V, qmax.V);
+
+    const double next_pulse_correction_n =
+        ge_clamp01d_local(0.18 +
+                          0.28 * best_cell.predicted_interference_norm +
+                          0.24 * best_cell.lattice_temporal_coupling_norm +
+                          0.16 * interference_n +
+                          0.14 * source_vibration_n);
+    GeResearchPulseQuartet next_pulse{};
+    next_pulse.F = ge_clampd_local(
+        ge_lerpd_local(desired.F,
+                       0.54 * best_cell.quartet.F + 0.28 * gpu_target.F + 0.18 * center.F,
+                       next_pulse_correction_n),
+        qmin.F, qmax.F);
+    next_pulse.A = ge_clampd_local(
+        ge_lerpd_local(desired.A,
+                       0.54 * best_cell.quartet.A + 0.28 * gpu_target.A + 0.18 * center.A,
+                       next_pulse_correction_n),
+        qmin.A, qmax.A);
+    next_pulse.I = ge_clampd_local(
+        ge_lerpd_local(desired.I,
+                       0.54 * best_cell.quartet.I + 0.28 * gpu_target.I + 0.18 * center.I,
+                       next_pulse_correction_n),
+        qmin.I, qmax.I);
+    next_pulse.V = ge_clampd_local(
+        ge_lerpd_local(desired.V,
+                       0.54 * best_cell.quartet.V + 0.28 * gpu_target.V + 0.18 * center.V,
+                       next_pulse_correction_n),
+        qmin.V, qmax.V);
+
+    out_calibration.valid = true;
+    out_calibration.axis_resolution_u32 = axis_resolution;
+    out_calibration.prediction_count_u32 =
+        axis_resolution * axis_resolution * axis_resolution * axis_resolution;
+    out_calibration.observed_gpu_freq_norm = gpu_freq_n;
+    out_calibration.observed_gpu_amp_norm = gpu_amp_n;
+    out_calibration.observed_gpu_curr_norm = gpu_curr_n;
+    out_calibration.observed_gpu_volt_norm = gpu_volt_n;
+    out_calibration.observed_interference_norm = interference_n;
+    out_calibration.observed_coherence_norm = substrate_coherence_n;
+    out_calibration.observed_source_vibration_norm = source_vibration_n;
+    out_calibration.tensor_gradient_norm = tensor_norm;
+    out_calibration.packet_coherence_norm = packet_norm;
+    out_calibration.observer_coupling_norm = observer_norm;
+    out_calibration.recurrence_norm = recurrence_norm;
+    out_calibration.prediction_confidence_norm = best_cell.certainty_norm;
+    out_calibration.best_gpu_alignment_norm = best_cell.gpu_alignment_norm;
+    out_calibration.best_vector_coupling_norm = best_cell.vector_coupling_norm;
+    out_calibration.best_interference_norm = best_cell.predicted_interference_norm;
+    out_calibration.best_lattice_interference_norm = best_cell.lattice_interference_norm;
+    out_calibration.best_temporal_coupling_norm = best_cell.lattice_temporal_coupling_norm;
+    out_calibration.next_pulse_correction_norm = next_pulse_correction_n;
+    out_calibration.best_silicon_score = best_cell.predicted_score;
+    out_calibration.best_trap_ratio = best_cell.predicted_trap_ratio;
+    out_calibration.best_coherence = best_cell.predicted_coherence;
+    out_calibration.best_inertia = best_cell.predicted_inertia;
+    out_calibration.best_curvature = best_cell.predicted_curvature;
+    out_calibration.gpu_observed_quartet = gpu_observed;
+    out_calibration.best_quartet = best_cell.quartet;
+    out_calibration.adapted_quartet = adapted;
+    out_calibration.next_pulse_quartet = next_pulse;
+    out_calibration.best_lattice_x_u32 = best_cell.lattice_x_u32;
+    out_calibration.best_lattice_y_u32 = best_cell.lattice_y_u32;
+    out_calibration.best_lattice_z_u32 = best_cell.lattice_z_u32;
+    out_calibration.best_trajectory_spectral_id_u64 = best_cell.trajectory_spectral_id_u64;
+    return true;
+}
+
+bool ge_build_research_live_compute_plan(
+    const GeResearchConfinementArchive& archive,
+    const GeResearchGpuAdaptiveCalibration& calibration,
+    const GeResearchRuntimeGuidance& guidance,
+    GeResearchLiveComputePlan& out_plan) {
+    out_plan = GeResearchLiveComputePlan{};
+    if (!ge_has_research_runtime_guidance(archive)) return false;
+    if (!calibration.valid || !guidance.valid) return false;
+
+    const double score_align =
+        ge_clamp01d_local(calibration.best_silicon_score /
+                          std::max(archive.temporal_collapse_gates.gate_score, 1.0e-9));
+    const double trap_align =
+        ge_clamp01d_local(calibration.best_trap_ratio /
+                          std::max(archive.temporal_collapse_gates.gate_trap, 1.0e-9));
+    const double coherence_align =
+        ge_clamp01d_local(calibration.best_coherence /
+                          std::max(archive.temporal_collapse_gates.gate_coherence, 1.0e-9));
+    const double readiness =
+        ge_clamp01d_local(0.22 * calibration.prediction_confidence_norm +
+                          0.18 * calibration.best_gpu_alignment_norm +
+                          0.14 * calibration.best_interference_norm +
+                          0.14 * guidance.certainty_norm +
+                          0.10 * guidance.exactness_norm +
+                          0.08 * score_align +
+                          0.07 * trap_align +
+                          0.07 * coherence_align);
+
+    const double extrapolation_norm =
+        ge_clamp01d_local(0.42 * calibration.best_vector_coupling_norm +
+                          0.24 * guidance.recurrence_norm +
+                          0.18 * guidance.tensor_gradient_norm +
+                          0.16 * guidance.source_memory_norm);
+    const double ledger_norm =
+        ge_clamp01d_local(0.50 * calibration.best_interference_norm +
+                          0.30 * guidance.temporal_coupling_norm +
+                          0.20 * guidance.observer_coupling_norm);
+
+    const double compute_blend =
+        ge_clamp01d_local(0.24 + 0.46 * readiness + 0.30 * extrapolation_norm);
+    GeResearchPulseQuartet compute{};
+    compute.F = ge_lerpd_local(guidance.corrected_quartet.F, calibration.adapted_quartet.F, compute_blend);
+    compute.A = ge_lerpd_local(guidance.corrected_quartet.A, calibration.adapted_quartet.A, compute_blend);
+    compute.I = ge_lerpd_local(guidance.corrected_quartet.I, calibration.adapted_quartet.I, compute_blend);
+    compute.V = ge_lerpd_local(guidance.corrected_quartet.V, calibration.adapted_quartet.V, compute_blend);
+    compute.F = ge_clampd_local(compute.F, archive.pulse_window_min_quartet.F, archive.pulse_window_max_quartet.F);
+    compute.A = ge_clampd_local(compute.A, archive.pulse_window_min_quartet.A, archive.pulse_window_max_quartet.A);
+    compute.I = ge_clampd_local(compute.I, archive.pulse_window_min_quartet.I, archive.pulse_window_max_quartet.I);
+    compute.V = ge_clampd_local(compute.V, archive.pulse_window_min_quartet.V, archive.pulse_window_max_quartet.V);
+
+    out_plan.valid = true;
+    out_plan.ready = (readiness >= 0.72);
+    out_plan.readiness_norm = readiness;
+    out_plan.interference_ledger_norm = ledger_norm;
+    out_plan.encoded_extrapolation_norm = extrapolation_norm;
+    out_plan.score_alignment_norm = score_align;
+    out_plan.trap_alignment_norm = trap_align;
+    out_plan.coherence_alignment_norm = coherence_align;
+    out_plan.compute_quartet = compute;
+    out_plan.trajectory_spectral_id_u64 = calibration.best_trajectory_spectral_id_u64;
+    return true;
 }
 
 uint32_t ge_particle_class_rgba8(GeResearchParticleClass particle_class) {

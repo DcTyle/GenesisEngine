@@ -499,12 +499,18 @@ public:
     // Telemetry (updated once per canonical tick).
     uint32_t pulses_seen_last_tick_u32 = 0u;
     uint32_t pulses_dropped_last_tick_u32 = 0u;
+    EwProcessSubstrateTelemetry process_substrate_telemetry;
+    EwAiSubstrateTelemetry ai_substrate_telemetry;
+    EwAiDataSubstrateTelemetry ai_data_substrate_telemetry;
 
     // XR eye pose observation ingress.
     void submit_xr_eye_pose_f32(uint32_t eye_index_u32, const float pos_xyz_f32[3], const float rot_xyzw_f32[4], uint64_t tick_u64);
 
     // XR per-eye projected view packet.
     bool get_render_xr_eye_packet(uint32_t eye_index_u32, EwRenderXrEyePacket* out) const;
+    bool get_process_substrate_telemetry(EwProcessSubstrateTelemetry* out) const;
+    bool get_ai_substrate_telemetry(EwAiSubstrateTelemetry* out) const;
+    bool get_ai_data_substrate_telemetry(EwAiDataSubstrateTelemetry* out) const;
 
     // -----------------------------------------------------------------
     // Pending compute-bus requests (hard no-direct-compute rule)
@@ -1215,6 +1221,8 @@ std::deque<std::string> ui_out_q;
     // Stored inside the substrate so phase operators can emit inspector artifacts
     // without relying on a filesystem reader.
     std::string last_observation_text;
+    uint64_t observation_seq_u64 = 0u;
+    uint64_t ai_last_command_observation_seq_u64 = 0u;
 
     // Last hydration receipt (observable). Hydration is a deterministic
     // projection step from inspector fields into functioning files.

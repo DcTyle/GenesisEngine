@@ -1,0 +1,92 @@
+{
+  "simulation": {
+    "date": "2026-03-31",
+    "start_local": "2026-03-31T09:00:00 America/Anchorage",
+    "end_local": "2026-03-31T09:00:01 America/Anchorage",
+    "configured_end_hour": 17,
+    "ticks_per_second": 360,
+    "simulated_seconds": 1,
+    "simulated_ticks": 360,
+    "anchors": 128,
+    "wall_elapsed_seconds": 9.175926
+  },
+  "health": {
+    "watchdog_fault_count": 0,
+    "guidance_build_fail_count": 0,
+    "guidance_out_of_window_count": 0,
+    "next_pulse_out_of_window_count": 0,
+    "live_compute_toggle_count": 1,
+    "live_compute_active_seconds": 1,
+    "live_compute_active_fraction": 1.000000,
+    "live_compute_activation_tick": 0
+  },
+  "aggregates": {
+    "max_residual_norm": 0.000000,
+    "max_interference_norm": 0.000000,
+    "max_source_vibration_norm": 0.000000,
+    "max_controller_authority_norm": 0.000000,
+    "max_calibration_authority_norm": 0.000000,
+    "max_lattice_interference_norm": 0.165113,
+    "max_lattice_temporal_coupling_norm": 0.074159,
+    "max_prediction_confidence_norm": 0.698851,
+    "min_readiness_norm": 0.854949,
+    "max_readiness_norm": 0.854949,
+    "mean_readiness_norm": 0.854949,
+    "max_ai_confidence_norm": 0.000000,
+    "max_pending_external_api": 8,
+    "max_inflight_external_api": 0,
+    "max_ai_command_count": 0,
+    "max_ai_action_log_count": 360,
+    "max_ai_data_pending_external_api": 8,
+    "max_ai_data_inflight_external_api": 0
+  },
+  "final_state": {
+    "desired_quartet": {"F": 0.247594, "A": 0.190719, "I": 0.343651, "V": 0.346609},
+    "emitted_quartet": {"F": 0.247659, "A": 0.190511, "I": 0.335617, "V": 0.343694},
+    "guidance": {
+      "valid": 1,
+      "certainty_norm": 0.853871,
+      "exactness_norm": 0.886392,
+      "temporal_coupling_norm": 0.511468,
+      "predicted_silicon_score": 0.713543,
+      "predicted_coherence": 0.996890
+    },
+    "gpu_calibration": {
+      "valid": 1,
+      "prediction_confidence_norm": 0.698851,
+      "best_interference_norm": 0.705344,
+      "best_lattice_interference_norm": 0.358835,
+      "best_temporal_coupling_norm": 0.278637,
+      "next_pulse_correction_norm": 0.458787,
+      "best_trajectory_spectral_id": 14953137065305640528
+    },
+    "live_compute": {
+      "valid": 1,
+      "ready": 1,
+      "readiness_norm": 0.854949,
+      "interference_ledger_norm": 0.572521,
+      "encoded_extrapolation_norm": 0.527755,
+      "trajectory_spectral_id": 14953137065305640528
+    }
+  },
+  "timeline": [
+    {
+      "label": "2026-03-31T09:00:01 America/Anchorage",
+      "tick": 360,
+      "desired": {"F": 0.247594, "A": 0.190719, "I": 0.343651, "V": 0.346609},
+      "emitted": {"F": 0.247659, "A": 0.190511, "I": 0.335617, "V": 0.343694},
+      "readiness_norm": 0.854949,
+      "certainty_norm": 0.853871,
+      "residual_norm": 0.000000,
+      "interference_norm": 0.000000,
+      "source_vibration_norm": 0.000000,
+      "lattice_interference_norm": 0.165113,
+      "lattice_temporal_coupling_norm": 0.074159,
+      "ai_confidence_norm": 0.000000,
+      "pending_external_api": 8,
+      "inflight_external_api": 0,
+      "live_compute_active": 1,
+      "watchdog_fault": 0
+    }
+  ]
+}

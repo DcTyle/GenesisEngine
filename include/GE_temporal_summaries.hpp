@@ -37,3 +37,167 @@ struct EwResidualSummary {
     uint8_t residual_band_u8 = 0;
     uint8_t residual_pending_u8 = 0;
 };
+
+struct EwCalculusSummary {
+    // Bounded discrete calculus lanes derived from committed tick-to-tick error.
+    int64_t error_q32_32 = 0;
+    int64_t error_delta_q32_32 = 0;
+    int64_t error_integral_q32_32 = 0;
+
+    uint16_t error_norm_q15 = 0;
+    uint16_t error_delta_norm_q15 = 0;
+    uint16_t error_integral_norm_q15 = 0;
+    uint16_t controller_authority_q15 = 0;
+
+    uint8_t controller_hold_u8 = 0;
+    uint8_t last_commit_u8 = 0;
+    uint16_t pad0 = 0;
+};
+
+struct EwFrequencyInterferenceCalibrationSummary {
+    int64_t calibration_error_q32_32 = 0;
+    int64_t calibration_delta_q32_32 = 0;
+    int64_t calibration_integral_q32_32 = 0;
+
+    uint16_t gpu_freq_norm_q15 = 0;
+    uint16_t gpu_amp_norm_q15 = 0;
+    uint16_t gpu_volt_norm_q15 = 0;
+    uint16_t interference_norm_q15 = 0;
+
+    uint16_t coherence_norm_q15 = 0;
+    uint16_t observer_norm_q15 = 0;
+    uint16_t source_vibration_q15 = 0;
+    uint16_t calibration_authority_q15 = 0;
+
+    uint16_t interference_band_q15[8] = {0,0,0,0,0,0,0,0};
+    uint16_t coherence_band_q15[8] = {0,0,0,0,0,0,0,0};
+};
+
+struct EwProcessSubstrateTelemetry {
+    uint32_t valid_u32 = 0;
+    uint32_t spectral_anchor_id_u32 = 0;
+    uint32_t coherence_anchor_id_u32 = 0;
+    uint32_t fanout_budget_u32 = 0;
+
+    uint64_t tick_u64 = 0;
+
+    int64_t dt_scale_q32_32 = 0;
+    int64_t viscosity_bias_q32_32 = 0;
+    int64_t error_q32_32 = 0;
+    int64_t error_delta_q32_32 = 0;
+    int64_t error_integral_q32_32 = 0;
+    int64_t calibration_error_q32_32 = 0;
+    int64_t calibration_delta_q32_32 = 0;
+    int64_t calibration_integral_q32_32 = 0;
+
+    uint16_t intent_norm_q15 = 0;
+    uint16_t energy_mean_q15 = 0;
+    uint16_t energy_peak_q15 = 0;
+    uint16_t leakage_abs_q15 = 0;
+
+    uint16_t residual_norm_q15 = 0;
+    uint16_t error_delta_norm_q15 = 0;
+    uint16_t error_integral_norm_q15 = 0;
+    uint16_t controller_authority_q15 = 0;
+    uint16_t gpu_freq_norm_q15 = 0;
+    uint16_t gpu_amp_norm_q15 = 0;
+    uint16_t gpu_volt_norm_q15 = 0;
+    uint16_t interference_norm_q15 = 0;
+    uint16_t coherence_norm_q15 = 0;
+    uint16_t observer_norm_q15 = 0;
+    uint16_t source_vibration_q15 = 0;
+    uint16_t calibration_authority_q15 = 0;
+
+    uint16_t op_gain_q15 = 0;
+    uint16_t op_phase_bias_q15 = 0;
+    uint16_t learning_coupling_q15 = 0;
+    uint16_t phys_coherence_q15 = 0;
+    uint16_t learning_coherence_q15 = 0;
+    uint16_t temporal_coherence_q15 = 0;
+
+    uint16_t last_v_code_u16 = 0;
+    uint16_t last_i_code_u16 = 0;
+    uint8_t residual_pending_u8 = 0;
+    uint8_t hold_tick_u8 = 0;
+    uint8_t last_commit_u8 = 0;
+    uint8_t pad1 = 0;
+};
+
+struct EwAiSubstrateTelemetry {
+    uint32_t valid_u32 = 0;
+    uint32_t class_id_u32 = 0;
+    uint32_t command_count_u32 = 0;
+    uint32_t action_log_count_u32 = 0;
+
+    uint64_t tick_u64 = 0;
+    uint64_t sig9_u64 = 0;
+    uint64_t observation_seq_u64 = 0;
+    uint64_t dispatched_observation_seq_u64 = 0;
+
+    int64_t confidence_q32_32 = 0;
+    int64_t attractor_strength_q32_32 = 0;
+    int64_t carrier_pulse_q63 = 0;
+    int64_t carrier_total_weight_q63 = 0;
+
+    uint32_t pending_external_api_u32 = 0;
+    uint32_t inflight_external_api_u32 = 0;
+    uint32_t fanout_budget_u32 = 0;
+    uint32_t ui_chat_count_u32 = 0;
+
+    uint16_t anticipation_flags_u16 = 0;
+    uint16_t controller_authority_q15 = 0;
+    uint16_t op_gain_q15 = 0;
+    uint16_t op_phase_bias_q15 = 0;
+
+    uint16_t carrier_band_q15[8] = {0,0,0,0,0,0,0,0};
+
+    uint16_t last_action_kind_u16 = 0;
+    uint16_t last_action_profile_u16 = 0;
+    uint32_t last_target_anchor_id_u32 = 0;
+    int32_t last_f_code_i32 = 0;
+    uint16_t last_a_code_u16 = 0;
+    uint16_t last_v_code_u16 = 0;
+    uint16_t last_i_code_u16 = 0;
+};
+
+struct EwAiDataSubstrateTelemetry {
+    uint32_t valid_u32 = 0;
+    uint64_t tick_u64 = 0;
+
+    uint32_t corpus_artifact_count_u32 = 0;
+    uint32_t corpus_text_artifact_count_u32 = 0;
+    uint32_t manifest_record_count_u32 = 0;
+    uint32_t pending_metric_count_u32 = 0;
+    uint32_t completed_metric_count_u32 = 0;
+    uint32_t accepted_metric_count_u32 = 0;
+
+    uint32_t language_word_count_u32 = 0;
+    uint32_t language_pron_count_u32 = 0;
+    uint32_t language_relation_count_u32 = 0;
+    uint32_t language_concept_count_u32 = 0;
+    uint32_t language_speech_utt_count_u32 = 0;
+    uint32_t language_speech_word_tokens_u32 = 0;
+
+    uint32_t math_pemdas_cases_total_u32 = 0;
+    uint32_t math_pemdas_cases_passed_u32 = 0;
+    uint32_t math_graph_packets_emitted_u32 = 0;
+    uint32_t math_khan_pages_seen_u32 = 0;
+    uint32_t math_khan_chars_ingested_u32 = 0;
+
+    uint32_t pending_external_api_u32 = 0;
+    uint32_t inflight_external_api_u32 = 0;
+
+    int64_t error_q32_32 = 0;
+    int64_t error_delta_q32_32 = 0;
+    int64_t error_integral_q32_32 = 0;
+
+    uint16_t intent_norm_q15 = 0;
+    uint16_t measured_norm_q15 = 0;
+    uint16_t residual_norm_q15 = 0;
+    uint16_t error_delta_norm_q15 = 0;
+    uint16_t error_integral_norm_q15 = 0;
+    uint16_t controller_authority_q15 = 0;
+
+    uint16_t intent_band_q15[8] = {0,0,0,0,0,0,0,0};
+    uint16_t measured_band_q15[8] = {0,0,0,0,0,0,0,0};
+};

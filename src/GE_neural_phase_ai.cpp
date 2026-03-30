@@ -122,75 +122,74 @@ int64_t EwNeuralPhaseAI::confidence_from_state(const SubstrateManager* sm) {
 void EwNeuralPhaseAI::pre_tick(SubstrateManager* sm) {
     if (!sm) return;
 
+    auto starts_with_ascii = [&](const char* prefix)->bool {
+        if (!prefix) return false;
+        size_t n = 0;
+        while (prefix[n] != 0) ++n;
+        if (sm->last_observation_text.size() < n) return false;
+        for (size_t i = 0; i < n; ++i) {
+            if (sm->last_observation_text[i] != prefix[i]) return false;
+        }
+        return true;
+    };
+
+    auto submit_ops_once = [&](const EwAiOpcodeU16* ops, uint32_t count_u32) {
+        if (!ops || count_u32 == 0u) return;
+        if (sm->observation_seq_u64 != 0u &&
+            sm->ai_last_command_observation_seq_u64 == sm->observation_seq_u64) {
+            return;
+        }
+        EwAiCommand cmds[EW_AI_COMMAND_MAX]{};
+        uint32_t n = (count_u32 > EW_AI_COMMAND_MAX) ? EW_AI_COMMAND_MAX : count_u32;
+        uint16_t prio = 10u;
+        for (uint32_t i = 0; i < n; ++i) {
+            cmds[i].opcode_u16 = (uint16_t)ops[i];
+            cmds[i].priority_u16 = prio;
+            cmds[i].weight_q63 = (int64_t)(INT64_MAX / (1LL << (i + 1u)));
+            if (prio > 1u) --prio;
+        }
+        sm->submit_ai_commands_fixed(cmds, n);
+        sm->ai_last_command_observation_seq_u64 = sm->observation_seq_u64;
+    };
+
+    static const EwAiOpcodeU16 kQueryOps[] = {
+        EW_AI_OP_TASK_SELECT,
+        EW_AI_OP_IO_READ,
+        EW_AI_OP_RENDER_UPDATE
+    };
+    static const EwAiOpcodeU16 kFetchOps[] = {
+        EW_AI_OP_TASK_SELECT,
+        EW_AI_OP_ROUTE,
+        EW_AI_OP_FETCH,
+        EW_AI_OP_RENDER_UPDATE
+    };
+    static const EwAiOpcodeU16 kStoreOps[] = {
+        EW_AI_OP_TASK_SELECT,
+        EW_AI_OP_STORE
+    };
+    static const EwAiOpcodeU16 kConfigOps[] = {
+        EW_AI_OP_TASK_SELECT,
+        EW_AI_OP_PRIORITY_HINT,
+        EW_AI_OP_RENDER_UPDATE
+    };
+
     // ---------------------------------------------------------------------
-    //  AI Interface Layer: command submission for bounded code emission
+    //  AI Interface Layer: bounded command admission into the substrate
     // ---------------------------------------------------------------------
-    // If the latest observation line begins with "CODEGEN:", we submit a bounded
-    // command list (BE/BF). The actual code emission occurs during kernel-side
-    // decompression inside the substrate microprocessor tick.
-    const std::string prefix = "CODEGEN:";
-    if (sm->last_observation_text.size() >= prefix.size()) {
-        bool match = true;
-        for (size_t i = 0; i < prefix.size(); ++i) {
-            if (sm->last_observation_text[i] != prefix[i]) { match = false; break; }
-        }
-        if (match) {
-            EwAiCommand cmds[EW_AI_COMMAND_MAX]{};
-            // TASK_SELECT biases the substrate toward performing the bounded task.
-            cmds[0].opcode_u16 = (uint16_t)EW_AI_OP_TASK_SELECT;
-            cmds[0].priority_u16 = 10;
-            cmds[0].weight_q63 = (int64_t)(INT64_MAX / 2);
-            // STORE requests committing the resulting artifact into inspector fields.
-            cmds[1].opcode_u16 = (uint16_t)EW_AI_OP_STORE;
-            cmds[1].priority_u16 = 9;
-            cmds[1].weight_q63 = (int64_t)(INT64_MAX / 4);
-
-            sm->submit_ai_commands_fixed(cmds, 2);
-        }
-    }
-
-    // If the latest observation line begins with "SYNTHCODE:", we route it
-    // through the same deterministic task surface. The synthesizer writes
-    // only coherence-gated artifacts into inspector fields.
-    const std::string sprefix = "SYNTHCODE:";
-    if (sm->last_observation_text.size() >= sprefix.size()) {
-        bool smatch = true;
-        for (size_t i = 0; i < sprefix.size(); ++i) {
-            if (sm->last_observation_text[i] != sprefix[i]) { smatch = false; break; }
-        }
-        if (smatch) {
-            EwAiCommand cmdsS[EW_AI_COMMAND_MAX]{};
-            cmdsS[0].opcode_u16 = (uint16_t)EW_AI_OP_TASK_SELECT;
-            cmdsS[0].priority_u16 = 10;
-            cmdsS[0].weight_q63 = (int64_t)(INT64_MAX / 2);
-            cmdsS[1].opcode_u16 = (uint16_t)EW_AI_OP_STORE;
-            cmdsS[1].priority_u16 = 9;
-            cmdsS[1].weight_q63 = (int64_t)(INT64_MAX / 4);
-            sm->submit_ai_commands_fixed(cmdsS, 2);
-        }
-    }
-
-    // If the latest observation line begins with "QUERY:", we submit a bounded
-    // command list. The query executes inside the substrate microprocessor tick.
-    const std::string qprefix = "QUERY:";
-    if (sm->last_observation_text.size() >= qprefix.size()) {
-        bool qmatch = true;
-        for (size_t i = 0; i < qprefix.size(); ++i) {
-            if (sm->last_observation_text[i] != qprefix[i]) { qmatch = false; break; }
-        }
-        if (qmatch) {
-            EwAiCommand cmds2[EW_AI_COMMAND_MAX]{};
-            cmds2[0].opcode_u16 = (uint16_t)EW_AI_OP_TASK_SELECT;
-            cmds2[0].priority_u16 = 10;
-            cmds2[0].weight_q63 = (int64_t)(INT64_MAX / 2);
-            cmds2[1].opcode_u16 = (uint16_t)EW_AI_OP_IO_READ;
-            cmds2[1].priority_u16 = 9;
-            cmds2[1].weight_q63 = (int64_t)(INT64_MAX / 4);
-            cmds2[2].opcode_u16 = (uint16_t)EW_AI_OP_RENDER_UPDATE;
-            cmds2[2].priority_u16 = 8;
-            cmds2[2].weight_q63 = (int64_t)(INT64_MAX / 8);
-            sm->submit_ai_commands_fixed(cmds2, 3);
-        }
+    // Command vectors are one-shot per observed line. This prevents repeated
+    // network scheduling when a command-bearing observation remains resident.
+    if (starts_with_ascii("QUERY:") || starts_with_ascii("ANSWER:")) {
+        submit_ops_once(kQueryOps, 3u);
+    } else if (starts_with_ascii("WEBSEARCH:") || starts_with_ascii("SEARCH:") ||
+               starts_with_ascii("WEBFETCH:") ||
+               starts_with_ascii("OPEN:") || starts_with_ascii("OPEN_RESULT:")) {
+        submit_ops_once(kFetchOps, 4u);
+    } else if (starts_with_ascii("WEBSEARCH_CFG:")) {
+        submit_ops_once(kConfigOps, 3u);
+    } else if (starts_with_ascii("CODEGEN:") || starts_with_ascii("SYNTHCODE:") ||
+               starts_with_ascii("CODEEDIT:") || starts_with_ascii("PATCH:") ||
+               starts_with_ascii("HYDRATE:") || starts_with_ascii("GAMEBOOT:")) {
+        submit_ops_once(kStoreOps, 2u);
     }
 
     // --- Policy-driven operator selection (Spec/Blueprint) ---

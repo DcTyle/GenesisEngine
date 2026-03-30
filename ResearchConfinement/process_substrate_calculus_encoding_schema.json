@@ -1,0 +1,301 @@
+{
+  "schema_name": "process_substrate_calculus_encoding_v1",
+  "source_basis": "GenesisSubstrate_eq.md",
+  "canonical_blueprints": [
+    "GenesisSubstrate_eq.md",
+    "GenesisengineSpec.md",
+    "GenesisEngineBlueprint.md"
+  ],
+  "purpose": "Bind canonical substrate evolution, kernel-process simulation, feedback control, and adapter APIs into one deterministic process substrate contract.",
+  "canonical_operator_pipeline": {
+    "current_state_binding": "EwState",
+    "inputs_binding": "EwInputs",
+    "ctx_binding": "EwCtx",
+    "candidate_next_state_operator": "evolve_state(current_state, inputs, ctx)",
+    "ledger_delta_operator": "compute_ledger_delta(current_state, candidate_next_state, ctx)",
+    "accept_operator": "accept_state(current_state, candidate_next_state, ledger_delta, ctx)",
+    "sink_operator": "make_sink_state(current_state, ctx)",
+    "commit_operator": "commit_state(next_state)"
+  },
+  "runtime_bindings": {
+    "canonical_state_header": "include/GE_runtime.hpp",
+    "canonical_operator_header": "include/GE_operator_registry.hpp",
+    "canonical_operator_impl": "src/GE_operator_registry.cpp",
+    "tick_commit_path": "src/GE_runtime.cpp",
+    "spectral_microprocessor": "src/GE_fourier_fanout.cpp",
+    "coherence_feedback": "src/GE_coherence_bus.cpp",
+    "voxel_boundary_coupling": "src/GE_voxel_coupling.cpp",
+    "temporal_summaries": "include/GE_temporal_summaries.hpp"
+  },
+  "input_encoding": {
+    "gpu_pulse_sample_fields": [
+      "gpu_pulse_freq_hz_u64",
+      "gpu_pulse_freq_ref_hz_u64",
+      "gpu_pulse_amp_u32",
+      "gpu_pulse_amp_ref_u32",
+      "gpu_pulse_volt_u32",
+      "gpu_pulse_volt_ref_u32"
+    ],
+    "modality_axis_binding": {
+      "text": "x",
+      "image": "y",
+      "audio": "z"
+    },
+    "axis_scale_fields": [
+      "sx_q32_32",
+      "sy_q32_32",
+      "sz_q32_32"
+    ],
+    "pulse_sampling_contract": {
+      "sample_offset": "tau_delta",
+      "phase_anchor_rule": "theta_anchor_k = wrap_turns(theta_ref_turns + alpha_A * ln(A_k / A_ref))",
+      "next_pulse_rule": "next_gpu_pulse_signal = temporal_coupling(predicted_interference, lattice_probe, gpu_observed_quartet)"
+    }
+  },
+  "process_microprocessors": {
+    "spectral_field_anchor": {
+      "role": "bounded kernel-process simulator",
+      "authoritative_state": [
+        "phi_hat",
+        "forcing_hat",
+        "intent_summary",
+        "measured_summary",
+        "temporal_residual",
+        "calibration_summary",
+        "op_gain_q15",
+        "op_phase_bias_q15",
+        "op_band_w_q15"
+      ]
+    },
+    "coherence_bus_anchor": {
+      "role": "feedback router",
+      "outputs": [
+        "hook packets",
+        "learning coupling updates",
+        "freeze and resync decisions"
+      ]
+    },
+    "voxel_coupling_anchor": {
+      "role": "boundary-conditioned forcing source",
+      "outputs": [
+        "particle coupling forcing",
+        "boundary strength",
+        "permeability",
+        "anisotropy"
+      ]
+    },
+    "ai_data_substrate": {
+      "role": "specified-data calculus substrate for AI foundations and corpus state",
+      "authoritative_state": [
+        "language_foundation.stats()",
+        "math_foundation.stats()",
+        "manifest_records",
+        "Draft Container/Corpus inspector artifacts",
+        "learning_gate registry queues",
+        "external_api_pending",
+        "external_api_inflight"
+      ]
+    }
+  },
+  "ai_data_substrate": {
+    "intent_plane": {
+      "encoding": "8-band q15 target vector for corpus, manifests, language, math, learning completion, and API/data headroom",
+      "bands": [
+        "corpus pipeline target",
+        "manifest/provenance target",
+        "language lexicon target",
+        "language concept and speech target",
+        "math core target",
+        "math crawl coverage target",
+        "accepted-metric target",
+        "data-surface and API-headroom target"
+      ]
+    },
+    "measured_plane": {
+      "encoding": "8-band q15 measured vector derived from committed corpus artifacts, manifest counts, language stats, math stats, learning completion, and queue headroom",
+      "sources": [
+        "corpus_artifact_count_u32",
+        "manifest_record_count_u32",
+        "LangLexiconStats",
+        "MathStats",
+        "MetricRegistry completed and accepted tasks",
+        "external_api queue occupancy"
+      ]
+    },
+    "residual_plane": {
+      "encoding": "measured_minus_intent in q32.32 plus q15 residual norm over the 8 data bands"
+    },
+    "calculus_contract": {
+      "error_k": "measured_norm_k - intent_norm_k",
+      "delta_error_k": "error_k - error_k_minus_1",
+      "integral_error_k": "clamp(integral_error_k_minus_1 + error_k, -8, +8)",
+      "controller_authority_k": "bounded mix of residual_norm_q15, error_delta_norm_q15, and error_integral_norm_q15"
+    }
+  },
+  "calculus_planes": {
+    "intent_plane": {
+      "sources": [
+        "EwActuationPacket",
+        "forcing_hat",
+        "EwIntentSummary"
+      ],
+      "encoding": "low-band forcing magnitudes and authority codes"
+    },
+    "measured_plane": {
+      "sources": [
+        "phi_hat",
+        "energy_mean_q15",
+        "energy_peak_q15",
+        "leakage_abs_q15",
+        "EwMeasuredSummary"
+      ],
+      "encoding": "committed spectral response and leakage"
+    },
+    "residual_plane": {
+      "sources": [
+        "residual_q32_32",
+        "residual_norm_q15",
+        "residual_band_u8",
+        "residual_pending_u8",
+        "EwResidualSummary"
+      ],
+      "encoding": "error, collapse routing, and control urgency"
+    },
+    "operator_plane": {
+      "sources": [
+        "op_gain_q15",
+        "op_phase_bias_q15",
+        "op_band_w_q15",
+        "hook_inbox"
+      ],
+      "encoding": "bounded controller output applied during canonical evolution"
+    },
+    "frequency_interference_calibration_plane": {
+      "sources": [
+        "gpu_pulse_freq_hz_u64",
+        "gpu_pulse_amp_u32",
+        "gpu_pulse_volt_u32",
+        "sx_q32_32",
+        "sy_q32_32",
+        "sz_q32_32",
+        "calibration_summary.interference_band_q15",
+        "calibration_summary.coherence_band_q15",
+        "calibration_summary.source_vibration_q15",
+        "prediction_lattice_interference_norm",
+        "prediction_lattice_temporal_coupling_norm"
+      ],
+      "encoding": "GPU pulse target lanes, low-band interference deltas, temporal coherence normalization, and source-memory vibration feedback"
+    }
+  },
+  "frequency_interference_calibration": {
+    "input_plane": {
+      "encoding": "q15-normalized GPU kernel pulse targets for frequency, amplitude, and voltage",
+      "sources": [
+        "gpu_pulse_freq_hz_u64 / gpu_pulse_freq_ref_hz_u64",
+        "gpu_pulse_amp_u32 / gpu_pulse_amp_ref_u32",
+        "gpu_pulse_volt_u32 / gpu_pulse_volt_ref_u32"
+      ]
+    },
+    "interference_plane": {
+      "encoding": "per-band abs(intent_band_q15 - measured_band_q15) over the first 8 spectral bins"
+    },
+    "coherence_plane": {
+      "encoding": "per-band normalized coherence from intent/measured magnitude agreement",
+      "rule": "coherence_band = 1 - abs(intent - measured) / max(intent, measured)"
+    },
+    "observer_feedback_plane": {
+      "encoding": "temporal feedback memory that persists source vibration across subsequent packets on the same spectral anchor",
+      "state": [
+        "observer_norm_q15",
+        "source_vibration_q15"
+      ]
+    },
+    "calculus_contract": {
+      "calibration_error_k": "measured_calibration_norm_k - gpu_target_norm_k",
+      "calibration_delta_k": "calibration_error_k - calibration_error_k_minus_1",
+      "calibration_integral_k": "clamp(calibration_integral_k_minus_1 + calibration_error_k, -8, +8)",
+      "calibration_authority_k": "bounded mix of interference_norm_q15, calibration_delta_norm_q15, calibration_integral_norm_q15, and observer_norm_q15"
+    },
+    "controller_outputs": [
+      "dt_scale_q32_32",
+      "viscosity_bias_q32_32",
+      "op_phase_bias_q15",
+      "learning_coupling_q15"
+    ],
+    "next_pulse_prediction": [
+      "next_pulse_correction_norm",
+      "next_pulse_quartet",
+      "best_lattice_interference_norm",
+      "best_temporal_coupling_norm"
+    ]
+  },
+  "temporal_prediction_plane": {
+    "lattice_probe": {
+      "encoding": "deterministic 3x3x3 center-lattice probe over energy, flux, interference, and temporal coupling",
+      "sources": [
+        "prediction_lattice_energy_norm",
+        "prediction_lattice_flux_norm",
+        "prediction_lattice_interference_norm",
+        "prediction_lattice_temporal_coupling_norm"
+      ]
+    },
+    "prediction_surface": {
+      "encoding": "full-range lattice-backed interference sweep over f/a/i/v with per-cell lattice coordinates and spectral ids",
+      "outputs": [
+        "trajectory_spectral_id_u64",
+        "lattice_interference_norm",
+        "lattice_temporal_coupling_norm",
+        "lattice_coord",
+        "next_pulse_quartet"
+      ]
+    }
+  },
+  "derived_calculus_contract": {
+    "intent_k": "low_band(forcing_hat_k)",
+    "measured_k": "low_band(phi_hat_k)",
+    "error_k": "measured_k - intent_k",
+    "delta_error_k": "error_k - error_k_minus_1",
+    "integral_error_k": "integral_error_k_minus_1 + error_k * dt",
+    "operator_update_k": "bounded_feedback(error_k, delta_error_k, integral_error_k)"
+  },
+  "feedback_control_os": {
+    "control_loop": [
+      "ingest pulses and modality inputs",
+      "derive ctx scalars inside substrate",
+      "evolve candidate_next_state",
+      "compute ledger_delta",
+      "accept or collapse to sink_state",
+      "publish requests and telemetry",
+      "ingest external responses on later ticks"
+    ],
+    "controller_outputs": [
+      "dt_scale_q32_32",
+      "learning_coupling_q15",
+      "op_gain_q15",
+      "op_phase_bias_q15",
+      "op_band_w_q15",
+      "hold_tick_u8"
+    ],
+    "adapter_boundary": {
+      "request_queue": "external_api_pending",
+      "inflight_queue": "external_api_inflight",
+      "streaming_ingest": [
+        "external_api_ingest_inbox",
+        "external_api_ingest_docs"
+      ],
+      "rule": "Adapters execute requests and return bytes. They do not own canonical evolution."
+    }
+  },
+  "product_rules": [
+    "All state evolution remains inside the canonical operator pipeline.",
+    "Raw pulse observations may enter from adapters, but derived control factors are computed only during tick.",
+    "External systems do not mutate canonical state directly.",
+    "GPU kernels are modeled first as bounded substrate microprocessors.",
+    "Simulation calculus is a deterministic encoding derived from committed state transitions.",
+    "Every controller update is subject to acceptance and sink collapse."
+  ],
+  "relation_to_photon_research": {
+    "status": "optional bounded kernel family",
+    "rule": "Photon confinement research may be attached as one microprocessor profile, but it does not replace the canonical substrate operating model."
+  }
+}

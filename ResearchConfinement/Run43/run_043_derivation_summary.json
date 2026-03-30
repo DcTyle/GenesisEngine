@@ -1,0 +1,163 @@
+﻿{
+    "run_name":  "run_043_silicon_pulse_interference_equation",
+    "generated_utc":  "2026-03-30T03:24:11.4623089Z",
+    "sim_config":  {
+                       "packet_count":  24,
+                       "bin_count":  96,
+                       "steps":  96,
+                       "recon_samples":  256,
+                       "equivalent_grid_linear":  1024
+                   },
+    "center_quartet":  {
+                           "F":  0.245,
+                           "A":  0.18,
+                           "I":  0.33,
+                           "V":  0.33
+                       },
+    "delta_quartet":  {
+                          "F":  0.01,
+                          "A":  0.02,
+                          "I":  0.03,
+                          "V":  0.03
+                      },
+    "sweep_runs":  33,
+    "validation_runs":  8,
+    "models":  {
+                   "silicon_score":  {
+                                         "metric":  "silicon_score",
+                                         "center_value":  0.713922,
+                                         "jacobian":  {
+                                                          "F":  -0.023249999999996884,
+                                                          "A":  0.026349999999999985,
+                                                          "I":  -0.083466666666666883,
+                                                          "V":  -0.034700000000000474
+                                                      },
+                                         "hessian_diag":  {
+                                                              "F":  0.01000000000139778,
+                                                              "A":  0.0050000000004213341,
+                                                              "I":  0.0088888888890211373,
+                                                              "V":  0.0022222222224094817
+                                                          },
+                                         "hessian_cross":  {
+                                                               "FA":  -0.0012499999998971667,
+                                                               "FI":  0.039166666666682712,
+                                                               "FV":  -0.00083333333335729642,
+                                                               "AI":  0.0033333333333366673,
+                                                               "AV":  0,
+                                                               "IV":  0
+                                                           },
+                                         "deviation_formula":  "f(x) ~= f0 + sum(J_i*dx_i) + 0.5*sum(H_ii*dx_i^2) + sum(H_ij*dx_i*dx_j)"
+                                     },
+                   "trap_ratio":  {
+                                      "metric":  "trap_ratio",
+                                      "center_value":  0.2735,
+                                      "jacobian":  {
+                                                       "F":  -0.13324999999999865,
+                                                       "A":  -0.003699999999999537,
+                                                       "I":  0.11590000000000027,
+                                                       "V":  0
+                                                   },
+                                      "hessian_diag":  {
+                                                           "F":  0.0099999999997324451,
+                                                           "A":  0.009999999999871223,
+                                                           "I":  -0.031111111111142224,
+                                                           "V":  0
+                                                       },
+                                      "hessian_cross":  {
+                                                            "FA":  -0.0012499999999665556,
+                                                            "FI":  0.089166666666686462,
+                                                            "FV":  0,
+                                                            "AI":  0.0075000000000075015,
+                                                            "AV":  0,
+                                                            "IV":  0
+                                                        },
+                                      "deviation_formula":  "f(x) ~= f0 + sum(J_i*dx_i) + 0.5*sum(H_ii*dx_i^2) + sum(H_ij*dx_i*dx_j)"
+                                  },
+                   "coherence":  {
+                                     "metric":  "coherence",
+                                     "center_value":  0.996894,
+                                     "jacobian":  {
+                                                      "F":  -0.0020999999999993246,
+                                                      "A":  -4.9999999998662226E-05,
+                                                      "I":  0.0017666666666675084,
+                                                      "V":  -0.00085000000000038755
+                                                  },
+                                     "hessian_diag":  {
+                                                          "F":  1.1102230246251565E-12,
+                                                          "A":  2.7755575615628914E-13,
+                                                          "I":  -0.066666666666486629,
+                                                          "V":  -0.0055555555553452353
+                                                      },
+                                     "hessian_cross":  {
+                                                           "FA":  0,
+                                                           "FI":  0.0033333333333366673,
+                                                           "FV":  0.0024999999999793707,
+                                                           "AI":  -0.00041666666663238894,
+                                                           "AV":  -0.00041666666667864821,
+                                                           "IV":  -0.00055555555554069136
+                                                       },
+                                     "deviation_formula":  "f(x) ~= f0 + sum(J_i*dx_i) + 0.5*sum(H_ii*dx_i^2) + sum(H_ij*dx_i*dx_j)"
+                                 },
+                   "inertia":  {
+                                   "metric":  "inertia",
+                                   "center_value":  0.00040384,
+                                   "jacobian":  {
+                                                    "F":  3.120000000000065E-05,
+                                                    "A":  0.00055117499999999934,
+                                                    "I":  0.00017708333333333335,
+                                                    "V":  -0.0001403
+                                                },
+                                   "hessian_diag":  {
+                                                        "F":  -0.000520000000000056,
+                                                        "A":  2.5000000000393631E-06,
+                                                        "I":  -0.00022555555555549297,
+                                                        "V":  -0.0047177777777777929
+                                                    },
+                                   "hessian_cross":  {
+                                                         "FA":  4.1250000000039627E-05,
+                                                         "FI":  -1.7499999999959317E-05,
+                                                         "FV":  0.000954166666666647,
+                                                         "AI":  0.00024250000000000093,
+                                                         "AV":  -0.00019041666666666071,
+                                                         "IV":  -0.00011055555555556457
+                                                     },
+                                   "deviation_formula":  "f(x) ~= f0 + sum(J_i*dx_i) + 0.5*sum(H_ii*dx_i^2) + sum(H_ij*dx_i*dx_j)"
+                               },
+                   "curvature":  {
+                                     "metric":  "curvature",
+                                     "center_value":  15.0562,
+                                     "jacobian":  {
+                                                      "F":  -79.570000000000007,
+                                                      "A":  -6.2675000000000036,
+                                                      "I":  -14.046666666666674,
+                                                      "V":  -44.379999999999953
+                                                  },
+                                     "hessian_diag":  {
+                                                          "F":  -5123.9999999999945,
+                                                          "A":  12.750000000001371,
+                                                          "I":  63.111111111110084,
+                                                          "V":  11992.222222222223
+                                                      },
+                                     "hessian_cross":  {
+                                                           "FA":  -17.249999999999766,
+                                                           "FI":  183.66666666666791,
+                                                           "FV":  -473.58333333333394,
+                                                           "AI":  -5.4583333333339352,
+                                                           "AV":  -29.500000000000824,
+                                                           "IV":  162.05555555555586
+                                                       },
+                                     "deviation_formula":  "f(x) ~= f0 + sum(J_i*dx_i) + 0.5*sum(H_ii*dx_i^2) + sum(H_ij*dx_i*dx_j)"
+                                 }
+               },
+    "validation_error":  {
+                             "silicon_score_mae":  2.4164687499980686E-05,
+                             "silicon_score_rmse":  2.7668259299314168E-05
+                         },
+    "artifacts":  {
+                      "sweep_results_csv":  "run_043_sweep_results.csv",
+                      "validation_results_csv":  "run_043_validation_results.csv",
+                      "equation_markdown":  "run_043_equation.md",
+                      "sweep_dir":  "sweep",
+                      "validation_dir":  "validation"
+                  }
+}
