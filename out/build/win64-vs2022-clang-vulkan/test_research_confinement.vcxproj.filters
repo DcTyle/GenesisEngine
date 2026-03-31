@@ -1,16 +1,16 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
-    <ClCompile Include="D:\GameCreation\GenesisEngine\tests\test_research_confinement.cpp">
+    <ClCompile Include="C:\Users\Myke\.codex\worktrees\47d0\GenesisEngine\tests\test_research_confinement.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <CustomBuild Include="D:\GameCreation\GenesisEngine\CMakeLists.txt" />
+    <CustomBuild Include="C:\Users\Myke\.codex\worktrees\47d0\GenesisEngine\CMakeLists.txt" />
   </ItemGroup>
   <ItemGroup>
     <Filter Include="Source Files">
-      <UniqueIdentifier>{CAD0AF2C-8813-345A-813E-406BE26DC386}</UniqueIdentifier>
+      <UniqueIdentifier>{80C8778D-1E52-3C55-9B54-33E637A00897}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
 </Project>
