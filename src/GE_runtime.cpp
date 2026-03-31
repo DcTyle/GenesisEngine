@@ -1190,6 +1190,39 @@ static std::string ge_format_ai_data_substrate_status_line(const EwAiDataSubstra
         << " m7=" << t.measured_band_q15[7];
     return oss.str();
 }
+
+static std::string ge_format_repo_reader_status_line(const SubstrateManager& sm,
+                                                     const char* prefix_ascii) {
+    std::ostringstream oss;
+    oss << prefix_ascii
+        << " enabled=" << (sm.repo_reader.enabled ? 1u : 0u)
+        << " scanned=" << (sm.repo_reader.scanned ? 1u : 0u)
+        << " files=" << sm.repo_reader.files_rel_ascii.size()
+        << " cursor=" << sm.repo_reader.cursor_u32
+        << " files_per_tick=" << sm.repo_reader_files_per_tick_u32
+        << " bytes_per_file=" << sm.repo_reader_bytes_per_file_u32;
+    if (!sm.repo_reader.repo_root_ascii.empty()) {
+        oss << " root=" << sm.repo_reader.repo_root_ascii;
+    }
+    return oss.str();
+}
+
+static std::string ge_format_merged_repo_status_line(const SubstrateManager& sm,
+                                                     const char* prefix_ascii) {
+    const std::filesystem::path repo_root =
+        sm.repo_reader.repo_root_ascii.empty()
+            ? std::filesystem::current_path()
+            : std::filesystem::path(sm.repo_reader.repo_root_ascii);
+    std::ostringstream oss;
+    oss << prefix_ascii
+        << " ge_canon=" << (std::filesystem::exists(repo_root / "ge_canon") ? 1u : 0u)
+        << " research_live_day_src=" << (std::filesystem::exists(repo_root / "src/tools/research_live_day_sim_main.cpp") ? 1u : 0u)
+        << " package_script=" << (std::filesystem::exists(repo_root / "scripts/package_project.py") ? 1u : 0u);
+    if (!sm.repo_reader.repo_root_ascii.empty()) {
+        oss << " repo_root=" << sm.repo_reader.repo_root_ascii;
+    }
+    return oss.str();
+}
 // Build a view matrix (row-major 4x4) in Q16.16 from a camera pose expressed as
 // (pos_q16_16, quat_q16_16). Quaternion is interpreted as camera->world rotation.
 // View matrix is world->camera: R^T and -R^T * pos.
@@ -3747,6 +3780,53 @@ void SubstrateManager::ui_submit_user_text_line(const std::string& utf8_line) {
         return;
     }
 
+    if (utf8_line.rfind("/repo_reader", 0) == 0 || utf8_line.rfind("repo_reader:", 0) == 0) {
+        std::vector<std::string> toks;
+        ew::ew_split_shell_ascii(utf8_line, toks);
+        bool enable = false;
+        bool disable = false;
+        bool rescan = false;
+        for (size_t i = 1; i < toks.size(); ++i) {
+            const std::string& t = toks[i];
+            if (t == "on") enable = true;
+            else if (t == "off") disable = true;
+            else if (t == "scan" || t == "rescan") rescan = true;
+            else {
+                std::string_view k_sv, v_sv;
+                if (ew::ew_split_kv_token_ascii(std::string_view(t), k_sv, v_sv)) {
+                    if (k_sv == "files") {
+                        uint32_t v = (uint32_t)std::strtoul(std::string(v_sv).c_str(), nullptr, 10);
+                        repo_reader_files_per_tick_u32 = std::max<uint32_t>(1u, std::min<uint32_t>(v, 16u));
+                    } else if (k_sv == "bytes") {
+                        uint32_t v = (uint32_t)std::strtoul(std::string(v_sv).c_str(), nullptr, 10);
+                        repo_reader_bytes_per_file_u32 = std::max<uint32_t>(512u, std::min<uint32_t>(v, 65536u));
+                    } else if (k_sv == "rescan") {
+                        bool b = false;
+                        if (ew::ew_parse_bool_ascii(v_sv, b)) rescan = b;
+                    }
+                }
+            }
+        }
+        if (disable) repo_reader.enabled = false;
+        if (enable) repo_reader.enabled = true;
+        if (rescan) repo_reader.scan_repo_root();
+        emit_ui_line(ge_format_repo_reader_status_line(*this, "REPO_READER_STATUS"));
+        return;
+    }
+    if (utf8_line.rfind("/repo_reader_status", 0) == 0 ||
+        utf8_line.rfind("repo_reader_status:", 0) == 0) {
+        if (!repo_reader.scanned) repo_reader.scan_repo_root();
+        emit_ui_line(ge_format_repo_reader_status_line(*this, "REPO_READER_STATUS"));
+        return;
+    }
+    if (utf8_line.rfind("/merged_repo_status", 0) == 0 ||
+        utf8_line.rfind("merged_repo_status:", 0) == 0) {
+        if (!repo_reader.scanned) repo_reader.scan_repo_root();
+        emit_ui_line(ge_format_merged_repo_status_line(*this, "MERGED_REPO_STATUS"));
+        emit_ui_line(ge_format_repo_reader_status_line(*this, "REPO_READER_STATUS"));
+        return;
+    }
+
     if (utf8_line.rfind("/process_substrate_status", 0) == 0 ||
         utf8_line.rfind("process_substrate_status:", 0) == 0) {
         emit_ui_line(ge_format_process_substrate_status_line(process_substrate_telemetry,
@@ -3785,6 +3865,8 @@ void SubstrateManager::ui_submit_user_text_line(const std::string& utf8_line) {
                                                         "AI_SUBSTRATE_STATUS"));
         emit_ui_line(ge_format_ai_data_substrate_status_line(ai_data_substrate_telemetry,
                                                              "AI_DATA_SUBSTRATE_STATUS"));
+        emit_ui_line(ge_format_merged_repo_status_line(*this, "MERGED_REPO_STATUS"));
+        emit_ui_line(ge_format_repo_reader_status_line(*this, "REPO_READER_STATUS"));
         return;
     }
 
@@ -6699,6 +6781,7 @@ if (p.kind == EwControlPacketKind::EditorSetSelection) {
     // Spec Section 5: crawler/encoder run inside the substrate and may
     // admit pulses into the inbound queue under bounded budget.
     crawler.tick(this);
+    repo_reader.tick(this, repo_reader_files_per_tick_u32, repo_reader_bytes_per_file_u32);
 
     // Stage-0 math foundations run in parallel with language. This loop
     // generates measurable lattice-based experiments (graphs / precedence

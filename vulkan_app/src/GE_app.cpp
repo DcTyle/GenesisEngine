@@ -25,6 +25,7 @@
 #include "obj_import.hpp"
 #include "GE_render_instance.hpp"
 #include "ewmesh_voxelizer.hpp"
+#include "ew_openai_chat.hpp"
 #include "carrier_bundle_cuda.hpp"
 #include "GE_control_packets.hpp"
 #include "VirtualStateDrive.hpp"
@@ -342,6 +343,11 @@ void refresh_fixed_cache() {
     uint64_t research_run_log_last_prediction_tick_u64 = 0u;
     uint64_t research_verification_emit_last_tick_u64 = 0u;
     EwId9 research_last_state_sig9{};
+    uint64_t merged_openai_request_count_u64 = 0u;
+    uint32_t merged_openai_last_http_status_u32 = 0u;
+    bool merged_openai_last_ok = false;
+    std::wstring merged_openai_key_file_w;
+    std::string merged_openai_last_error_utf8;
 
     void PushLocalUiLine(const std::string& line_utf8) {
         if (line_utf8.empty()) return;
@@ -349,6 +355,127 @@ void refresh_fixed_cache() {
             local_output_lines.erase(local_output_lines.begin());
         }
         local_output_lines.push_back(line_utf8);
+    }
+
+    static std::string TrimAscii(std::string s) {
+        while (!s.empty() && (s.front() == ' ' || s.front() == '\t' || s.front() == '\r' || s.front() == '\n')) {
+            s.erase(s.begin());
+        }
+        while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r' || s.back() == '\n')) {
+            s.pop_back();
+        }
+        return s;
+    }
+
+    void PushPrefixedMultiline(const std::string& prefix_utf8,
+                               const std::string& text_utf8,
+                               uint32_t max_lines_u32 = 12u) {
+        size_t pos = 0u;
+        uint32_t emitted = 0u;
+        while (pos <= text_utf8.size() && emitted < max_lines_u32) {
+            size_t next = text_utf8.find('\n', pos);
+            if (next == std::string::npos) next = text_utf8.size();
+            std::string line = TrimAscii(text_utf8.substr(pos, next - pos));
+            if (!line.empty()) {
+                PushLocalUiLine(prefix_utf8 + line);
+                ++emitted;
+            }
+            if (next == text_utf8.size()) break;
+            pos = next + 1u;
+        }
+        if (emitted == 0u && !text_utf8.empty()) {
+            PushLocalUiLine(prefix_utf8 + TrimAscii(text_utf8));
+        }
+    }
+
+    std::string BuildRepoReaderStatusLine() const {
+        return sm.repo_reader.status_line(sm.repo_reader_files_per_tick_u32,
+                                          sm.repo_reader_bytes_per_file_u32);
+    }
+
+    std::string BuildOpenAiStatusLine() const {
+        const std::filesystem::path repo_root =
+            sm.repo_reader.repo_root_ascii.empty()
+                ? std::filesystem::current_path()
+                : std::filesystem::path(sm.repo_reader.repo_root_ascii);
+        std::wstring key_file_w;
+        std::string err_utf8;
+        const bool available = ewv::ew_openai_chat_available(&key_file_w, &err_utf8);
+        std::ostringstream oss;
+        oss << "OPENAI_STATUS"
+            << " available=" << (available ? 1u : 0u)
+            << " request_count=" << merged_openai_request_count_u64
+            << " last_ok=" << (merged_openai_last_ok ? 1u : 0u)
+            << " last_http=" << merged_openai_last_http_status_u32
+            << " chat_bridge_src=" << (std::filesystem::exists(repo_root / "vulkan_app/src/ew_openai_chat.cpp") ? 1u : 0u);
+        const std::wstring& path_w = available ? key_file_w : merged_openai_key_file_w;
+        if (!path_w.empty()) {
+            oss << " key_file=" << wide_to_utf8(path_w);
+        }
+        const std::string& err = available ? std::string() : (err_utf8.empty() ? merged_openai_last_error_utf8 : err_utf8);
+        if (!err.empty()) {
+            oss << " err=" << err;
+        }
+        return oss.str();
+    }
+
+    std::string BuildMergedRepositoryStatusLine() const {
+        const std::filesystem::path repo_root =
+            sm.repo_reader.repo_root_ascii.empty()
+                ? std::filesystem::current_path()
+                : std::filesystem::path(sm.repo_reader.repo_root_ascii);
+        std::ostringstream oss;
+        oss << "MERGED_REPO_STATUS"
+            << " ge_canon=" << (std::filesystem::exists(repo_root / "ge_canon") ? 1u : 0u)
+            << " spec_bundle=" << (std::filesystem::exists(repo_root / "ge_canon/docs/spec_uploads/GenesisengineSpec.md") ? 1u : 0u)
+            << " repo_reader=" << (sm.repo_reader.enabled ? 1u : 0u)
+            << " repo_reader_files=" << sm.repo_reader.files_rel_ascii.size()
+            << " openai_bridge=" << (std::filesystem::exists(repo_root / "vulkan_app/src/ew_openai_chat.cpp") ? 1u : 0u)
+            << " live_day_tool=" << (std::filesystem::exists(repo_root / "src/tools/research_live_day_sim_main.cpp") ? 1u : 0u)
+            << " package_script=" << (std::filesystem::exists(repo_root / "scripts/package_project.py") ? 1u : 0u);
+        if (!sm.repo_reader.repo_root_ascii.empty()) {
+            oss << " repo_root=" << sm.repo_reader.repo_root_ascii;
+        }
+        return oss.str();
+    }
+
+    void SubmitMergedOpenAiPrompt(const std::string& prompt_utf8) {
+        const std::string prompt = TrimAscii(prompt_utf8);
+        if (prompt.empty()) {
+            PushLocalUiLine("OPENAI_CHAT status=empty_prompt");
+            return;
+        }
+
+        ewv::EwOpenAiTextRequest request{};
+        request.instructions_utf8 =
+            "You are assisting with Genesis Engine merged-system integration. "
+            "Prefer concise, implementation-oriented answers and mention concrete repository seams when useful.";
+        request.input_utf8 = prompt;
+        request.model_utf8 = ewv::ew_openai_default_model_utf8();
+        request.enable_web_search = true;
+        request.max_output_tokens_u32 = 900u;
+
+        ewv::EwOpenAiTextResponse response{};
+        ++merged_openai_request_count_u64;
+        PushLocalUiLine("OPENAI_CHAT status=requesting");
+        const bool ok = ewv::ew_openai_send_text_request(request, &response);
+        merged_openai_last_ok = ok && response.ok;
+        merged_openai_last_http_status_u32 = response.http_status_u32;
+        merged_openai_key_file_w = response.key_file_w;
+        merged_openai_last_error_utf8 = response.error_utf8;
+
+        std::ostringstream head;
+        head << "OPENAI_CHAT status=" << ((ok && response.ok) ? "ok" : "error")
+             << " http=" << response.http_status_u32;
+        if (!response.key_file_w.empty()) {
+            head << " key_file=" << wide_to_utf8(response.key_file_w);
+        }
+        PushLocalUiLine(head.str());
+        if (ok && response.ok) {
+            PushPrefixedMultiline("OPENAI_CHAT ", response.output_text_utf8, 16u);
+        } else if (!response.error_utf8.empty()) {
+            PushPrefixedMultiline("OPENAI_CHAT error=", response.error_utf8, 8u);
+        }
     }
 
     static uint32_t ClampLatticeEdge(uint32_t edge_u32) {
@@ -457,7 +584,13 @@ void refresh_fixed_cache() {
                ResearchCommandMatchesPrefix(utf8, "/ai_data_status") ||
                ResearchCommandMatchesPrefix(utf8, "ai_data_status:") ||
                ResearchCommandMatchesPrefix(utf8, "/ai_data_substrate_status") ||
-               ResearchCommandMatchesPrefix(utf8, "ai_data_substrate_status:");
+               ResearchCommandMatchesPrefix(utf8, "ai_data_substrate_status:") ||
+               ResearchCommandMatchesPrefix(utf8, "/repo_reader_status") ||
+               ResearchCommandMatchesPrefix(utf8, "repo_reader_status:") ||
+               ResearchCommandMatchesPrefix(utf8, "/merged_repo_status") ||
+               ResearchCommandMatchesPrefix(utf8, "merged_repo_status:") ||
+               ResearchCommandMatchesPrefix(utf8, "/openai_status") ||
+               ResearchCommandMatchesPrefix(utf8, "openai_status:");
     }
 
     bool ResearchBasicTrialShouldBlockAdvancedCommand(const std::string& utf8) const {
@@ -2591,6 +2724,9 @@ void refresh_fixed_cache() {
                 << " m7=" << telemetry.measured_band_q15[7];
             PushLocalUiLine(oss.str());
         };
+        auto push_repo_reader_status_local = [&]() {
+            PushLocalUiLine(BuildRepoReaderStatusLine());
+        };
 
         if (utf8.rfind("/basic_trial_status", 0) == 0 || utf8.rfind("basic_trial_status:", 0) == 0 ||
             utf8.rfind("/meta_basic_mode_status", 0) == 0 || utf8.rfind("meta_basic_mode_status:", 0) == 0) {
@@ -2734,7 +2870,35 @@ void refresh_fixed_cache() {
             push_ai_data_substrate_status_local();
             return;
         }
+        if (utf8.rfind("/repo_reader_status", 0) == 0 || utf8.rfind("repo_reader_status:", 0) == 0) {
+            if (!sm.repo_reader.scanned) sm.repo_reader.scan_repo_root();
+            push_repo_reader_status_local();
+            return;
+        }
+        if (utf8.rfind("/merged_repo_status", 0) == 0 || utf8.rfind("merged_repo_status:", 0) == 0) {
+            if (!sm.repo_reader.scanned) sm.repo_reader.scan_repo_root();
+            PushLocalUiLine(BuildMergedRepositoryStatusLine());
+            push_repo_reader_status_local();
+            PushLocalUiLine(BuildOpenAiStatusLine());
+            return;
+        }
+        if (utf8.rfind("/openai_status", 0) == 0 || utf8.rfind("openai_status:", 0) == 0) {
+            PushLocalUiLine(BuildOpenAiStatusLine());
+            return;
+        }
+        if (utf8.rfind("/openai_chat", 0) == 0 || utf8.rfind("openai_chat:", 0) == 0) {
+            std::string payload;
+            const std::size_t psp = utf8.find(' ');
+            const std::size_t pco = utf8.find(':');
+            size_t p = std::string::npos;
+            if (psp != std::string::npos) p = psp + 1u;
+            else if (pco != std::string::npos) p = pco + 1u;
+            if (p != std::string::npos && p < utf8.size()) payload = utf8.substr(p);
+            SubmitMergedOpenAiPrompt(payload);
+            return;
+        }
         if (utf8.rfind("/research_status", 0) == 0 || utf8.rfind("research_status:", 0) == 0) {
+            if (!sm.repo_reader.scanned) sm.repo_reader.scan_repo_root();
             std::ostringstream oss;
             oss << "RESEARCH_FREQ:loaded=" << (research_archive.loaded ? 1 : 0)
                 << " packets=" << research_archive.packet_path_classes.size()
@@ -2760,6 +2924,9 @@ void refresh_fixed_cache() {
             push_subsystem_substrate_status_local();
             push_ai_substrate_status_local();
             push_ai_data_substrate_status_local();
+            PushLocalUiLine(BuildMergedRepositoryStatusLine());
+            push_repo_reader_status_local();
+            PushLocalUiLine(BuildOpenAiStatusLine());
             return;
         }
         if (utf8.rfind("/research_guidance_status", 0) == 0 || utf8.rfind("research_guidance_status:", 0) == 0) {

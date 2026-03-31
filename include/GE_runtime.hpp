@@ -15,6 +15,7 @@
 #include "GE_learning_checkpoint_gate.hpp"
 #include "GE_learning_automation.hpp"
 #include "GE_language_foundation.hpp"
+#include "GE_repo_reader.hpp"
 #include "GE_math_foundation.hpp"
 #include "GE_experiment_templates.hpp"
 #include "GE_neural_phase_ai.hpp"
@@ -1152,6 +1153,11 @@ std::deque<std::string> ui_out_q;
     // Allowlist update surface (UI command + config file). Deterministic validation.
     bool corpus_allowlist_update_from_user_text(const std::string& allowlist_md_utf8);
     bool corpus_allowlist_load_user_file_if_present();
+
+    // Merged-repository bridge: deterministic repo/spec reader.
+    GE_RepoReader repo_reader;
+    uint32_t repo_reader_files_per_tick_u32 = 1u;
+    uint32_t repo_reader_bytes_per_file_u32 = 4096u;
 
     // Spec/Blueprint: neural phase dynamics controller.
     EwNeuralPhaseAI neural_ai;
