@@ -7,6 +7,7 @@ add_executable(genesis_runtime
     src/GE_app.cpp
     src/camera_controller.cpp
     src/ai_ui.cpp
+    src/ew_openai_chat.cpp
     src/openxr_runtime.cpp
     src/obj_import.cpp
     src/scene.cpp
@@ -18,6 +19,7 @@ add_executable(genesis_editor
     src/GE_app.cpp
     src/camera_controller.cpp
     src/ai_ui.cpp
+    src/ew_openai_chat.cpp
     src/openxr_runtime.cpp
     src/obj_import.cpp
     src/scene.cpp
@@ -76,8 +78,8 @@ if (WIN32)
     target_compile_definitions(genesis_editor PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
     # Vulkan loader is provided by the Vulkan SDK.
     find_package(Vulkan REQUIRED)
-    target_link_libraries(genesis_runtime PRIVATE Vulkan::Vulkan user32 gdi32 shell32 comdlg32)
-    target_link_libraries(genesis_editor PRIVATE Vulkan::Vulkan user32 gdi32 shell32 comdlg32)
+    target_link_libraries(genesis_runtime PRIVATE Vulkan::Vulkan user32 gdi32 shell32 comdlg32 winhttp)
+    target_link_libraries(genesis_editor PRIVATE Vulkan::Vulkan user32 gdi32 shell32 comdlg32 winhttp)
 else()
     find_package(Vulkan REQUIRED)
     target_link_libraries(genesis_runtime PRIVATE Vulkan::Vulkan)

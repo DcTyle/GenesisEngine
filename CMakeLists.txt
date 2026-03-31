@@ -75,6 +75,7 @@ add_library(EigenWareCore
     src/GE_language_foundation.cpp
     src/GE_audio_wav.cpp
     src/GE_audio_features.cpp
+    src/GE_repo_reader.cpp
     src/GE_research_confinement.cpp
     src/GE_speech_alignment.cpp
     src/GE_forced_aligner.cpp
