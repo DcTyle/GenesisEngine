@@ -28,6 +28,7 @@
 #include "carrier_bundle_cuda.hpp"
 #include "GE_control_packets.hpp"
 #include "VirtualStateDrive.hpp"
+#include "ew_id9.hpp"
 
 #include <fstream>
 
@@ -336,6 +337,11 @@ void refresh_fixed_cache() {
     double research_lattice_probe_interference_norm = 0.0;
     double research_lattice_probe_temporal_coupling_norm = 0.0;
     std::chrono::steady_clock::time_point research_basic_trial_start_time{};
+    bool research_run_log_boot_emitted = false;
+    bool research_run_log_last_live_compute_active = false;
+    uint64_t research_run_log_last_prediction_tick_u64 = 0u;
+    uint64_t research_verification_emit_last_tick_u64 = 0u;
+    EwId9 research_last_state_sig9{};
 
     void PushLocalUiLine(const std::string& line_utf8) {
         if (line_utf8.empty()) return;
@@ -442,6 +448,8 @@ void refresh_fixed_cache() {
                ResearchCommandMatchesPrefix(utf8, "research_live_compute_status:") ||
                ResearchCommandMatchesPrefix(utf8, "/process_substrate_status") ||
                ResearchCommandMatchesPrefix(utf8, "process_substrate_status:") ||
+               ResearchCommandMatchesPrefix(utf8, "/subsystem_substrate_status") ||
+               ResearchCommandMatchesPrefix(utf8, "subsystem_substrate_status:") ||
                ResearchCommandMatchesPrefix(utf8, "/ai_status") ||
                ResearchCommandMatchesPrefix(utf8, "ai_status:") ||
                ResearchCommandMatchesPrefix(utf8, "/ai_substrate_status") ||
@@ -595,6 +603,434 @@ void refresh_fixed_cache() {
                         0.08 * interference_norm);
     }
 
+    std::filesystem::path ResearchRootDir() const {
+        std::filesystem::path root = research_archive.root_dir;
+        if (root.empty()) root = std::filesystem::current_path() / "ResearchConfinement";
+        return root;
+    }
+
+    static std::string JsonEscapeUtf8(const std::string& s) {
+        std::string out;
+        out.reserve(s.size() + 8u);
+        for (char c : s) {
+            switch (c) {
+                case '\\': out += "\\\\"; break;
+                case '"': out += "\\\""; break;
+                case '\n': out += "\\n"; break;
+                case '\r': out += "\\r"; break;
+                case '\t': out += "\\t"; break;
+                default:
+                    if ((unsigned char)c < 0x20u) out += '?';
+                    else out.push_back(c);
+                    break;
+            }
+        }
+        return out;
+    }
+
+    static std::string Sig9CompactUtf8(const EwId9& sig9) {
+        std::ostringstream oss;
+        for (size_t i = 0u; i < sig9.u32.size(); ++i) {
+            if (i != 0u) oss << ',';
+            oss << sig9.u32[i];
+        }
+        return oss.str();
+    }
+
+    void AppendResearchRunLogLine(const std::string& line_utf8) const {
+        const std::filesystem::path root = ResearchRootDir();
+        std::error_code ec;
+        std::filesystem::create_directories(root, ec);
+        std::ofstream f(root / "run.log", std::ios::out | std::ios::app);
+        if (!f.good()) return;
+        f << line_utf8 << '\n';
+    }
+
+    static bool WritePpmRgb(const std::filesystem::path& out_path,
+                            uint32_t width_u32,
+                            uint32_t height_u32,
+                            const std::vector<uint8_t>& rgb) {
+        if (width_u32 == 0u || height_u32 == 0u) return false;
+        if (rgb.size() < (size_t)width_u32 * (size_t)height_u32 * 3u) return false;
+        std::ofstream f(out_path, std::ios::out | std::ios::binary | std::ios::trunc);
+        if (!f.good()) return false;
+        f << "P6\n" << width_u32 << ' ' << height_u32 << "\n255\n";
+        f.write(reinterpret_cast<const char*>(rgb.data()),
+                (std::streamsize)((size_t)width_u32 * (size_t)height_u32 * 3u));
+        return f.good();
+    }
+
+    void PersistResearchLatticeProjectionImage() {
+        EwFieldFrameHeader hdr{};
+        std::vector<uint8_t> bgra;
+        lattice.get_radiance_slice_bgra8(64u, bgra, hdr);
+        const size_t pixel_count = (size_t)hdr.grid_x * (size_t)hdr.grid_y;
+        if (pixel_count == 0u || bgra.size() < pixel_count * 4u) return;
+
+        std::vector<uint8_t> rgb(pixel_count * 3u, 0u);
+        for (size_t i = 0u; i < pixel_count; ++i) {
+            const size_t src = i * 4u;
+            const size_t dst = i * 3u;
+            rgb[dst + 0u] = bgra[src + 2u];
+            rgb[dst + 1u] = bgra[src + 1u];
+            rgb[dst + 2u] = bgra[src + 0u];
+        }
+        (void)WritePpmRgb(ResearchRootDir() / "lattice_projection.ppm", hdr.grid_x, hdr.grid_y, rgb);
+    }
+
+    void PersistResearchObjectReferenceImage() const {
+        std::vector<uint64_t> object_ids;
+        sm.object_store.list_object_ids_sorted(object_ids);
+
+        const uint32_t tile_w_u32 = 64u;
+        const uint32_t tile_h_u32 = 64u;
+        const uint32_t count_u32 = object_ids.empty() ? 1u : (uint32_t)object_ids.size();
+        const uint32_t cols_u32 = (uint32_t)std::max(1.0, std::ceil(std::sqrt((double)count_u32)));
+        const uint32_t rows_u32 = (count_u32 + cols_u32 - 1u) / cols_u32;
+        const uint32_t width_u32 = cols_u32 * tile_w_u32;
+        const uint32_t height_u32 = rows_u32 * tile_h_u32;
+        std::vector<uint8_t> rgb((size_t)width_u32 * (size_t)height_u32 * 3u, 12u);
+
+        auto set_pixel = [&](uint32_t x_u32, uint32_t y_u32, uint8_t r_u8, uint8_t g_u8, uint8_t b_u8) {
+            if (x_u32 >= width_u32 || y_u32 >= height_u32) return;
+            const size_t idx = ((size_t)y_u32 * (size_t)width_u32 + (size_t)x_u32) * 3u;
+            rgb[idx + 0u] = r_u8;
+            rgb[idx + 1u] = g_u8;
+            rgb[idx + 2u] = b_u8;
+        };
+
+        for (uint32_t oi = 0u; oi < count_u32; ++oi) {
+            const uint64_t object_id_u64 = object_ids.empty() ? 0u : object_ids[oi];
+            const uint32_t tile_x_u32 = (oi % cols_u32) * tile_w_u32;
+            const uint32_t tile_y_u32 = (oi / cols_u32) * tile_h_u32;
+
+            for (uint32_t y = 0u; y < tile_h_u32; ++y) {
+                for (uint32_t x = 0u; x < tile_w_u32; ++x) {
+                    set_pixel(tile_x_u32 + x, tile_y_u32 + y, 18u, 18u, 22u);
+                }
+            }
+
+            const uint8_t id_r_u8 = (uint8_t)(object_id_u64 & 0xFFu);
+            const uint8_t id_g_u8 = (uint8_t)((object_id_u64 >> 8u) & 0xFFu);
+            const uint8_t id_b_u8 = (uint8_t)((object_id_u64 >> 16u) & 0xFFu);
+            bool drew_reference = false;
+
+            uint32_t atlas_w_u32 = 0u;
+            uint32_t atlas_h_u32 = 0u;
+            uint32_t atlas_format_u32 = 0u;
+            const uint8_t* atlas_bytes = nullptr;
+            size_t atlas_byte_count = 0u;
+            if (!object_ids.empty() &&
+                sm.object_store.view_uv_atlas(object_id_u64,
+                                              atlas_w_u32,
+                                              atlas_h_u32,
+                                              atlas_format_u32,
+                                              atlas_bytes,
+                                              atlas_byte_count) &&
+                atlas_format_u32 == 1u &&
+                atlas_bytes != nullptr &&
+                atlas_byte_count >= (size_t)atlas_w_u32 * (size_t)atlas_h_u32 * 4u &&
+                atlas_w_u32 != 0u &&
+                atlas_h_u32 != 0u) {
+                for (uint32_t y = 0u; y < tile_h_u32; ++y) {
+                    const uint32_t sy_u32 = (uint32_t)(((uint64_t)y * atlas_h_u32) / tile_h_u32);
+                    for (uint32_t x = 0u; x < tile_w_u32; ++x) {
+                        const uint32_t sx_u32 = (uint32_t)(((uint64_t)x * atlas_w_u32) / tile_w_u32);
+                        const size_t src = ((size_t)sy_u32 * (size_t)atlas_w_u32 + (size_t)sx_u32) * 4u;
+                        set_pixel(tile_x_u32 + x,
+                                  tile_y_u32 + y,
+                                  atlas_bytes[src + 0u],
+                                  atlas_bytes[src + 1u],
+                                  atlas_bytes[src + 2u]);
+                    }
+                }
+                drew_reference = true;
+            }
+
+            EwVoxelVolumeView vv{};
+            if (!drew_reference &&
+                !object_ids.empty() &&
+                sm.object_store.view_voxel_volume(object_id_u64, vv) &&
+                vv.bytes != nullptr &&
+                vv.byte_count >= (size_t)vv.grid_x_u32 * (size_t)vv.grid_y_u32 * (size_t)vv.grid_z_u32 &&
+                vv.grid_x_u32 != 0u &&
+                vv.grid_y_u32 != 0u &&
+                vv.grid_z_u32 != 0u) {
+                const uint32_t slice_z_u32 = vv.grid_z_u32 / 2u;
+                for (uint32_t y = 0u; y < tile_h_u32; ++y) {
+                    const uint32_t sy_u32 = (uint32_t)(((uint64_t)y * vv.grid_y_u32) / tile_h_u32);
+                    for (uint32_t x = 0u; x < tile_w_u32; ++x) {
+                        const uint32_t sx_u32 = (uint32_t)(((uint64_t)x * vv.grid_x_u32) / tile_w_u32);
+                        const size_t src = ((size_t)slice_z_u32 * (size_t)vv.grid_y_u32 + (size_t)sy_u32) *
+                                               (size_t)vv.grid_x_u32 +
+                                           (size_t)sx_u32;
+                        const uint8_t occ_u8 = vv.bytes[src];
+                        set_pixel(tile_x_u32 + x,
+                                  tile_y_u32 + y,
+                                  occ_u8,
+                                  (uint8_t)((uint16_t)occ_u8 / 2u + (uint16_t)id_g_u8 / 2u),
+                                  (uint8_t)((uint16_t)occ_u8 / 2u + (uint16_t)id_b_u8 / 2u));
+                    }
+                }
+                drew_reference = true;
+            }
+
+            if (!drew_reference) {
+                for (uint32_t y = 0u; y < tile_h_u32; ++y) {
+                    for (uint32_t x = 0u; x < tile_w_u32; ++x) {
+                        const uint8_t shade_u8 =
+                            (uint8_t)(((uint64_t)(x + 1u) * (uint64_t)(y + 3u) + object_id_u64) & 0x3Fu);
+                        set_pixel(tile_x_u32 + x,
+                                  tile_y_u32 + y,
+                                  (uint8_t)std::min<uint32_t>(255u, (uint32_t)id_r_u8 + shade_u8),
+                                  (uint8_t)std::min<uint32_t>(255u, (uint32_t)id_g_u8 + shade_u8 / 2u),
+                                  (uint8_t)std::min<uint32_t>(255u, (uint32_t)id_b_u8 + shade_u8));
+                    }
+                }
+            }
+
+            for (uint32_t x = 0u; x < tile_w_u32; ++x) {
+                set_pixel(tile_x_u32 + x, tile_y_u32 + 0u, 255u, 255u, 255u);
+                set_pixel(tile_x_u32 + x, tile_y_u32 + tile_h_u32 - 1u, 255u, 255u, 255u);
+            }
+            for (uint32_t y = 0u; y < tile_h_u32; ++y) {
+                set_pixel(tile_x_u32 + 0u, tile_y_u32 + y, 255u, 255u, 255u);
+                set_pixel(tile_x_u32 + tile_w_u32 - 1u, tile_y_u32 + y, 255u, 255u, 255u);
+            }
+        }
+
+        (void)WritePpmRgb(ResearchRootDir() / "object_reference.ppm", width_u32, height_u32, rgb);
+    }
+
+    std::string BuildResearchRuntimeStateCore(const EwProcessSubstrateTelemetry& process,
+                                              const EwSubsystemSubstrateTelemetry& subsystem,
+                                              const EwAiSubstrateTelemetry& ai,
+                                              const EwAiDataSubstrateTelemetry& ai_data,
+                                              const std::vector<uint64_t>& object_ids) const {
+        std::ostringstream oss;
+        oss.setf(std::ios::fixed);
+        oss.precision(6);
+        oss << "tick=" << sm.canonical_tick_u64() << '\n'
+            << "anchors=" << sm.anchors.size() << '\n'
+            << "objects=" << object_ids.size() << '\n'
+            << "live_boot=" << (research_live_boot_enabled ? 1 : 0) << '\n'
+            << "guidance=" << (research_guidance_enabled ? 1 : 0) << '\n'
+            << "live_compute_enabled=" << (research_live_compute_enabled ? 1 : 0) << '\n'
+            << "live_compute_active=" << (research_live_compute_active ? 1 : 0) << '\n'
+            << "basic_trial=" << (research_basic_trial_enabled ? 1 : 0) << '\n'
+            << "params=" << research_param_f << ',' << research_param_a << ',' << research_param_i << ',' << research_param_v << '\n'
+            << "guidance=" << research_guidance.certainty_norm << ',' << research_guidance.exactness_norm << ','
+            << research_guidance.temporal_coupling_norm << ',' << research_guidance.correction_authority_norm << '\n'
+            << "gpu_calibration=" << research_gpu_calibration.prediction_confidence_norm << ','
+            << research_gpu_calibration.best_interference_norm << ','
+            << research_gpu_calibration.best_lattice_interference_norm << ','
+            << research_gpu_calibration.best_temporal_coupling_norm << '\n'
+            << "live_plan=" << research_live_compute_plan.readiness_norm << ','
+            << research_live_compute_plan.interference_ledger_norm << ','
+            << research_live_compute_plan.encoded_extrapolation_norm << '\n'
+            << "process=" << process.valid_u32 << ',' << process.tick_u64 << ','
+            << process.residual_norm_q15 << ',' << process.controller_authority_q15 << ','
+            << process.interference_norm_q15 << ',' << process.coherence_norm_q15 << ','
+            << process.source_vibration_q15 << ',' << process.calibration_authority_q15 << '\n'
+            << "subsystem=" << subsystem.valid_u32 << ',' << subsystem.tick_u64 << ','
+            << subsystem.aggregate_residual_norm_q15 << ',' << subsystem.aggregate_spin_norm_q15 << ','
+            << subsystem.aggregate_coupling_norm_q15 << ',' << subsystem.aggregate_controller_authority_q15 << ','
+            << subsystem.dominant_subsystem_id_u32 << '\n'
+            << "ai=" << ai.valid_u32 << ',' << ai.tick_u64 << ',' << ai.sig9_u64 << ','
+            << ai.command_count_u32 << ',' << ai.action_log_count_u32 << ','
+            << ai.pending_external_api_u32 << ',' << ai.inflight_external_api_u32 << '\n'
+            << "ai_data=" << ai_data.valid_u32 << ',' << ai_data.tick_u64 << ','
+            << ai_data.corpus_artifact_count_u32 << ',' << ai_data.pending_external_api_u32 << ','
+            << ai_data.inflight_external_api_u32 << ',' << ai_data.residual_norm_q15;
+        for (uint64_t object_id_u64 : object_ids) {
+            oss << '\n' << "object_id=" << object_id_u64;
+        }
+        return oss.str();
+    }
+
+    void PersistResearchVerificationArtifacts() {
+        const uint64_t tick_u64 = sm.canonical_tick_u64();
+        const bool should_emit =
+            (research_verification_emit_last_tick_u64 == 0u) ||
+            (tick_u64 == research_gpu_prediction_last_tick_u64) ||
+            (tick_u64 >= research_verification_emit_last_tick_u64 + 360u) ||
+            (research_run_log_last_live_compute_active != research_live_compute_active) ||
+            research_guidance_watchdog_fault;
+        if (!should_emit) return;
+
+        EwProcessSubstrateTelemetry process{};
+        EwSubsystemSubstrateTelemetry subsystem{};
+        EwAiSubstrateTelemetry ai{};
+        EwAiDataSubstrateTelemetry ai_data{};
+        (void)sm.get_process_substrate_telemetry(&process);
+        (void)sm.get_subsystem_substrate_telemetry(&subsystem);
+        (void)sm.get_ai_substrate_telemetry(&ai);
+        (void)sm.get_ai_data_substrate_telemetry(&ai_data);
+
+        std::vector<uint64_t> object_ids;
+        sm.object_store.list_object_ids_sorted(object_ids);
+        const std::string core_state_utf8 =
+            BuildResearchRuntimeStateCore(process, subsystem, ai, ai_data, object_ids);
+        const EwId9 state_sig9 =
+            EigenWare::coord_sig9(EigenWare::ew_namespace_sig9_ascii(),
+                                  reinterpret_cast<const uint8_t*>(core_state_utf8.data()),
+                                  core_state_utf8.size());
+
+        const std::filesystem::path root = ResearchRootDir();
+        std::error_code ec;
+        std::filesystem::create_directories(root, ec);
+        {
+            std::ofstream f(root / "state.json", std::ios::out | std::ios::trunc);
+            if (f.good()) {
+                f.setf(std::ios::fixed);
+                f.precision(6);
+                f << "{\n";
+                f << "  \"tick\": " << tick_u64 << ",\n";
+                f << "  \"anchor_count\": " << sm.anchors.size() << ",\n";
+                f << "  \"object_count\": " << object_ids.size() << ",\n";
+                f << "  \"state_sig9\": [";
+                for (size_t i = 0u; i < state_sig9.u32.size(); ++i) {
+                    if (i != 0u) f << ", ";
+                    f << state_sig9.u32[i];
+                }
+                f << "],\n";
+                f << "  \"state_byte_len\": " << core_state_utf8.size() << ",\n";
+                f << "  \"runtime\": {\n";
+                f << "    \"live_boot_enabled\": " << (research_live_boot_enabled ? 1 : 0) << ",\n";
+                f << "    \"guidance_enabled\": " << (research_guidance_enabled ? 1 : 0) << ",\n";
+                f << "    \"live_compute_enabled\": " << (research_live_compute_enabled ? 1 : 0) << ",\n";
+                f << "    \"live_compute_active\": " << (research_live_compute_active ? 1 : 0) << ",\n";
+                f << "    \"guidance_watchdog_fault\": " << (research_guidance_watchdog_fault ? 1 : 0) << ",\n";
+                f << "    \"guidance_watchdog_fault_count\": " << research_guidance_watchdog_fault_count_u32 << ",\n";
+                f << "    \"quartet\": {\"F\": " << research_param_f
+                  << ", \"A\": " << research_param_a
+                  << ", \"I\": " << research_param_i
+                  << ", \"V\": " << research_param_v << "}\n";
+                f << "  },\n";
+                f << "  \"guidance\": {\n";
+                f << "    \"certainty_norm\": " << research_guidance.certainty_norm << ",\n";
+                f << "    \"exactness_norm\": " << research_guidance.exactness_norm << ",\n";
+                f << "    \"temporal_coupling_norm\": " << research_guidance.temporal_coupling_norm << ",\n";
+                f << "    \"correction_authority_norm\": " << research_guidance.correction_authority_norm << ",\n";
+                f << "    \"corrected_quartet\": {\"F\": " << research_guidance.corrected_quartet.F
+                  << ", \"A\": " << research_guidance.corrected_quartet.A
+                  << ", \"I\": " << research_guidance.corrected_quartet.I
+                  << ", \"V\": " << research_guidance.corrected_quartet.V << "}\n";
+                f << "  },\n";
+                f << "  \"gpu_calibration\": {\n";
+                f << "    \"valid\": " << (research_gpu_calibration.valid ? 1 : 0) << ",\n";
+                f << "    \"prediction_tick\": " << research_gpu_prediction_last_tick_u64 << ",\n";
+                f << "    \"prediction_confidence_norm\": " << research_gpu_calibration.prediction_confidence_norm << ",\n";
+                f << "    \"best_interference_norm\": " << research_gpu_calibration.best_interference_norm << ",\n";
+                f << "    \"best_lattice_interference_norm\": " << research_gpu_calibration.best_lattice_interference_norm << ",\n";
+                f << "    \"best_temporal_coupling_norm\": " << research_gpu_calibration.best_temporal_coupling_norm << ",\n";
+                f << "    \"next_pulse_quartet\": {\"F\": " << research_gpu_calibration.next_pulse_quartet.F
+                  << ", \"A\": " << research_gpu_calibration.next_pulse_quartet.A
+                  << ", \"I\": " << research_gpu_calibration.next_pulse_quartet.I
+                  << ", \"V\": " << research_gpu_calibration.next_pulse_quartet.V << "}\n";
+                f << "  },\n";
+                f << "  \"process_substrate\": {\n";
+                f << "    \"valid\": " << process.valid_u32 << ",\n";
+                f << "    \"tick\": " << process.tick_u64 << ",\n";
+                f << "    \"residual_norm_q15\": " << process.residual_norm_q15 << ",\n";
+                f << "    \"controller_authority_q15\": " << process.controller_authority_q15 << ",\n";
+                f << "    \"interference_norm_q15\": " << process.interference_norm_q15 << ",\n";
+                f << "    \"coherence_norm_q15\": " << process.coherence_norm_q15 << ",\n";
+                f << "    \"source_vibration_q15\": " << process.source_vibration_q15 << ",\n";
+                f << "    \"calibration_authority_q15\": " << process.calibration_authority_q15 << "\n";
+                f << "  },\n";
+                f << "  \"subsystem_substrate\": {\n";
+                f << "    \"valid\": " << subsystem.valid_u32 << ",\n";
+                f << "    \"tick\": " << subsystem.tick_u64 << ",\n";
+                f << "    \"subsystem_count_u32\": " << subsystem.subsystem_count_u32 << ",\n";
+                f << "    \"active_subsystem_count_u32\": " << subsystem.active_subsystem_count_u32 << ",\n";
+                f << "    \"dominant_subsystem_id_u32\": " << subsystem.dominant_subsystem_id_u32 << ",\n";
+                f << "    \"aggregate_residual_norm_q15\": " << subsystem.aggregate_residual_norm_q15 << ",\n";
+                f << "    \"aggregate_spin_norm_q15\": " << subsystem.aggregate_spin_norm_q15 << ",\n";
+                f << "    \"aggregate_coupling_norm_q15\": " << subsystem.aggregate_coupling_norm_q15 << ",\n";
+                f << "    \"aggregate_controller_authority_q15\": " << subsystem.aggregate_controller_authority_q15 << "\n";
+                f << "  },\n";
+                f << "  \"ai_substrate\": {\n";
+                f << "    \"valid\": " << ai.valid_u32 << ",\n";
+                f << "    \"tick\": " << ai.tick_u64 << ",\n";
+                f << "    \"sig9_u64\": " << ai.sig9_u64 << ",\n";
+                f << "    \"command_count_u32\": " << ai.command_count_u32 << ",\n";
+                f << "    \"action_log_count_u32\": " << ai.action_log_count_u32 << ",\n";
+                f << "    \"pending_external_api_u32\": " << ai.pending_external_api_u32 << ",\n";
+                f << "    \"inflight_external_api_u32\": " << ai.inflight_external_api_u32 << "\n";
+                f << "  },\n";
+                f << "  \"ai_data_substrate\": {\n";
+                f << "    \"valid\": " << ai_data.valid_u32 << ",\n";
+                f << "    \"tick\": " << ai_data.tick_u64 << ",\n";
+                f << "    \"corpus_artifact_count_u32\": " << ai_data.corpus_artifact_count_u32 << ",\n";
+                f << "    \"manifest_record_count_u32\": " << ai_data.manifest_record_count_u32 << ",\n";
+                f << "    \"pending_external_api_u32\": " << ai_data.pending_external_api_u32 << ",\n";
+                f << "    \"inflight_external_api_u32\": " << ai_data.inflight_external_api_u32 << ",\n";
+                f << "    \"residual_norm_q15\": " << ai_data.residual_norm_q15 << "\n";
+                f << "  },\n";
+                f << "  \"artifacts\": {\n";
+                f << "    \"run_log\": \"run.log\",\n";
+                f << "    \"state_json\": \"state.json\",\n";
+                f << "    \"lattice_projection_image\": \"lattice_projection.ppm\",\n";
+                f << "    \"object_reference_image\": \"object_reference.ppm\"\n";
+                f << "  }\n";
+                f << "}\n";
+            }
+        }
+
+        PersistResearchLatticeProjectionImage();
+        PersistResearchObjectReferenceImage();
+
+        if (!research_run_log_boot_emitted) {
+            std::ostringstream oss;
+            oss << "RUN_START tick=" << tick_u64
+                << " live_boot=" << (research_live_boot_enabled ? 1 : 0)
+                << " guidance=" << (research_guidance_enabled ? 1 : 0)
+                << " live_compute_enabled=" << (research_live_compute_enabled ? 1 : 0)
+                << " state_sig9=" << Sig9CompactUtf8(state_sig9);
+            AppendResearchRunLogLine(oss.str());
+            research_run_log_boot_emitted = true;
+        }
+        if (research_run_log_last_live_compute_active != research_live_compute_active) {
+            std::ostringstream oss;
+            oss << "LIVE_COMPUTE active=" << (research_live_compute_active ? 1 : 0)
+                << " tick=" << tick_u64
+                << " readiness=" << research_live_compute_plan.readiness_norm
+                << " spectral_id=" << research_live_compute_plan.trajectory_spectral_id_u64;
+            AppendResearchRunLogLine(oss.str());
+            research_run_log_last_live_compute_active = research_live_compute_active;
+        }
+        if (research_run_log_last_prediction_tick_u64 != research_gpu_prediction_last_tick_u64 &&
+            research_gpu_calibration.valid) {
+            std::ostringstream oss;
+            oss << "GPU_CALIBRATION tick=" << research_gpu_prediction_last_tick_u64
+                << " confidence=" << research_gpu_calibration.prediction_confidence_norm
+                << " best_interference=" << research_gpu_calibration.best_interference_norm
+                << " best_lattice_interference=" << research_gpu_calibration.best_lattice_interference_norm
+                << " best_temporal_coupling=" << research_gpu_calibration.best_temporal_coupling_norm
+                << " next_pulse="
+                << research_gpu_calibration.next_pulse_quartet.F << ','
+                << research_gpu_calibration.next_pulse_quartet.A << ','
+                << research_gpu_calibration.next_pulse_quartet.I << ','
+                << research_gpu_calibration.next_pulse_quartet.V;
+            AppendResearchRunLogLine(oss.str());
+            research_run_log_last_prediction_tick_u64 = research_gpu_prediction_last_tick_u64;
+        }
+        if (research_last_state_sig9 != state_sig9 || research_verification_emit_last_tick_u64 != tick_u64) {
+            std::ostringstream oss;
+            oss << "STATE_SNAPSHOT tick=" << tick_u64
+                << " sig9=" << Sig9CompactUtf8(state_sig9)
+                << " residual_q15=" << process.residual_norm_q15
+                << " certainty=" << research_guidance.certainty_norm
+                << " readiness=" << research_live_compute_plan.readiness_norm
+                << " objects=" << object_ids.size();
+            AppendResearchRunLogLine(oss.str());
+            research_last_state_sig9 = state_sig9;
+        }
+
+        research_verification_emit_last_tick_u64 = tick_u64;
+    }
+
     void PersistResearchRuntimeState() {
         (void)research_runtime_vsd.put_u64("photon/runtime/lattice_edge",
                                            "runtime lattice edge",
@@ -736,6 +1172,7 @@ void refresh_fixed_cache() {
         std::ofstream f(out, std::ios::binary | std::ios::trunc);
         if (!f.good()) return;
         f.write(reinterpret_cast<const char*>(blob.data()), (std::streamsize)blob.size());
+        PersistResearchVerificationArtifacts();
     }
 
     void SetResearchOutputMode(uint8_t mode_u8, bool announce = true) {
@@ -1098,6 +1535,10 @@ void refresh_fixed_cache() {
             << " intf=" << research_gpu_calibration.observed_interference_norm
             << " coh=" << research_gpu_calibration.observed_coherence_norm
             << " vib=" << research_gpu_calibration.observed_source_vibration_norm
+            << " subRes=" << research_gpu_calibration.observed_subsystem_residual_norm
+            << " subSpin=" << research_gpu_calibration.observed_subsystem_spin_norm
+            << " subCpl=" << research_gpu_calibration.observed_subsystem_coupling_norm
+            << " subCtrl=" << research_gpu_calibration.observed_subsystem_controller_norm
             << " sx=" << UnpackPositiveQ32_32(research_sx_q32_32_u64)
             << " sy=" << UnpackPositiveQ32_32(research_sy_q32_32_u64)
             << " sz=" << UnpackPositiveQ32_32(research_sz_q32_32_u64)
@@ -1108,6 +1549,7 @@ void refresh_fixed_cache() {
             << " conf=" << research_gpu_calibration.prediction_confidence_norm
             << " align=" << research_gpu_calibration.best_gpu_alignment_norm
             << " vec=" << research_gpu_calibration.best_vector_coupling_norm
+            << " subFB=" << research_gpu_calibration.best_subsystem_feedback_norm
             << " bestIntf=" << research_gpu_calibration.best_interference_norm
             << " bestLatIntf=" << research_gpu_calibration.best_lattice_interference_norm
             << " bestTemp=" << research_gpu_calibration.best_temporal_coupling_norm
@@ -1185,6 +1627,12 @@ void refresh_fixed_cache() {
         f << "    \"coherence\": " << research_gpu_calibration.observed_coherence_norm << ",\n";
         f << "    \"source_vibration\": " << research_gpu_calibration.observed_source_vibration_norm << "\n";
         f << "  },\n";
+        f << "  \"observed_subsystems\": {\n";
+        f << "    \"residual\": " << research_gpu_calibration.observed_subsystem_residual_norm << ",\n";
+        f << "    \"spin\": " << research_gpu_calibration.observed_subsystem_spin_norm << ",\n";
+        f << "    \"coupling\": " << research_gpu_calibration.observed_subsystem_coupling_norm << ",\n";
+        f << "    \"controller\": " << research_gpu_calibration.observed_subsystem_controller_norm << "\n";
+        f << "  },\n";
         f << "  \"axis_scales_q32_32\": {\n";
         f << "    \"sx\": " << research_sx_q32_32_u64 << ",\n";
         f << "    \"sy\": " << research_sy_q32_32_u64 << ",\n";
@@ -1201,6 +1649,7 @@ void refresh_fixed_cache() {
         f << "    \"prediction_confidence\": " << research_gpu_calibration.prediction_confidence_norm << ",\n";
         f << "    \"gpu_alignment\": " << research_gpu_calibration.best_gpu_alignment_norm << ",\n";
         f << "    \"vector_coupling\": " << research_gpu_calibration.best_vector_coupling_norm << ",\n";
+        f << "    \"subsystem_feedback\": " << research_gpu_calibration.best_subsystem_feedback_norm << ",\n";
         f << "    \"predicted_interference\": " << research_gpu_calibration.best_interference_norm << ",\n";
         f << "    \"lattice_interference\": " << research_gpu_calibration.best_lattice_interference_norm << ",\n";
         f << "    \"temporal_coupling\": " << research_gpu_calibration.best_temporal_coupling_norm << ",\n";
@@ -1331,7 +1780,8 @@ void refresh_fixed_cache() {
         }
     }
 
-    void UpdateResearchGpuAdaptiveCalibration(const EwProcessSubstrateTelemetry* telemetry_opt) {
+    void UpdateResearchGpuAdaptiveCalibration(const EwProcessSubstrateTelemetry* telemetry_opt,
+                                              const EwSubsystemSubstrateTelemetry* subsystem_telemetry_opt) {
         if (!genesis::ge_has_research_runtime_guidance(research_archive)) {
             research_gpu_calibration = genesis::GeResearchGpuAdaptiveCalibration{};
             research_gpu_predictions.clear();
@@ -1359,6 +1809,22 @@ void refresh_fixed_cache() {
             telemetry_opt ? ((double)telemetry_opt->coherence_norm_q15 / 65535.0) : 0.0;
         const double source_vibration_norm =
             telemetry_opt ? ((double)telemetry_opt->source_vibration_q15 / 65535.0) : 0.0;
+        const double subsystem_residual_norm =
+            subsystem_telemetry_opt
+                ? ((double)subsystem_telemetry_opt->aggregate_residual_norm_q15 / 65535.0)
+                : 0.0;
+        const double subsystem_spin_norm =
+            subsystem_telemetry_opt
+                ? ((double)subsystem_telemetry_opt->aggregate_spin_norm_q15 / 65535.0)
+                : 0.0;
+        const double subsystem_coupling_norm =
+            subsystem_telemetry_opt
+                ? ((double)subsystem_telemetry_opt->aggregate_coupling_norm_q15 / 65535.0)
+                : 0.0;
+        const double subsystem_controller_norm =
+            subsystem_telemetry_opt
+                ? ((double)subsystem_telemetry_opt->aggregate_controller_authority_q15 / 65535.0)
+                : 0.0;
 
         genesis::GeResearchPulseQuartet desired{};
         desired.F = (double)research_param_f;
@@ -1386,6 +1852,10 @@ void refresh_fixed_cache() {
                 prediction_interference_norm,
                 prediction_coherence_norm,
                 prediction_source_vibration_norm,
+                subsystem_residual_norm,
+                subsystem_spin_norm,
+                subsystem_coupling_norm,
+                subsystem_controller_norm,
                 research_gpu_prediction_axis_resolution_u32,
                 next_calibration,
                 &next_predictions)) {
@@ -1408,6 +1878,8 @@ void refresh_fixed_cache() {
 
         EwProcessSubstrateTelemetry telemetry{};
         const bool has_process_telemetry = sm.get_process_substrate_telemetry(&telemetry);
+        EwSubsystemSubstrateTelemetry subsystem_telemetry{};
+        const bool has_subsystem_telemetry = sm.get_subsystem_substrate_telemetry(&subsystem_telemetry);
         const double residual_norm =
             has_process_telemetry ? ((double)telemetry.residual_norm_q15 / 65535.0) : 0.0;
         const double interference_norm =
@@ -1417,7 +1889,8 @@ void refresh_fixed_cache() {
         const double source_vibration_norm =
             has_process_telemetry ? ((double)telemetry.source_vibration_q15 / 65535.0) : 0.0;
 
-        UpdateResearchGpuAdaptiveCalibration(has_process_telemetry ? &telemetry : nullptr);
+        UpdateResearchGpuAdaptiveCalibration(has_process_telemetry ? &telemetry : nullptr,
+                                             has_subsystem_telemetry ? &subsystem_telemetry : nullptr);
 
         genesis::GeResearchPulseQuartet desired{};
         desired.F = (double)research_param_f;
@@ -1978,6 +2451,43 @@ void refresh_fixed_cache() {
                 << " commit=" << (uint32_t)telemetry.last_commit_u8;
             PushLocalUiLine(oss.str());
         };
+        auto push_subsystem_substrate_status_local = [&]() {
+            EwSubsystemSubstrateTelemetry telemetry{};
+            if (!sm.get_subsystem_substrate_telemetry(&telemetry)) {
+                std::ostringstream oss;
+                oss << "SUBSYSTEM_SUBSTRATE_STATUS valid=0"
+                    << " tick=" << sm.canonical_tick_u64();
+                PushLocalUiLine(oss.str());
+                return;
+            }
+            std::ostringstream oss;
+            oss << "SUBSYSTEM_SUBSTRATE_STATUS valid=" << telemetry.valid_u32
+                << " tick=" << telemetry.tick_u64
+                << " count=" << telemetry.subsystem_count_u32
+                << " active=" << telemetry.active_subsystem_count_u32
+                << " dominant=" << telemetry.dominant_subsystem_id_u32
+                << " aggIntent_q15=" << telemetry.aggregate_intent_norm_q15
+                << " aggMeasured_q15=" << telemetry.aggregate_measured_norm_q15
+                << " aggResidual_q15=" << telemetry.aggregate_residual_norm_q15
+                << " aggSpin_q15=" << telemetry.aggregate_spin_norm_q15
+                << " aggCoupling_q15=" << telemetry.aggregate_coupling_norm_q15
+                << " aggCtrl_q15=" << telemetry.aggregate_controller_authority_q15
+                << " aggErr_q32_32=" << telemetry.aggregate_error_q32_32
+                << " aggDErr_q32_32=" << telemetry.aggregate_error_delta_q32_32
+                << " aggIErr_q32_32=" << telemetry.aggregate_error_integral_q32_32;
+            for (uint32_t i = 0u; i < telemetry.subsystem_count_u32 &&
+                                  i < EW_SUBSYSTEM_SUBSTRATE_LANE_CAP; ++i) {
+                const EwSubsystemCalculusLane& lane = telemetry.lanes[i];
+                if (lane.subsystem_id_u32 == EW_SUBSYSTEM_PLANE_NONE) continue;
+                oss << " s" << lane.subsystem_id_u32
+                    << "(r=" << lane.residual_norm_q15
+                    << ",s=" << lane.spin_norm_q15
+                    << ",c=" << lane.coupling_norm_q15
+                    << ",a=" << lane.controller_authority_q15
+                    << ")";
+            }
+            PushLocalUiLine(oss.str());
+        };
         auto push_ai_substrate_status_local = [&]() {
             EwAiSubstrateTelemetry telemetry{};
             if (!sm.get_ai_substrate_telemetry(&telemetry)) {
@@ -2209,6 +2719,11 @@ void refresh_fixed_cache() {
             push_process_substrate_status_local();
             return;
         }
+        if (utf8.rfind("/subsystem_substrate_status", 0) == 0 ||
+            utf8.rfind("subsystem_substrate_status:", 0) == 0) {
+            push_subsystem_substrate_status_local();
+            return;
+        }
         if (utf8.rfind("/ai_status", 0) == 0 || utf8.rfind("ai_status:", 0) == 0 ||
             utf8.rfind("/ai_substrate_status", 0) == 0 || utf8.rfind("ai_substrate_status:", 0) == 0) {
             push_ai_substrate_status_local();
@@ -2242,6 +2757,7 @@ void refresh_fixed_cache() {
             PushLocalUiLine(BuildResearchGpuCalibrationStatusLine());
             PushLocalUiLine(BuildResearchLiveComputeStatusLine());
             push_process_substrate_status_local();
+            push_subsystem_substrate_status_local();
             push_ai_substrate_status_local();
             push_ai_data_substrate_status_local();
             return;

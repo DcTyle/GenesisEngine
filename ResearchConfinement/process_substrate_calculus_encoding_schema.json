@@ -95,6 +95,22 @@
         "external_api_pending",
         "external_api_inflight"
       ]
+    },
+    "engine_subsystem_substrate": {
+      "role": "engine-wide microprocessor substrate encoding for the major runtime systems",
+      "authoritative_state": [
+        "process_substrate_telemetry",
+        "camera_sensor and render packets",
+        "object_store and asset_substrate roots",
+        "nbody_state",
+        "curriculum and learning_automation",
+        "language_foundation.stats()",
+        "math_foundation.stats()",
+        "corpus pipeline and allowlist state",
+        "external_api queues",
+        "ai_substrate_telemetry",
+        "ai_data_substrate_telemetry"
+      ]
     }
   },
   "ai_data_substrate": {
@@ -185,7 +201,57 @@
         "prediction_lattice_temporal_coupling_norm"
       ],
       "encoding": "GPU pulse target lanes, low-band interference deltas, temporal coherence normalization, and source-memory vibration feedback"
+    },
+    "subsystem_coupling_plane": {
+      "sources": [
+        "EwSubsystemSubstrateTelemetry.aggregate_residual_norm_q15",
+        "EwSubsystemSubstrateTelemetry.aggregate_spin_norm_q15",
+        "EwSubsystemSubstrateTelemetry.aggregate_coupling_norm_q15",
+        "EwSubsystemSubstrateTelemetry.aggregate_controller_authority_q15",
+        "EwSubsystemCalculusLane[]"
+      ],
+      "encoding": "fixed-size per-subsystem calculus lanes plus aggregate residual/spin/coupling/controller norms consumed by GPU calibration and next-pulse prediction"
     }
+  },
+  "engine_subsystem_substrate": {
+    "lane_contract": {
+      "capacity": 16,
+      "lane_fields": [
+        "subsystem_id_u32",
+        "intent_norm_q15",
+        "measured_norm_q15",
+        "residual_norm_q15",
+        "spin_norm_q15",
+        "coupling_norm_q15",
+        "error_q32_32",
+        "error_delta_q32_32",
+        "error_integral_q32_32",
+        "controller_authority_q15"
+      ]
+    },
+    "aggregates": [
+      "aggregate_intent_norm_q15",
+      "aggregate_measured_norm_q15",
+      "aggregate_residual_norm_q15",
+      "aggregate_spin_norm_q15",
+      "aggregate_coupling_norm_q15",
+      "aggregate_controller_authority_q15"
+    ],
+    "subsystems": [
+      "spectral_process",
+      "camera",
+      "render",
+      "asset_object",
+      "nbody",
+      "curriculum",
+      "automation",
+      "language",
+      "math",
+      "corpus",
+      "external_api",
+      "ai_core",
+      "ai_data"
+    ]
   },
   "frequency_interference_calibration": {
     "input_plane": {
@@ -226,7 +292,12 @@
       "next_pulse_correction_norm",
       "next_pulse_quartet",
       "best_lattice_interference_norm",
-      "best_temporal_coupling_norm"
+      "best_temporal_coupling_norm",
+      "observed_subsystem_residual_norm",
+      "observed_subsystem_spin_norm",
+      "observed_subsystem_coupling_norm",
+      "observed_subsystem_controller_norm",
+      "best_subsystem_feedback_norm"
     ]
   },
   "temporal_prediction_plane": {
@@ -245,6 +316,7 @@
         "trajectory_spectral_id_u64",
         "lattice_interference_norm",
         "lattice_temporal_coupling_norm",
+        "subsystem_feedback_norm",
         "lattice_coord",
         "next_pulse_quartet"
       ]
