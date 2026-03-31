@@ -500,6 +500,7 @@ public:
     uint32_t pulses_seen_last_tick_u32 = 0u;
     uint32_t pulses_dropped_last_tick_u32 = 0u;
     EwProcessSubstrateTelemetry process_substrate_telemetry;
+    EwSubsystemSubstrateTelemetry subsystem_substrate_telemetry;
     EwAiSubstrateTelemetry ai_substrate_telemetry;
     EwAiDataSubstrateTelemetry ai_data_substrate_telemetry;
 
@@ -509,6 +510,7 @@ public:
     // XR per-eye projected view packet.
     bool get_render_xr_eye_packet(uint32_t eye_index_u32, EwRenderXrEyePacket* out) const;
     bool get_process_substrate_telemetry(EwProcessSubstrateTelemetry* out) const;
+    bool get_subsystem_substrate_telemetry(EwSubsystemSubstrateTelemetry* out) const;
     bool get_ai_substrate_telemetry(EwAiSubstrateTelemetry* out) const;
     bool get_ai_data_substrate_telemetry(EwAiDataSubstrateTelemetry* out) const;
 

@@ -92,6 +92,105 @@ static inline uint16_t ge_abs_q32_32_to_q15_sat(int64_t v_q32_32) {
     return (uint16_t)q;
 }
 
+static inline uint16_t ge_bool_to_q15(bool on) {
+    return on ? 32767u : 0u;
+}
+
+static inline uint16_t ge_abs_i16_q15_to_q15_sat(int32_t v_q1_15) {
+    int32_t mag = (v_q1_15 < 0) ? -v_q1_15 : v_q1_15;
+    if (mag > 32767) mag = 32767;
+    return (uint16_t)mag;
+}
+
+static inline uint16_t ge_q16_16_ratio_to_q15_sat(int32_t v_q16_16, int32_t full_scale_q16_16) {
+    if (full_scale_q16_16 <= 0) return 0u;
+    uint64_t mag = (uint64_t)((v_q16_16 < 0) ? -(int64_t)v_q16_16 : (int64_t)v_q16_16);
+    uint64_t den = (uint64_t)full_scale_q16_16;
+    if (mag > den) mag = den;
+    return ge_ratio_q15_u64(mag, den);
+}
+
+static inline uint16_t ge_q32_32_ratio_to_q15_sat(int64_t v_q32_32, int64_t full_scale_q32_32) {
+    if (full_scale_q32_32 <= 0) return 0u;
+    uint64_t mag = (uint64_t)((v_q32_32 < 0) ? -(int64_t)v_q32_32 : v_q32_32);
+    uint64_t den = (uint64_t)full_scale_q32_32;
+    if (mag > den) mag = den;
+    return ge_ratio_q15_u64(mag, den);
+}
+
+static inline uint32_t ge_popcount_u64_local(uint64_t v) {
+    uint32_t n = 0u;
+    while (v != 0u) {
+        n += (uint32_t)(v & 1u);
+        v >>= 1u;
+    }
+    return n;
+}
+
+static const EwSubsystemCalculusLane* ge_find_prev_subsystem_lane(
+    const EwSubsystemSubstrateTelemetry& telemetry,
+    uint32_t subsystem_id_u32) {
+    for (uint32_t i = 0u; i < telemetry.subsystem_count_u32 &&
+                          i < EW_SUBSYSTEM_SUBSTRATE_LANE_CAP; ++i) {
+        if (telemetry.lanes[i].subsystem_id_u32 == subsystem_id_u32) {
+            return &telemetry.lanes[i];
+        }
+    }
+    return nullptr;
+}
+
+static const char* ge_subsystem_plane_name_ascii(uint32_t subsystem_id_u32) {
+    switch (subsystem_id_u32) {
+        case EW_SUBSYSTEM_PLANE_SPECTRAL_PROCESS: return "spectral_process";
+        case EW_SUBSYSTEM_PLANE_CAMERA: return "camera";
+        case EW_SUBSYSTEM_PLANE_RENDER: return "render";
+        case EW_SUBSYSTEM_PLANE_ASSET_OBJECT: return "asset_object";
+        case EW_SUBSYSTEM_PLANE_NBODY: return "nbody";
+        case EW_SUBSYSTEM_PLANE_CURRICULUM: return "curriculum";
+        case EW_SUBSYSTEM_PLANE_AUTOMATION: return "automation";
+        case EW_SUBSYSTEM_PLANE_LANGUAGE: return "language";
+        case EW_SUBSYSTEM_PLANE_MATH: return "math";
+        case EW_SUBSYSTEM_PLANE_CORPUS: return "corpus";
+        case EW_SUBSYSTEM_PLANE_EXTERNAL_API: return "external_api";
+        case EW_SUBSYSTEM_PLANE_AI_CORE: return "ai_core";
+        case EW_SUBSYSTEM_PLANE_AI_DATA: return "ai_data";
+        default: return "unknown";
+    }
+}
+
+static void ge_finalize_subsystem_lane(EwSubsystemCalculusLane& lane,
+                                       uint16_t intent_norm_q15,
+                                       uint16_t measured_norm_q15,
+                                       uint16_t spin_norm_q15,
+                                       uint16_t coupling_norm_q15,
+                                       int64_t prev_error_q32_32,
+                                       int64_t prev_integral_q32_32) {
+    lane.intent_norm_q15 = intent_norm_q15;
+    lane.measured_norm_q15 = measured_norm_q15;
+    lane.residual_norm_q15 = (uint16_t)((intent_norm_q15 > measured_norm_q15)
+                                            ? (intent_norm_q15 - measured_norm_q15)
+                                            : (measured_norm_q15 - intent_norm_q15));
+    lane.spin_norm_q15 = spin_norm_q15;
+    lane.coupling_norm_q15 = coupling_norm_q15;
+
+    lane.error_q32_32 = ge_q15_error_to_q32_32(measured_norm_q15, intent_norm_q15);
+    lane.error_delta_q32_32 = lane.error_q32_32 - prev_error_q32_32;
+    lane.error_integral_q32_32 =
+        ge_clamp_i64_local(prev_integral_q32_32 + lane.error_q32_32,
+                           -(16LL << 32),
+                           +(16LL << 32));
+    lane.error_delta_norm_q15 = ge_abs_q32_32_to_q15_sat(lane.error_delta_q32_32);
+    lane.error_integral_norm_q15 = ge_abs_q32_32_to_q15_sat(lane.error_integral_q32_32);
+
+    uint32_t authority_u32 = (uint32_t)lane.residual_norm_q15 +
+                             ((uint32_t)lane.error_delta_norm_q15 / 2u) +
+                             ((uint32_t)lane.error_integral_norm_q15 / 4u) +
+                             ((uint32_t)lane.spin_norm_q15 / 4u) +
+                             ((uint32_t)lane.coupling_norm_q15 / 4u);
+    if (authority_u32 > 32767u) authority_u32 = 32767u;
+    lane.controller_authority_q15 = (uint16_t)authority_u32;
+}
+
 
 static void ge_rebuild_cached_anchor_ids(SubstrateManager& sm) {
     sm.camera_anchor_id_u32 = 0u;
@@ -370,6 +469,557 @@ static void ge_update_ai_data_substrate_telemetry(SubstrateManager& sm) {
     out.controller_authority_q15 = (uint16_t)authority_u32;
 }
 
+static void ge_update_subsystem_substrate_telemetry(SubstrateManager& sm) {
+    const EwSubsystemSubstrateTelemetry prev = sm.subsystem_substrate_telemetry;
+    sm.subsystem_substrate_telemetry = EwSubsystemSubstrateTelemetry{};
+    EwSubsystemSubstrateTelemetry& out = sm.subsystem_substrate_telemetry;
+    out.tick_u64 = sm.canonical_tick;
+
+    const EwProcessSubstrateTelemetry& process = sm.process_substrate_telemetry;
+    const EwAiSubstrateTelemetry& ai = sm.ai_substrate_telemetry;
+    const EwAiDataSubstrateTelemetry& ai_data = sm.ai_data_substrate_telemetry;
+
+    const uint16_t sx_q15 =
+        ge_q32_32_ratio_to_q15_sat(sm.sx_q32_32, (int64_t)(2LL << 32));
+    const uint16_t sy_q15 =
+        ge_q32_32_ratio_to_q15_sat(sm.sy_q32_32, (int64_t)(2LL << 32));
+    const uint16_t sz_q15 =
+        ge_q32_32_ratio_to_q15_sat(sm.sz_q32_32, (int64_t)(2LL << 32));
+    const uint16_t axis_scale_mean_q15 = ge_mean_q15_u16(&sx_q15, 1u);
+    (void)axis_scale_mean_q15;
+
+    const bool camera_valid =
+        sm.camera_anchor_id_u32 != 0u &&
+        sm.camera_anchor_id_u32 < sm.anchors.size() &&
+        sm.anchors[sm.camera_anchor_id_u32].kind_u32 == EW_ANCHOR_KIND_CAMERA;
+    const uint16_t depth_q15 =
+        ge_ratio_q15_u64((uint64_t)std::max<int32_t>(0, sm.camera_sensor.median_depth_norm_q16_16),
+                         65536u);
+    const uint16_t camera_focus_q15 =
+        ge_q32_32_ratio_to_q15_sat(sm.render_camera_packet.focus_distance_m_q32_32,
+                                   (int64_t)(32LL << 32));
+    const uint16_t camera_audio_field_q15 =
+        ge_abs_i16_q15_to_q15_sat(sm.render_camera_packet.audio_env_field_q1_15);
+    const uint16_t camera_audio_grad_q15 =
+        ge_abs_i16_q15_to_q15_sat(sm.render_camera_packet.audio_env_grad_q1_15);
+    const uint16_t camera_color_band_q15 =
+        ge_ratio_q15_u64((uint64_t)sm.render_camera_packet.color_band_u8, 7u);
+    const uint16_t camera_measured_tmp[3] = {
+        depth_q15,
+        sm.render_camera_packet.audio_env_coherence_q15,
+        camera_focus_q15
+    };
+    const uint16_t camera_spin_tmp[3] = {
+        camera_audio_field_q15,
+        camera_audio_grad_q15,
+        camera_color_band_q15
+    };
+    const uint16_t camera_coupling_tmp[4] = {
+        sx_q15, sy_q15, sz_q15, sm.render_camera_packet.audio_env_coherence_q15
+    };
+
+    const uint16_t render_active_q15 =
+        ge_bool_to_q15(sm.render_camera_packet_tick_u64 != 0u ||
+                       sm.render_object_packets_tick_u64 != 0u);
+    const uint16_t render_object_count_q15 =
+        ge_ratio_q15_u64((uint64_t)sm.render_object_packets.size(), 64u);
+    const uint16_t render_screen_proxy_q15 =
+        ge_q16_16_ratio_to_q15_sat(sm.render_assist_packet.screen_proxy_scale_q16_16,
+                                   (int32_t)(8 * 65536));
+    const uint16_t render_focus_band_q15 =
+        ge_q32_32_ratio_to_q15_sat(sm.render_assist_packet.focus_band_m_q32_32,
+                                   (int64_t)(8LL << 32));
+    const uint16_t render_audio_field_q15 =
+        ge_abs_i16_q15_to_q15_sat(sm.render_assist_packet.audio_env_field_q1_15);
+    const uint16_t render_audio_grad_q15 =
+        ge_abs_i16_q15_to_q15_sat(sm.render_assist_packet.audio_env_grad_q1_15);
+    const uint16_t render_color_band_q15 =
+        ge_ratio_q15_u64((uint64_t)sm.render_assist_packet.color_band_u8, 7u);
+    const uint16_t render_measured_tmp[3] = {
+        render_object_count_q15,
+        sm.render_assist_packet.audio_env_coherence_q15,
+        render_focus_band_q15
+    };
+    const uint16_t render_spin_tmp[3] = {
+        render_audio_field_q15,
+        render_audio_grad_q15,
+        render_color_band_q15
+    };
+    const uint16_t render_coupling_tmp[4] = {
+        render_object_count_q15,
+        render_screen_proxy_q15,
+        sx_q15,
+        sm.render_assist_packet.audio_env_coherence_q15
+    };
+
+    std::vector<uint64_t> object_ids;
+    sm.object_store.list_object_ids_sorted(object_ids);
+    uint32_t voxel_ready_u32 = 0u;
+    uint32_t uv_ready_u32 = 0u;
+    uint32_t local_ready_u32 = 0u;
+    for (size_t i = 0; i < object_ids.size(); ++i) {
+        const EwObjectEntry* e = sm.object_store.find(object_ids[i]);
+        if (!e) continue;
+        if ((e->voxel_grid_x_u32 != 0u && e->voxel_grid_y_u32 != 0u && e->voxel_grid_z_u32 != 0u) ||
+            e->voxel_blob_id_u64 != 0u) {
+            voxel_ready_u32 += 1u;
+        }
+        if ((e->uv_atlas_w_u32 != 0u && e->uv_atlas_h_u32 != 0u) ||
+            e->uv_atlas_blob_id_u64 != 0u) {
+            uv_ready_u32 += 1u;
+        }
+        if ((e->local_grid_x_u32 != 0u && e->local_grid_y_u32 != 0u && e->local_grid_z_u32 != 0u) ||
+            e->local_blob_id_u64 != 0u) {
+            local_ready_u32 += 1u;
+        }
+    }
+    const uint32_t object_count_u32 = (uint32_t)object_ids.size();
+    const uint16_t object_count_q15 = ge_ratio_q15_u64((uint64_t)object_count_u32, 64u);
+    const uint16_t voxel_ratio_q15 = ge_ratio_q15_u64((uint64_t)voxel_ready_u32,
+                                                      (uint64_t)((object_count_u32 != 0u) ? object_count_u32 : 1u));
+    const uint16_t uv_ratio_q15 = ge_ratio_q15_u64((uint64_t)uv_ready_u32,
+                                                   (uint64_t)((object_count_u32 != 0u) ? object_count_u32 : 1u));
+    const uint16_t local_ratio_q15 = ge_ratio_q15_u64((uint64_t)local_ready_u32,
+                                                      (uint64_t)((object_count_u32 != 0u) ? object_count_u32 : 1u));
+    const uint16_t asset_root_q15 = ge_bool_to_q15(!sm.asset_substrate.project_root().empty());
+    const uint16_t asset_intent_tmp[2] = {
+        asset_root_q15,
+        ge_bool_to_q15(object_count_u32 != 0u)
+    };
+    const uint16_t asset_measured_tmp[4] = {
+        object_count_q15,
+        voxel_ratio_q15,
+        uv_ratio_q15,
+        local_ratio_q15
+    };
+    const uint16_t asset_spin_tmp[3] = {
+        local_ratio_q15,
+        uv_ratio_q15,
+        render_object_count_q15
+    };
+    const uint16_t asset_coupling_tmp[3] = {
+        voxel_ratio_q15,
+        local_ratio_q15,
+        render_object_count_q15
+    };
+
+    const genesis::EwNBodyState& nb = sm.nbody_state;
+    uint32_t anchored_bodies_u32 = 0u;
+    uint32_t orbiting_bodies_u32 = 0u;
+    uint64_t velocity_q15_sum_u64 = 0u;
+    uint32_t velocity_samples_u32 = 0u;
+    for (uint32_t i = 0u; i < nb.body_count_u32 && i < genesis::EwNBodyState::MAX_BODIES; ++i) {
+        const genesis::EwNBodyBody& body = nb.bodies[i];
+        if (body.planet_anchor_id_u32 != 0u) anchored_bodies_u32 += 1u;
+        if (body.object_id_u64 != 0u &&
+            (body.radius_m_q32_32 != 0 || body.emissive_q32_32 != 0 || body.atmosphere_thickness_m_q32_32 != 0)) {
+            orbiting_bodies_u32 += 1u;
+        }
+        const uint16_t vx_q15 =
+            ge_q32_32_ratio_to_q15_sat(body.vel_mps_q32_32[0], (int64_t)(20000LL << 32));
+        const uint16_t vy_q15 =
+            ge_q32_32_ratio_to_q15_sat(body.vel_mps_q32_32[1], (int64_t)(20000LL << 32));
+        const uint16_t vz_q15 =
+            ge_q32_32_ratio_to_q15_sat(body.vel_mps_q32_32[2], (int64_t)(20000LL << 32));
+        const uint16_t vel_tmp[3] = { vx_q15, vy_q15, vz_q15 };
+        velocity_q15_sum_u64 += (uint64_t)ge_mean_q15_u16(vel_tmp, 3u);
+        velocity_samples_u32 += 1u;
+    }
+    const uint16_t nbody_enabled_q15 = ge_bool_to_q15(nb.enabled_u32 != 0u);
+    const uint16_t nbody_initialized_q15 = ge_bool_to_q15(nb.initialized_u32 != 0u);
+    const uint16_t nbody_count_q15 = ge_ratio_q15_u64((uint64_t)nb.body_count_u32,
+                                                      (uint64_t)genesis::EwNBodyState::MAX_BODIES);
+    const uint16_t nbody_anchor_ratio_q15 = ge_ratio_q15_u64((uint64_t)anchored_bodies_u32,
+                                                             (uint64_t)((nb.body_count_u32 != 0u) ? nb.body_count_u32 : 1u));
+    const uint16_t nbody_orbit_ratio_q15 = ge_ratio_q15_u64((uint64_t)orbiting_bodies_u32,
+                                                            (uint64_t)((nb.body_count_u32 != 0u) ? nb.body_count_u32 : 1u));
+    const uint16_t nbody_velocity_q15 =
+        (velocity_samples_u32 != 0u)
+            ? ge_ratio_q15_u64(velocity_q15_sum_u64, (uint64_t)velocity_samples_u32)
+            : 0u;
+    const uint16_t nbody_measured_tmp[4] = {
+        nbody_enabled_q15,
+        nbody_initialized_q15,
+        nbody_count_q15,
+        nbody_anchor_ratio_q15
+    };
+    const uint16_t nbody_spin_tmp[2] = {
+        nbody_velocity_q15,
+        nbody_orbit_ratio_q15
+    };
+    const uint16_t nbody_coupling_tmp[3] = {
+        nbody_anchor_ratio_q15,
+        nbody_orbit_ratio_q15,
+        nbody_count_q15
+    };
+
+    const uint32_t cur_stage_u32 =
+        (sm.learning_curriculum_stage_u32 < SubstrateManager::GENESIS_CURRICULUM_STAGE_COUNT)
+            ? sm.learning_curriculum_stage_u32
+            : (SubstrateManager::GENESIS_CURRICULUM_STAGE_COUNT - 1u);
+    const uint64_t req_mask_u64 = sm.learning_stage_required_mask_u64[cur_stage_u32];
+    const uint64_t done_mask_u64 = sm.learning_stage_completed_mask_u64[cur_stage_u32] & req_mask_u64;
+    const uint32_t req_bits_u32 = ge_popcount_u64_local(req_mask_u64);
+    const uint32_t done_bits_u32 = ge_popcount_u64_local(done_mask_u64);
+    const uint16_t curriculum_stage_q15 =
+        ge_ratio_q15_u64((uint64_t)cur_stage_u32,
+                         (uint64_t)((SubstrateManager::GENESIS_CURRICULUM_STAGE_COUNT > 1u)
+                                        ? (SubstrateManager::GENESIS_CURRICULUM_STAGE_COUNT - 1u)
+                                        : 1u));
+    const uint16_t curriculum_completion_q15 =
+        ge_ratio_q15_u64((uint64_t)done_bits_u32,
+                         (uint64_t)((req_bits_u32 != 0u) ? req_bits_u32 : 1u));
+    const uint16_t curriculum_lane_density_q15 =
+        ge_ratio_q15_u64((uint64_t)(ge_popcount_u64_local((uint64_t)sm.curriculum.ingest_lane_mask_u32) +
+                                    ge_popcount_u64_local((uint64_t)sm.curriculum.train_lane_mask_u32)),
+                         32u);
+    const uint16_t curriculum_stage_advances_q15 =
+        ge_ratio_q15_u64(sm.curriculum.stage_advances_u64, 32u);
+    const uint16_t curriculum_measured_tmp[2] = {
+        curriculum_stage_q15,
+        curriculum_completion_q15
+    };
+    const uint16_t curriculum_spin_tmp[2] = {
+        curriculum_lane_density_q15,
+        curriculum_stage_advances_q15
+    };
+    const uint16_t curriculum_coupling_tmp[3] = {
+        curriculum_completion_q15,
+        curriculum_lane_density_q15,
+        curriculum_stage_advances_q15
+    };
+
+    const uint32_t automation_bus_size_u32 = sm.learning_automation.bus().size_u32();
+    const uint16_t automation_enabled_q15 = ge_bool_to_q15(sm.learning_automation.enabled());
+    const uint16_t automation_bus_used_q15 =
+        ge_ratio_q15_u64((uint64_t)automation_bus_size_u32, 64u);
+    const uint16_t automation_bus_headroom_q15 =
+        ge_headroom_q15_from_used_u32(automation_bus_size_u32, 64u);
+    const uint16_t automation_pending_metrics_q15 =
+        ge_ratio_q15_u64((uint64_t)sm.learning_gate.registry().pending_count_u32(), 64u);
+    const uint16_t automation_completed_metrics_q15 =
+        ge_ratio_q15_u64((uint64_t)sm.learning_gate.registry().completed_count_u32(), 64u);
+    const uint16_t automation_measured_tmp[3] = {
+        automation_enabled_q15,
+        automation_bus_headroom_q15,
+        automation_completed_metrics_q15
+    };
+    const uint16_t automation_spin_tmp[3] = {
+        automation_bus_used_q15,
+        automation_pending_metrics_q15,
+        automation_completed_metrics_q15
+    };
+    const uint16_t automation_coupling_tmp[3] = {
+        automation_bus_used_q15,
+        automation_completed_metrics_q15,
+        curriculum_completion_q15
+    };
+
+    const genesis::LangLexiconStats& lang = sm.language_foundation.stats();
+    const uint16_t lang_word_q15 = ge_ratio_q15_u64((uint64_t)lang.word_count_u32, 50000u);
+    const uint16_t lang_pron_q15 = ge_ratio_q15_u64((uint64_t)lang.pron_count_u32, 50000u);
+    const uint16_t lang_rel_q15 = ge_ratio_q15_u64((uint64_t)lang.relations_count_u32, 50000u);
+    const uint16_t lang_concept_q15 = ge_ratio_q15_u64((uint64_t)lang.concept_count_u32, 10000u);
+    const uint16_t lang_speech_utt_q15 = ge_ratio_q15_u64((uint64_t)lang.speech_utt_count_u32, 10000u);
+    const uint16_t lang_speech_tok_q15 = ge_ratio_q15_u64((uint64_t)lang.speech_word_tokens_u32, 50000u);
+    const uint16_t lang_measured_tmp[4] = {
+        lang_word_q15,
+        lang_pron_q15,
+        lang_rel_q15,
+        lang_concept_q15
+    };
+    const uint16_t lang_spin_tmp[2] = {
+        lang_speech_utt_q15,
+        lang_speech_tok_q15
+    };
+    const uint16_t lang_coupling_tmp[3] = {
+        lang_rel_q15,
+        lang_concept_q15,
+        lang_speech_tok_q15
+    };
+
+    const genesis::MathStats& math = sm.math_foundation.stats();
+    const uint16_t math_pemdas_q15 =
+        ge_ratio_q15_u64((uint64_t)math.pemdas_cases_passed_u32,
+                         (uint64_t)((math.pemdas_cases_total_u32 != 0u) ? math.pemdas_cases_total_u32 : 1u));
+    const uint16_t math_graph_samples_q15 =
+        ge_ratio_q15_u64((uint64_t)math.graph_1d_samples_total_u32, 512u);
+    const uint16_t math_graph_packets_q15 =
+        ge_ratio_q15_u64((uint64_t)math.graph_1d_packets_emitted_u32, 128u);
+    const uint16_t math_khan_pages_q15 =
+        ge_ratio_q15_u64((uint64_t)math.khan_pages_seen_u32, 64u);
+    const uint16_t math_khan_chars_q15 =
+        ge_ratio_q15_u64((uint64_t)math.khan_chars_ingested_u32, 262144u);
+    const uint16_t math_measured_tmp[4] = {
+        math_pemdas_q15,
+        math_graph_samples_q15,
+        math_graph_packets_q15,
+        math_khan_pages_q15
+    };
+    const uint16_t math_spin_tmp[2] = {
+        math_graph_packets_q15,
+        math_khan_chars_q15
+    };
+    const uint16_t math_coupling_tmp[3] = {
+        math_pemdas_q15,
+        math_graph_packets_q15,
+        math_khan_chars_q15
+    };
+
+    const uint16_t corpus_enabled_q15 = ge_bool_to_q15(sm.corpus_pipeline_enable_u32 != 0u);
+    const uint16_t corpus_allowlist_q15 =
+        ge_bool_to_q15(sm.corpus_allowlist_loaded || sm.corpus_allowlist_user_loaded);
+    const uint16_t corpus_artifacts_q15 =
+        ge_ratio_q15_u64((uint64_t)ai_data.corpus_artifact_count_u32, 128u);
+    const uint16_t corpus_text_q15 =
+        ge_ratio_q15_u64((uint64_t)ai_data.corpus_text_artifact_count_u32, 64u);
+    const uint16_t manifest_q15 =
+        ge_ratio_q15_u64((uint64_t)ai_data.manifest_record_count_u32, 64u);
+    const uint16_t crawl_lane_q15 =
+        ge_ratio_q15_u64((uint64_t)sm.crawl_allowlist_lane_max_u32, 8u);
+    const uint16_t corpus_measured_tmp[4] = {
+        corpus_artifacts_q15,
+        corpus_text_q15,
+        manifest_q15,
+        corpus_allowlist_q15
+    };
+    const uint16_t corpus_spin_tmp[2] = {
+        crawl_lane_q15,
+        manifest_q15
+    };
+    const uint16_t corpus_coupling_tmp[3] = {
+        corpus_allowlist_q15,
+        crawl_lane_q15,
+        corpus_text_q15
+    };
+
+    const uint32_t external_pending_u32 = (uint32_t)sm.external_api_pending.size();
+    const uint32_t external_inflight_u32 = (uint32_t)sm.external_api_inflight.size();
+    const uint32_t external_docs_u32 = (uint32_t)sm.external_api_ingest_docs.size();
+    const uint32_t external_chunks_u32 = (uint32_t)sm.external_api_ingest_inbox.size();
+    const uint16_t external_pending_q15 = ge_ratio_q15_u64((uint64_t)external_pending_u32, 16u);
+    const uint16_t external_inflight_q15 = ge_ratio_q15_u64((uint64_t)external_inflight_u32, 16u);
+    const uint16_t external_docs_q15 = ge_ratio_q15_u64((uint64_t)external_docs_u32, 32u);
+    const uint16_t external_chunks_q15 = ge_ratio_q15_u64((uint64_t)external_chunks_u32, 64u);
+    const uint16_t external_bytes_q15 =
+        ge_ratio_q15_u64(sm.external_api_ingest_inflight_bytes_u64, (uint64_t)(8u * 1024u * 1024u));
+    const uint16_t external_intent_tmp[3] = {
+        external_pending_q15,
+        external_inflight_q15,
+        external_docs_q15
+    };
+    const uint16_t external_measured_tmp[4] = {
+        external_pending_q15,
+        external_inflight_q15,
+        external_docs_q15,
+        external_chunks_q15
+    };
+    const uint16_t external_spin_tmp[2] = {
+        external_inflight_q15,
+        external_bytes_q15
+    };
+    const uint16_t external_coupling_tmp[3] = {
+        external_docs_q15,
+        external_chunks_q15,
+        external_inflight_q15
+    };
+
+    const uint16_t ai_conf_q15 = ge_abs_q32_32_to_q15_sat(ai.confidence_q32_32);
+    const uint16_t ai_attractor_q15 = ge_abs_q32_32_to_q15_sat(ai.attractor_strength_q32_32);
+    const uint16_t ai_command_q15 = ge_ratio_q15_u64((uint64_t)ai.command_count_u32, 128u);
+    const uint16_t ai_action_q15 = ge_ratio_q15_u64((uint64_t)ai.action_log_count_u32, 128u);
+    const uint16_t ai_anticipation_q15 =
+        ge_ratio_q15_u64((uint64_t)ge_popcount_u64_local((uint64_t)ai.anticipation_flags_u16), 3u);
+    const uint16_t ai_carrier_q15 = ge_mean_q15_u16(ai.carrier_band_q15, 8u);
+    const uint16_t ai_measured_tmp[3] = {
+        ai_conf_q15,
+        ai_carrier_q15,
+        ai_anticipation_q15
+    };
+    const uint16_t ai_spin_tmp[3] = {
+        ai_command_q15,
+        ai_action_q15,
+        ai_attractor_q15
+    };
+    const uint16_t ai_coupling_tmp[3] = {
+        ai.controller_authority_q15,
+        ai.op_gain_q15,
+        ai.op_phase_bias_q15
+    };
+
+    const uint16_t ai_data_spin_tmp[3] = {
+        ai_data.measured_band_q15[4],
+        ai_data.measured_band_q15[5],
+        ai_data.measured_band_q15[6]
+    };
+    const uint16_t ai_data_coupling_tmp[3] = {
+        ai_data.controller_authority_q15,
+        ai_data.measured_band_q15[6],
+        ai_data.measured_band_q15[7]
+    };
+
+    uint32_t lane_index_u32 = 0u;
+    auto push_lane = [&](uint32_t subsystem_id_u32,
+                         uint16_t intent_norm_q15,
+                         uint16_t measured_norm_q15,
+                         uint16_t spin_norm_q15,
+                         uint16_t coupling_norm_q15) {
+        if (lane_index_u32 >= EW_SUBSYSTEM_SUBSTRATE_LANE_CAP) return;
+        EwSubsystemCalculusLane lane{};
+        lane.subsystem_id_u32 = subsystem_id_u32;
+        const EwSubsystemCalculusLane* prev_lane =
+            ge_find_prev_subsystem_lane(prev, subsystem_id_u32);
+        ge_finalize_subsystem_lane(lane,
+                                   intent_norm_q15,
+                                   measured_norm_q15,
+                                   spin_norm_q15,
+                                   coupling_norm_q15,
+                                   prev_lane ? prev_lane->error_q32_32 : 0,
+                                   prev_lane ? prev_lane->error_integral_q32_32 : 0);
+        out.lanes[lane_index_u32++] = lane;
+    };
+
+    const uint16_t spectral_measured_tmp[4] = {
+        process.energy_mean_q15,
+        process.energy_peak_q15,
+        process.coherence_norm_q15,
+        process.temporal_coherence_q15
+    };
+    const uint16_t spectral_spin_tmp[3] = {
+        process.source_vibration_q15,
+        process.op_phase_bias_q15,
+        process.interference_norm_q15
+    };
+    const uint16_t spectral_coupling_tmp[4] = {
+        process.controller_authority_q15,
+        process.calibration_authority_q15,
+        process.learning_coupling_q15,
+        process.phys_coherence_q15
+    };
+    push_lane(EW_SUBSYSTEM_PLANE_SPECTRAL_PROCESS,
+              process.intent_norm_q15,
+              ge_mean_q15_u16(spectral_measured_tmp, 4u),
+              ge_mean_q15_u16(spectral_spin_tmp, 3u),
+              ge_mean_q15_u16(spectral_coupling_tmp, 4u));
+    push_lane(EW_SUBSYSTEM_PLANE_CAMERA,
+              ge_bool_to_q15(camera_valid),
+              ge_mean_q15_u16(camera_measured_tmp, 3u),
+              ge_mean_q15_u16(camera_spin_tmp, 3u),
+              ge_mean_q15_u16(camera_coupling_tmp, 4u));
+    push_lane(EW_SUBSYSTEM_PLANE_RENDER,
+              render_active_q15,
+              ge_mean_q15_u16(render_measured_tmp, 3u),
+              ge_mean_q15_u16(render_spin_tmp, 3u),
+              ge_mean_q15_u16(render_coupling_tmp, 4u));
+    push_lane(EW_SUBSYSTEM_PLANE_ASSET_OBJECT,
+              ge_mean_q15_u16(asset_intent_tmp, 2u),
+              ge_mean_q15_u16(asset_measured_tmp, 4u),
+              ge_mean_q15_u16(asset_spin_tmp, 3u),
+              ge_mean_q15_u16(asset_coupling_tmp, 3u));
+    push_lane(EW_SUBSYSTEM_PLANE_NBODY,
+              (nb.enabled_u32 != 0u) ? 32767u : (nbody_count_q15 / 2u),
+              ge_mean_q15_u16(nbody_measured_tmp, 4u),
+              ge_mean_q15_u16(nbody_spin_tmp, 2u),
+              ge_mean_q15_u16(nbody_coupling_tmp, 3u));
+    push_lane(EW_SUBSYSTEM_PLANE_CURRICULUM,
+              32767u,
+              ge_mean_q15_u16(curriculum_measured_tmp, 2u),
+              ge_mean_q15_u16(curriculum_spin_tmp, 2u),
+              ge_mean_q15_u16(curriculum_coupling_tmp, 3u));
+    push_lane(EW_SUBSYSTEM_PLANE_AUTOMATION,
+              automation_enabled_q15,
+              ge_mean_q15_u16(automation_measured_tmp, 3u),
+              ge_mean_q15_u16(automation_spin_tmp, 3u),
+              ge_mean_q15_u16(automation_coupling_tmp, 3u));
+    push_lane(EW_SUBSYSTEM_PLANE_LANGUAGE,
+              32767u,
+              ge_mean_q15_u16(lang_measured_tmp, 4u),
+              ge_mean_q15_u16(lang_spin_tmp, 2u),
+              ge_mean_q15_u16(lang_coupling_tmp, 3u));
+    push_lane(EW_SUBSYSTEM_PLANE_MATH,
+              32767u,
+              ge_mean_q15_u16(math_measured_tmp, 4u),
+              ge_mean_q15_u16(math_spin_tmp, 2u),
+              ge_mean_q15_u16(math_coupling_tmp, 3u));
+    push_lane(EW_SUBSYSTEM_PLANE_CORPUS,
+              corpus_enabled_q15,
+              ge_mean_q15_u16(corpus_measured_tmp, 4u),
+              ge_mean_q15_u16(corpus_spin_tmp, 2u),
+              ge_mean_q15_u16(corpus_coupling_tmp, 3u));
+    push_lane(EW_SUBSYSTEM_PLANE_EXTERNAL_API,
+              ge_mean_q15_u16(external_intent_tmp, 3u),
+              ge_mean_q15_u16(external_measured_tmp, 4u),
+              ge_mean_q15_u16(external_spin_tmp, 2u),
+              ge_mean_q15_u16(external_coupling_tmp, 3u));
+    push_lane(EW_SUBSYSTEM_PLANE_AI_CORE,
+              ge_bool_to_q15(ai.valid_u32 != 0u),
+              ge_mean_q15_u16(ai_measured_tmp, 3u),
+              ge_mean_q15_u16(ai_spin_tmp, 3u),
+              ge_mean_q15_u16(ai_coupling_tmp, 3u));
+    push_lane(EW_SUBSYSTEM_PLANE_AI_DATA,
+              ai_data.intent_norm_q15,
+              ai_data.measured_norm_q15,
+              ge_mean_q15_u16(ai_data_spin_tmp, 3u),
+              ge_mean_q15_u16(ai_data_coupling_tmp, 3u));
+
+    out.subsystem_count_u32 = lane_index_u32;
+    out.valid_u32 = (lane_index_u32 != 0u) ? 1u : 0u;
+
+    uint64_t intent_sum_u64 = 0u;
+    uint64_t measured_sum_u64 = 0u;
+    uint64_t residual_sum_u64 = 0u;
+    uint64_t spin_sum_u64 = 0u;
+    uint64_t coupling_sum_u64 = 0u;
+    uint64_t derr_sum_u64 = 0u;
+    uint64_t ierr_sum_u64 = 0u;
+    uint64_t ctrl_sum_u64 = 0u;
+    int64_t err_sum_q32_32 = 0;
+    int64_t derr_sum_q32_32 = 0;
+    int64_t ierr_sum_q32_32 = 0;
+    uint32_t active_count_u32 = 0u;
+    uint32_t dominant_score_u32 = 0u;
+    for (uint32_t i = 0u; i < lane_index_u32; ++i) {
+        const EwSubsystemCalculusLane& lane = out.lanes[i];
+        const uint32_t score_u32 = (uint32_t)lane.residual_norm_q15 +
+                                   (uint32_t)lane.spin_norm_q15 +
+                                   (uint32_t)lane.coupling_norm_q15 +
+                                   (uint32_t)lane.controller_authority_q15;
+        if (score_u32 != 0u) active_count_u32 += 1u;
+        if (score_u32 >= dominant_score_u32) {
+            dominant_score_u32 = score_u32;
+            out.dominant_subsystem_id_u32 = lane.subsystem_id_u32;
+            out.dominant_spin_norm_q15 = lane.spin_norm_q15;
+            out.dominant_coupling_norm_q15 = lane.coupling_norm_q15;
+            out.dominant_residual_norm_q15 = lane.residual_norm_q15;
+        }
+        intent_sum_u64 += (uint64_t)lane.intent_norm_q15;
+        measured_sum_u64 += (uint64_t)lane.measured_norm_q15;
+        residual_sum_u64 += (uint64_t)lane.residual_norm_q15;
+        spin_sum_u64 += (uint64_t)lane.spin_norm_q15;
+        coupling_sum_u64 += (uint64_t)lane.coupling_norm_q15;
+        derr_sum_u64 += (uint64_t)lane.error_delta_norm_q15;
+        ierr_sum_u64 += (uint64_t)lane.error_integral_norm_q15;
+        ctrl_sum_u64 += (uint64_t)lane.controller_authority_q15;
+        err_sum_q32_32 += lane.error_q32_32;
+        derr_sum_q32_32 += lane.error_delta_q32_32;
+        ierr_sum_q32_32 += lane.error_integral_q32_32;
+    }
+    out.active_subsystem_count_u32 = active_count_u32;
+    const uint32_t divisor_u32 = (active_count_u32 != 0u) ? active_count_u32 :
+                                 ((lane_index_u32 != 0u) ? lane_index_u32 : 1u);
+    out.aggregate_intent_norm_q15 = (uint16_t)std::min<uint64_t>(32767u, intent_sum_u64 / divisor_u32);
+    out.aggregate_measured_norm_q15 = (uint16_t)std::min<uint64_t>(32767u, measured_sum_u64 / divisor_u32);
+    out.aggregate_residual_norm_q15 = (uint16_t)std::min<uint64_t>(32767u, residual_sum_u64 / divisor_u32);
+    out.aggregate_spin_norm_q15 = (uint16_t)std::min<uint64_t>(32767u, spin_sum_u64 / divisor_u32);
+    out.aggregate_coupling_norm_q15 = (uint16_t)std::min<uint64_t>(32767u, coupling_sum_u64 / divisor_u32);
+    out.aggregate_error_delta_norm_q15 = (uint16_t)std::min<uint64_t>(32767u, derr_sum_u64 / divisor_u32);
+    out.aggregate_error_integral_norm_q15 = (uint16_t)std::min<uint64_t>(32767u, ierr_sum_u64 / divisor_u32);
+    out.aggregate_controller_authority_q15 = (uint16_t)std::min<uint64_t>(32767u, ctrl_sum_u64 / divisor_u32);
+    out.aggregate_error_q32_32 = err_sum_q32_32 / (int64_t)divisor_u32;
+    out.aggregate_error_delta_q32_32 = derr_sum_q32_32 / (int64_t)divisor_u32;
+    out.aggregate_error_integral_q32_32 = ierr_sum_q32_32 / (int64_t)divisor_u32;
+}
+
 static std::string ge_format_process_substrate_status_line(const EwProcessSubstrateTelemetry& t,
                                                            const char* prefix_ascii) {
     std::ostringstream oss;
@@ -414,6 +1064,38 @@ static std::string ge_format_process_substrate_status_line(const EwProcessSubstr
         << " pending=" << (uint32_t)t.residual_pending_u8
         << " hold=" << (uint32_t)t.hold_tick_u8
         << " commit=" << (uint32_t)t.last_commit_u8;
+    return oss.str();
+}
+
+static std::string ge_format_subsystem_substrate_status_line(const EwSubsystemSubstrateTelemetry& t,
+                                                             const char* prefix_ascii) {
+    std::ostringstream oss;
+    oss << (prefix_ascii ? prefix_ascii : "SUBSYSTEM_SUBSTRATE_STATUS")
+        << " valid=" << t.valid_u32
+        << " tick=" << t.tick_u64
+        << " count=" << t.subsystem_count_u32
+        << " active=" << t.active_subsystem_count_u32
+        << " dominant=" << ge_subsystem_plane_name_ascii(t.dominant_subsystem_id_u32)
+        << " aggIntent_q15=" << t.aggregate_intent_norm_q15
+        << " aggMeasured_q15=" << t.aggregate_measured_norm_q15
+        << " aggResidual_q15=" << t.aggregate_residual_norm_q15
+        << " aggSpin_q15=" << t.aggregate_spin_norm_q15
+        << " aggCoupling_q15=" << t.aggregate_coupling_norm_q15
+        << " aggCtrl_q15=" << t.aggregate_controller_authority_q15
+        << " aggErr_q32_32=" << t.aggregate_error_q32_32
+        << " aggDErr_q32_32=" << t.aggregate_error_delta_q32_32
+        << " aggIErr_q32_32=" << t.aggregate_error_integral_q32_32;
+    for (uint32_t i = 0u; i < t.subsystem_count_u32 &&
+                          i < EW_SUBSYSTEM_SUBSTRATE_LANE_CAP; ++i) {
+        const EwSubsystemCalculusLane& lane = t.lanes[i];
+        if (lane.subsystem_id_u32 == EW_SUBSYSTEM_PLANE_NONE) continue;
+        oss << " " << ge_subsystem_plane_name_ascii(lane.subsystem_id_u32)
+            << "(res=" << lane.residual_norm_q15
+            << ",spin=" << lane.spin_norm_q15
+            << ",cpl=" << lane.coupling_norm_q15
+            << ",ctrl=" << lane.controller_authority_q15
+            << ")";
+    }
     return oss.str();
 }
 
@@ -3071,6 +3753,12 @@ void SubstrateManager::ui_submit_user_text_line(const std::string& utf8_line) {
                                                              "PROCESS_SUBSTRATE_STATUS"));
         return;
     }
+    if (utf8_line.rfind("/subsystem_substrate_status", 0) == 0 ||
+        utf8_line.rfind("subsystem_substrate_status:", 0) == 0) {
+        emit_ui_line(ge_format_subsystem_substrate_status_line(subsystem_substrate_telemetry,
+                                                               "SUBSYSTEM_SUBSTRATE_STATUS"));
+        return;
+    }
     if (utf8_line.rfind("/ai_status", 0) == 0 ||
         utf8_line.rfind("ai_status:", 0) == 0 ||
         utf8_line.rfind("/ai_substrate_status", 0) == 0 ||
@@ -3091,6 +3779,8 @@ void SubstrateManager::ui_submit_user_text_line(const std::string& utf8_line) {
         utf8_line.rfind("research_status:", 0) == 0) {
         emit_ui_line(ge_format_process_substrate_status_line(process_substrate_telemetry,
                                                              "PROCESS_SUBSTRATE_STATUS"));
+        emit_ui_line(ge_format_subsystem_substrate_status_line(subsystem_substrate_telemetry,
+                                                               "SUBSYSTEM_SUBSTRATE_STATUS"));
         emit_ui_line(ge_format_ai_substrate_status_line(ai_substrate_telemetry,
                                                         "AI_SUBSTRATE_STATUS"));
         emit_ui_line(ge_format_ai_data_substrate_status_line(ai_data_substrate_telemetry,
@@ -8202,10 +8892,15 @@ if (ap && ap->object_id_u64 != 0u) {
     ge_update_process_substrate_telemetry(*this);
     ge_update_ai_substrate_telemetry(*this);
     ge_update_ai_data_substrate_telemetry(*this);
+    ge_update_subsystem_substrate_telemetry(*this);
 
     if ((canonical_tick_u64() % 360u) == 0u && process_substrate_telemetry.valid_u32 != 0u) {
         emit_ui_line(ge_format_process_substrate_status_line(process_substrate_telemetry,
                                                              "PROCESS_SUBSTRATE_STATUS"));
+    }
+    if ((canonical_tick_u64() % 360u) == 0u && subsystem_substrate_telemetry.valid_u32 != 0u) {
+        emit_ui_line(ge_format_subsystem_substrate_status_line(subsystem_substrate_telemetry,
+                                                               "SUBSYSTEM_SUBSTRATE_STATUS"));
     }
 
     // Deterministic measurement-frame projection is stored onto anchors.
@@ -8708,6 +9403,37 @@ if (ap && ap->object_id_u64 != 0u) {
                 a.payload += std::string("coherence_band_q15_") + std::to_string((unsigned long long)i) + ": " +
                              std::to_string((uint32_t)ss.calibration_summary.coherence_band_q15[i]) + "\n";
             }
+        }
+
+        a.payload += "\n# Subsystem Substrate\n\n";
+        a.payload += "valid_u32: " + std::to_string(subsystem_substrate_telemetry.valid_u32) + "\n";
+        a.payload += "subsystem_count_u32: " + std::to_string(subsystem_substrate_telemetry.subsystem_count_u32) + "\n";
+        a.payload += "active_subsystem_count_u32: " + std::to_string(subsystem_substrate_telemetry.active_subsystem_count_u32) + "\n";
+        a.payload += "dominant_subsystem_id_u32: " + std::to_string(subsystem_substrate_telemetry.dominant_subsystem_id_u32) + "\n";
+        a.payload += "aggregate_intent_norm_q15: " + std::to_string((uint32_t)subsystem_substrate_telemetry.aggregate_intent_norm_q15) + "\n";
+        a.payload += "aggregate_measured_norm_q15: " + std::to_string((uint32_t)subsystem_substrate_telemetry.aggregate_measured_norm_q15) + "\n";
+        a.payload += "aggregate_residual_norm_q15: " + std::to_string((uint32_t)subsystem_substrate_telemetry.aggregate_residual_norm_q15) + "\n";
+        a.payload += "aggregate_spin_norm_q15: " + std::to_string((uint32_t)subsystem_substrate_telemetry.aggregate_spin_norm_q15) + "\n";
+        a.payload += "aggregate_coupling_norm_q15: " + std::to_string((uint32_t)subsystem_substrate_telemetry.aggregate_coupling_norm_q15) + "\n";
+        a.payload += "aggregate_controller_authority_q15: " + std::to_string((uint32_t)subsystem_substrate_telemetry.aggregate_controller_authority_q15) + "\n";
+        a.payload += "aggregate_error_q32_32: " + std::to_string(subsystem_substrate_telemetry.aggregate_error_q32_32) + "\n";
+        a.payload += "aggregate_error_delta_q32_32: " + std::to_string(subsystem_substrate_telemetry.aggregate_error_delta_q32_32) + "\n";
+        a.payload += "aggregate_error_integral_q32_32: " + std::to_string(subsystem_substrate_telemetry.aggregate_error_integral_q32_32) + "\n";
+        for (uint32_t i = 0u; i < subsystem_substrate_telemetry.subsystem_count_u32 &&
+                              i < EW_SUBSYSTEM_SUBSTRATE_LANE_CAP; ++i) {
+            const EwSubsystemCalculusLane& lane = subsystem_substrate_telemetry.lanes[i];
+            const std::string prefix = std::string("lane_") + std::to_string((unsigned long long)i) + "_";
+            a.payload += prefix + "subsystem_id_u32: " + std::to_string(lane.subsystem_id_u32) + "\n";
+            a.payload += prefix + "name: " + ge_subsystem_plane_name_ascii(lane.subsystem_id_u32) + "\n";
+            a.payload += prefix + "intent_norm_q15: " + std::to_string((uint32_t)lane.intent_norm_q15) + "\n";
+            a.payload += prefix + "measured_norm_q15: " + std::to_string((uint32_t)lane.measured_norm_q15) + "\n";
+            a.payload += prefix + "residual_norm_q15: " + std::to_string((uint32_t)lane.residual_norm_q15) + "\n";
+            a.payload += prefix + "spin_norm_q15: " + std::to_string((uint32_t)lane.spin_norm_q15) + "\n";
+            a.payload += prefix + "coupling_norm_q15: " + std::to_string((uint32_t)lane.coupling_norm_q15) + "\n";
+            a.payload += prefix + "controller_authority_q15: " + std::to_string((uint32_t)lane.controller_authority_q15) + "\n";
+            a.payload += prefix + "error_q32_32: " + std::to_string(lane.error_q32_32) + "\n";
+            a.payload += prefix + "error_delta_q32_32: " + std::to_string(lane.error_delta_q32_32) + "\n";
+            a.payload += prefix + "error_integral_q32_32: " + std::to_string(lane.error_integral_q32_32) + "\n";
         }
 
         a.payload += "\n# AI Backend\n\n";
@@ -9554,6 +10280,13 @@ bool SubstrateManager::get_process_substrate_telemetry(EwProcessSubstrateTelemet
     if (!out) return false;
     if (process_substrate_telemetry.valid_u32 == 0u) return false;
     *out = process_substrate_telemetry;
+    return true;
+}
+
+bool SubstrateManager::get_subsystem_substrate_telemetry(EwSubsystemSubstrateTelemetry* out) const {
+    if (!out) return false;
+    if (subsystem_substrate_telemetry.valid_u32 == 0u) return false;
+    *out = subsystem_substrate_telemetry;
     return true;
 }
 

@@ -109,6 +109,7 @@ struct GeResearchInterferencePredictionCell {
     double predicted_curvature = 0.0;
     double gpu_alignment_norm = 0.0;
     double vector_coupling_norm = 0.0;
+    double subsystem_feedback_norm = 0.0;
     double lattice_interference_norm = 0.0;
     double lattice_temporal_coupling_norm = 0.0;
     double certainty_norm = 0.0;
@@ -130,6 +131,10 @@ struct GeResearchGpuAdaptiveCalibration {
     double observed_interference_norm = 0.0;
     double observed_coherence_norm = 0.0;
     double observed_source_vibration_norm = 0.0;
+    double observed_subsystem_residual_norm = 0.0;
+    double observed_subsystem_spin_norm = 0.0;
+    double observed_subsystem_coupling_norm = 0.0;
+    double observed_subsystem_controller_norm = 0.0;
 
     double tensor_gradient_norm = 0.0;
     double packet_coherence_norm = 0.0;
@@ -139,6 +144,7 @@ struct GeResearchGpuAdaptiveCalibration {
     double prediction_confidence_norm = 0.0;
     double best_gpu_alignment_norm = 0.0;
     double best_vector_coupling_norm = 0.0;
+    double best_subsystem_feedback_norm = 0.0;
     double best_interference_norm = 0.0;
     double best_lattice_interference_norm = 0.0;
     double best_temporal_coupling_norm = 0.0;
@@ -408,6 +414,10 @@ bool ge_build_research_gpu_interference_predictions(
     double interference_norm_01,
     double substrate_coherence_norm_01,
     double source_vibration_norm_01,
+    double subsystem_residual_norm_01,
+    double subsystem_spin_norm_01,
+    double subsystem_coupling_norm_01,
+    double subsystem_controller_norm_01,
     uint32_t axis_resolution_u32,
     GeResearchGpuAdaptiveCalibration& out_calibration,
     std::vector<GeResearchInterferencePredictionCell>* out_predictions);

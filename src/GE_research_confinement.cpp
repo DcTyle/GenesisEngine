@@ -2139,6 +2139,10 @@ bool ge_build_research_gpu_interference_predictions(
     double interference_norm_01,
     double substrate_coherence_norm_01,
     double source_vibration_norm_01,
+    double subsystem_residual_norm_01,
+    double subsystem_spin_norm_01,
+    double subsystem_coupling_norm_01,
+    double subsystem_controller_norm_01,
     uint32_t axis_resolution_u32,
     GeResearchGpuAdaptiveCalibration& out_calibration,
     std::vector<GeResearchInterferencePredictionCell>* out_predictions) {
@@ -2164,6 +2168,10 @@ bool ge_build_research_gpu_interference_predictions(
     const double interference_n = ge_clamp01d_local(interference_norm_01);
     const double substrate_coherence_n = ge_clamp01d_local(substrate_coherence_norm_01);
     const double source_vibration_n = ge_clamp01d_local(source_vibration_norm_01);
+    const double subsystem_residual_n = ge_clamp01d_local(subsystem_residual_norm_01);
+    const double subsystem_spin_n = ge_clamp01d_local(subsystem_spin_norm_01);
+    const double subsystem_coupling_n = ge_clamp01d_local(subsystem_coupling_norm_01);
+    const double subsystem_controller_n = ge_clamp01d_local(subsystem_controller_norm_01);
 
     const double tensor_norm = ge_compute_research_tensor_gradient_norm(archive);
     const double packet_norm = ge_compute_research_packet_coherence_norm(archive);
@@ -2181,7 +2189,12 @@ bool ge_build_research_gpu_interference_predictions(
     gpu_observed.V = ge_clampd_local(gpu_observed.V, qmin.V, qmax.V);
 
     const double observed_bias =
-        ge_clamp01d_local(0.30 + 0.30 * interference_n + 0.20 * source_vibration_n + 0.20 * (1.0 - substrate_coherence_n));
+        ge_clamp01d_local(0.24 +
+                          0.24 * interference_n +
+                          0.16 * source_vibration_n +
+                          0.12 * (1.0 - substrate_coherence_n) +
+                          0.12 * subsystem_controller_n +
+                          0.12 * subsystem_residual_n);
     GeResearchPulseQuartet gpu_target{};
     gpu_target.F = ge_lerpd_local(desired.F, gpu_observed.F, observed_bias);
     gpu_target.A = ge_lerpd_local(desired.A, gpu_observed.A, observed_bias);
@@ -2264,33 +2277,46 @@ bool ge_build_research_gpu_interference_predictions(
                     cell.lattice_z_u32 = lattice_sample.lattice_z_u32;
 
                     cell.vector_coupling_norm =
-                        ge_clamp01d_local(0.16 * tensor_norm +
-                                          0.16 * packet_norm +
-                                          0.14 * observer_norm +
-                                          0.14 * recurrence_norm +
-                                          0.14 * cell.lattice_temporal_coupling_norm +
-                                          0.10 * cell.lattice_interference_norm +
+                        ge_clamp01d_local(0.14 * tensor_norm +
+                                          0.14 * packet_norm +
+                                          0.12 * observer_norm +
+                                          0.10 * recurrence_norm +
+                                          0.12 * cell.lattice_temporal_coupling_norm +
+                                          0.08 * cell.lattice_interference_norm +
                                           0.08 * lattice_sample.coherence_norm +
+                                          0.08 * ge_clamp01d_local(0.40 * subsystem_coupling_n +
+                                                                   0.24 * subsystem_spin_n +
+                                                                   0.20 * subsystem_controller_n +
+                                                                   0.16 * subsystem_residual_n) +
+                                          0.07 * subsystem_coupling_n +
                                           0.04 * substrate_coherence_n +
-                                          0.04 * source_vibration_n);
+                                          0.03 * source_vibration_n);
+                    cell.subsystem_feedback_norm =
+                        ge_clamp01d_local(0.40 * subsystem_coupling_n +
+                                          0.24 * subsystem_spin_n +
+                                          0.20 * subsystem_controller_n +
+                                          0.16 * subsystem_residual_n);
 
                     cell.predicted_interference_norm =
-                        ge_clamp01d_local(0.20 * cell.gpu_alignment_norm +
-                                          0.16 * coherence_align +
-                                          0.14 * score_align +
-                                          0.12 * trap_align +
+                        ge_clamp01d_local(0.18 * cell.gpu_alignment_norm +
+                                          0.15 * coherence_align +
+                                          0.12 * score_align +
+                                          0.10 * trap_align +
                                           0.14 * cell.vector_coupling_norm +
-                                          0.08 * interference_n +
-                                          0.08 * cell.lattice_interference_norm +
-                                          0.06 * cell.lattice_temporal_coupling_norm -
+                                          0.09 * cell.subsystem_feedback_norm +
+                                          0.07 * interference_n +
+                                          0.06 * cell.lattice_interference_norm +
+                                          0.05 * cell.lattice_temporal_coupling_norm +
+                                          0.04 * subsystem_controller_n -
                                           0.08 * curvature_penalty -
                                           0.06 * inertia_penalty);
                     cell.certainty_norm =
-                        ge_clamp01d_local(0.28 * cell.predicted_interference_norm +
-                                          0.20 * cell.gpu_alignment_norm +
-                                          0.18 * cell.vector_coupling_norm +
-                                          0.16 * coherence_align +
-                                          0.18 * cell.lattice_temporal_coupling_norm);
+                        ge_clamp01d_local(0.24 * cell.predicted_interference_norm +
+                                          0.18 * cell.gpu_alignment_norm +
+                                          0.16 * cell.vector_coupling_norm +
+                                          0.14 * coherence_align +
+                                          0.14 * cell.lattice_temporal_coupling_norm +
+                                          0.14 * cell.subsystem_feedback_norm);
 
                     uint64_t spectral_id = 0xC6A4A7935BD1E995ull;
                     spectral_id = ge_mix_u64_local(spectral_id, (uint64_t)(fi + 1u));
@@ -2304,15 +2330,18 @@ bool ge_build_research_gpu_interference_predictions(
                                                    (uint64_t)std::llround(cell.predicted_interference_norm * 1000000.0));
                     spectral_id = ge_mix_u64_local(spectral_id,
                                                    (uint64_t)std::llround(cell.vector_coupling_norm * 1000000.0));
+                    spectral_id = ge_mix_u64_local(spectral_id,
+                                                   (uint64_t)std::llround(cell.subsystem_feedback_norm * 1000000.0));
                     cell.trajectory_spectral_id_u64 = spectral_id;
 
                     const double objective =
-                        0.34 * cell.predicted_interference_norm +
-                        0.20 * cell.gpu_alignment_norm +
+                        0.30 * cell.predicted_interference_norm +
+                        0.18 * cell.gpu_alignment_norm +
                         0.16 * cell.vector_coupling_norm +
                         0.14 * cell.certainty_norm +
-                        0.08 * cell.lattice_interference_norm +
-                        0.08 * cell.lattice_temporal_coupling_norm;
+                        0.08 * cell.subsystem_feedback_norm +
+                        0.07 * cell.lattice_interference_norm +
+                        0.07 * cell.lattice_temporal_coupling_norm;
 
                     if (!best_cell_valid || objective > best_objective) {
                         best_objective = objective;
@@ -2329,11 +2358,12 @@ bool ge_build_research_gpu_interference_predictions(
     if (!best_cell_valid) return false;
 
     const double adaptation_blend =
-        ge_clamp01d_local(0.14 +
-                          0.28 * best_cell.certainty_norm +
-                          0.20 * best_cell.lattice_temporal_coupling_norm +
-                          0.20 * interference_n +
-                          0.18 * source_vibration_n);
+        ge_clamp01d_local(0.12 +
+                          0.24 * best_cell.certainty_norm +
+                          0.18 * best_cell.lattice_temporal_coupling_norm +
+                          0.16 * interference_n +
+                          0.14 * source_vibration_n +
+                          0.16 * best_cell.subsystem_feedback_norm);
     GeResearchPulseQuartet adapted{};
     adapted.F = ge_lerpd_local(desired.F, best_cell.quartet.F, adaptation_blend);
     adapted.A = ge_lerpd_local(desired.A, best_cell.quartet.A, adaptation_blend);
@@ -2345,11 +2375,12 @@ bool ge_build_research_gpu_interference_predictions(
     adapted.V = ge_clampd_local(adapted.V, qmin.V, qmax.V);
 
     const double next_pulse_correction_n =
-        ge_clamp01d_local(0.18 +
-                          0.28 * best_cell.predicted_interference_norm +
-                          0.24 * best_cell.lattice_temporal_coupling_norm +
-                          0.16 * interference_n +
-                          0.14 * source_vibration_n);
+        ge_clamp01d_local(0.16 +
+                          0.24 * best_cell.predicted_interference_norm +
+                          0.18 * best_cell.lattice_temporal_coupling_norm +
+                          0.14 * interference_n +
+                          0.12 * source_vibration_n +
+                          0.16 * best_cell.subsystem_feedback_norm);
     GeResearchPulseQuartet next_pulse{};
     next_pulse.F = ge_clampd_local(
         ge_lerpd_local(desired.F,
@@ -2383,6 +2414,10 @@ bool ge_build_research_gpu_interference_predictions(
     out_calibration.observed_interference_norm = interference_n;
     out_calibration.observed_coherence_norm = substrate_coherence_n;
     out_calibration.observed_source_vibration_norm = source_vibration_n;
+    out_calibration.observed_subsystem_residual_norm = subsystem_residual_n;
+    out_calibration.observed_subsystem_spin_norm = subsystem_spin_n;
+    out_calibration.observed_subsystem_coupling_norm = subsystem_coupling_n;
+    out_calibration.observed_subsystem_controller_norm = subsystem_controller_n;
     out_calibration.tensor_gradient_norm = tensor_norm;
     out_calibration.packet_coherence_norm = packet_norm;
     out_calibration.observer_coupling_norm = observer_norm;
@@ -2390,6 +2425,7 @@ bool ge_build_research_gpu_interference_predictions(
     out_calibration.prediction_confidence_norm = best_cell.certainty_norm;
     out_calibration.best_gpu_alignment_norm = best_cell.gpu_alignment_norm;
     out_calibration.best_vector_coupling_norm = best_cell.vector_coupling_norm;
+    out_calibration.best_subsystem_feedback_norm = best_cell.subsystem_feedback_norm;
     out_calibration.best_interference_norm = best_cell.predicted_interference_norm;
     out_calibration.best_lattice_interference_norm = best_cell.lattice_interference_norm;
     out_calibration.best_temporal_coupling_norm = best_cell.lattice_temporal_coupling_norm;
@@ -2429,24 +2465,27 @@ bool ge_build_research_live_compute_plan(
         ge_clamp01d_local(calibration.best_coherence /
                           std::max(archive.temporal_collapse_gates.gate_coherence, 1.0e-9));
     const double readiness =
-        ge_clamp01d_local(0.22 * calibration.prediction_confidence_norm +
-                          0.18 * calibration.best_gpu_alignment_norm +
-                          0.14 * calibration.best_interference_norm +
-                          0.14 * guidance.certainty_norm +
-                          0.10 * guidance.exactness_norm +
-                          0.08 * score_align +
-                          0.07 * trap_align +
-                          0.07 * coherence_align);
+        ge_clamp01d_local(0.20 * calibration.prediction_confidence_norm +
+                          0.16 * calibration.best_gpu_alignment_norm +
+                          0.12 * calibration.best_interference_norm +
+                          0.12 * guidance.certainty_norm +
+                          0.09 * guidance.exactness_norm +
+                          0.07 * score_align +
+                          0.06 * trap_align +
+                          0.06 * coherence_align +
+                          0.12 * calibration.best_subsystem_feedback_norm);
 
     const double extrapolation_norm =
-        ge_clamp01d_local(0.42 * calibration.best_vector_coupling_norm +
-                          0.24 * guidance.recurrence_norm +
-                          0.18 * guidance.tensor_gradient_norm +
-                          0.16 * guidance.source_memory_norm);
+        ge_clamp01d_local(0.34 * calibration.best_vector_coupling_norm +
+                          0.20 * guidance.recurrence_norm +
+                          0.16 * guidance.tensor_gradient_norm +
+                          0.14 * guidance.source_memory_norm +
+                          0.16 * calibration.best_subsystem_feedback_norm);
     const double ledger_norm =
-        ge_clamp01d_local(0.50 * calibration.best_interference_norm +
-                          0.30 * guidance.temporal_coupling_norm +
-                          0.20 * guidance.observer_coupling_norm);
+        ge_clamp01d_local(0.42 * calibration.best_interference_norm +
+                          0.26 * guidance.temporal_coupling_norm +
+                          0.16 * guidance.observer_coupling_norm +
+                          0.16 * calibration.best_subsystem_feedback_norm);
 
     const double compute_blend =
         ge_clamp01d_local(0.24 + 0.46 * readiness + 0.30 * extrapolation_norm);

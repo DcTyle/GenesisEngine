@@ -111,6 +111,10 @@ int main() {
                                                                  0.21,
                                                                  0.82,
                                                                  0.28,
+                                                                 0.19,
+                                                                 0.24,
+                                                                 0.31,
+                                                                 0.27,
                                                                  5u,
                                                                  gpu_calibration,
                                                                  &gpu_predictions)) {
@@ -146,6 +150,7 @@ int main() {
     if (!std::isfinite(gpu_calibration.best_interference_norm) ||
         !std::isfinite(gpu_calibration.best_lattice_interference_norm) ||
         !std::isfinite(gpu_calibration.best_temporal_coupling_norm) ||
+        !std::isfinite(gpu_calibration.best_subsystem_feedback_norm) ||
         !std::isfinite(gpu_calibration.next_pulse_correction_norm) ||
         !std::isfinite(gpu_calibration.best_silicon_score) ||
         !std::isfinite(gpu_calibration.best_coherence) ||

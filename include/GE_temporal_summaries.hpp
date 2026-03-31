@@ -123,6 +123,73 @@ struct EwProcessSubstrateTelemetry {
     uint8_t pad1 = 0;
 };
 
+static constexpr uint32_t EW_SUBSYSTEM_SUBSTRATE_LANE_CAP = 16u;
+
+enum EwSubsystemPlaneId : uint32_t {
+    EW_SUBSYSTEM_PLANE_NONE = 0u,
+    EW_SUBSYSTEM_PLANE_SPECTRAL_PROCESS = 1u,
+    EW_SUBSYSTEM_PLANE_CAMERA = 2u,
+    EW_SUBSYSTEM_PLANE_RENDER = 3u,
+    EW_SUBSYSTEM_PLANE_ASSET_OBJECT = 4u,
+    EW_SUBSYSTEM_PLANE_NBODY = 5u,
+    EW_SUBSYSTEM_PLANE_CURRICULUM = 6u,
+    EW_SUBSYSTEM_PLANE_AUTOMATION = 7u,
+    EW_SUBSYSTEM_PLANE_LANGUAGE = 8u,
+    EW_SUBSYSTEM_PLANE_MATH = 9u,
+    EW_SUBSYSTEM_PLANE_CORPUS = 10u,
+    EW_SUBSYSTEM_PLANE_EXTERNAL_API = 11u,
+    EW_SUBSYSTEM_PLANE_AI_CORE = 12u,
+    EW_SUBSYSTEM_PLANE_AI_DATA = 13u
+};
+
+struct EwSubsystemCalculusLane {
+    uint32_t subsystem_id_u32 = 0;
+
+    uint16_t intent_norm_q15 = 0;
+    uint16_t measured_norm_q15 = 0;
+    uint16_t residual_norm_q15 = 0;
+    uint16_t spin_norm_q15 = 0;
+
+    uint16_t coupling_norm_q15 = 0;
+    uint16_t error_delta_norm_q15 = 0;
+    uint16_t error_integral_norm_q15 = 0;
+    uint16_t controller_authority_q15 = 0;
+
+    int64_t error_q32_32 = 0;
+    int64_t error_delta_q32_32 = 0;
+    int64_t error_integral_q32_32 = 0;
+};
+
+struct EwSubsystemSubstrateTelemetry {
+    uint32_t valid_u32 = 0;
+    uint32_t subsystem_count_u32 = 0;
+    uint32_t active_subsystem_count_u32 = 0;
+    uint32_t dominant_subsystem_id_u32 = 0;
+
+    uint64_t tick_u64 = 0;
+
+    int64_t aggregate_error_q32_32 = 0;
+    int64_t aggregate_error_delta_q32_32 = 0;
+    int64_t aggregate_error_integral_q32_32 = 0;
+
+    uint16_t aggregate_intent_norm_q15 = 0;
+    uint16_t aggregate_measured_norm_q15 = 0;
+    uint16_t aggregate_residual_norm_q15 = 0;
+    uint16_t aggregate_spin_norm_q15 = 0;
+
+    uint16_t aggregate_coupling_norm_q15 = 0;
+    uint16_t aggregate_error_delta_norm_q15 = 0;
+    uint16_t aggregate_error_integral_norm_q15 = 0;
+    uint16_t aggregate_controller_authority_q15 = 0;
+
+    uint16_t dominant_spin_norm_q15 = 0;
+    uint16_t dominant_coupling_norm_q15 = 0;
+    uint16_t dominant_residual_norm_q15 = 0;
+    uint16_t pad0 = 0;
+
+    EwSubsystemCalculusLane lanes[EW_SUBSYSTEM_SUBSTRATE_LANE_CAP];
+};
+
 struct EwAiSubstrateTelemetry {
     uint32_t valid_u32 = 0;
     uint32_t class_id_u32 = 0;
