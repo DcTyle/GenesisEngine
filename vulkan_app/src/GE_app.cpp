@@ -50,6 +50,77 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 static std::wstring utf8_to_wide(const std::string& s);
 static std::string wide_to_utf8(const std::wstring& s);
 
+static constexpr int kSidePanelTabCount = 3;
+static constexpr int kSidePanelWidthPx = 420;
+static constexpr int kSidePanelTabIds[kSidePanelTabCount] = {2060, 2061, 2062};
+static const wchar_t* const kSidePanelTabLabels[kSidePanelTabCount] = {
+    L"ChatGPT",
+    L"Scene",
+    L"Research"
+};
+
+static int ew_side_panel_tab_index_from_id(int id) {
+    for (int i = 0; i < kSidePanelTabCount; ++i) {
+        if (kSidePanelTabIds[i] == id) return i;
+    }
+    return -1;
+}
+
+static std::string ew_trim_ascii_copy(std::string s) {
+    while (!s.empty() && (s.front() == ' ' || s.front() == '\t' || s.front() == '\r' || s.front() == '\n')) {
+        s.erase(s.begin());
+    }
+    while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r' || s.back() == '\n')) {
+        s.pop_back();
+    }
+    return s;
+}
+
+static bool ew_is_engine_command_like_ascii(const std::string& utf8) {
+    const std::string s = ew_trim_ascii_copy(utf8);
+    if (s.empty()) return false;
+    if (s[0] == '/') return true;
+    const size_t colon = s.find(':');
+    if (colon == std::string::npos || colon == 0u || colon > 32u) return false;
+    for (size_t i = 0u; i < colon; ++i) {
+        const unsigned char c = (unsigned char)s[i];
+        const bool ok = (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+        if (!ok) return false;
+    }
+    return true;
+}
+
+static HFONT ew_create_ui_font_px(HDC hdc, int pixel_height, int weight) {
+    const int logical_height = -MulDiv(pixel_height, GetDeviceCaps(hdc, LOGPIXELSY), 96);
+    return CreateFontW(logical_height,
+                       0,
+                       0,
+                       0,
+                       weight,
+                       FALSE,
+                       FALSE,
+                       FALSE,
+                       DEFAULT_CHARSET,
+                       OUT_DEFAULT_PRECIS,
+                       CLIP_DEFAULT_PRECIS,
+                       CLEARTYPE_QUALITY,
+                       DEFAULT_PITCH | FF_DONTCARE,
+                       L"Segoe UI Semibold");
+}
+
+static void ew_register_side_panel_tab_class(HINSTANCE hinst, WNDPROC proc) {
+    static bool registered = false;
+    if (registered) return;
+    WNDCLASSW wc{};
+    wc.lpfnWndProc = proc;
+    wc.hInstance = hinst;
+    wc.lpszClassName = L"GenesisAiSidePanelTab";
+    wc.hCursor = LoadCursor(nullptr, IDC_HAND);
+    wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+    RegisterClassW(&wc);
+    registered = true;
+}
+
 // -----------------------------------------------------------------------------
 // Win32 Input Bindings Editor (minimal)
 // - Exposes a UI tool to edit input_bindings.ewcfg
@@ -4948,6 +5019,7 @@ static void set_dpi_awareness() {
 
 void App::CreateMainWindow(HINSTANCE hInst) {
     set_dpi_awareness();
+    ew_register_side_panel_tab_class(hInst, &App::SideTabWndProcThunk);
 
     WNDCLASSW wc{};
     wc.lpfnWndProc = &App::WndProcThunk;
@@ -4975,109 +5047,432 @@ void App::CreateChildWindows() {
     GetClientRect(hwnd_main_, &rc);
     client_w_ = rc.right - rc.left;
     client_h_ = rc.bottom - rc.top;
+    HINSTANCE hinst = GetModuleHandleW(nullptr);
 
     hwnd_viewport_ = CreateWindowW(L"STATIC", L"",
                                    WS_CHILD | WS_VISIBLE,
-                                   0, 0, client_w_ - 420, client_h_,
-                                   hwnd_main_, (HMENU)1001, GetModuleHandleW(nullptr), nullptr);
+                                   0, 0, client_w_ - kSidePanelWidthPx, client_h_,
+                                   hwnd_main_, (HMENU)1001, hinst, nullptr);
 
     hwnd_panel_ = CreateWindowW(L"STATIC", L"",
                                 WS_CHILD | WS_VISIBLE,
-                                client_w_ - 420, 0, 420, client_h_,
-                                hwnd_main_, (HMENU)1002, GetModuleHandleW(nullptr), nullptr);
+                                client_w_ - kSidePanelWidthPx, 0, kSidePanelWidthPx, client_h_,
+                                hwnd_main_, (HMENU)1002, hinst, nullptr);
+
+    for (int i = 0; i < SidePanelTabCount; ++i) {
+        hwnd_side_tabs_[i] = CreateWindowW(L"GenesisAiSidePanelTab",
+                                           kSidePanelTabLabels[i],
+                                           WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                                           0, 0, 10, 10,
+                                           hwnd_panel_,
+                                           (HMENU)(INT_PTR)kSidePanelTabIds[i],
+                                           hinst,
+                                           this);
+    }
 
     // Controls in panel
     hwnd_input_ = CreateWindowW(L"EDIT", L"",
                                 WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT | ES_AUTOVSCROLL,
                                 10, 10, 400, 24,
-                                hwnd_panel_, (HMENU)2001, GetModuleHandleW(nullptr), nullptr);
+                                hwnd_panel_, (HMENU)2001, hinst, nullptr);
 
-    hwnd_send_ = CreateWindowW(L"BUTTON", L"Send",
+    hwnd_send_ = CreateWindowW(L"BUTTON", L"Ask GPT",
                                WS_CHILD | WS_VISIBLE,
                                10, 40, 80, 26,
-                               hwnd_panel_, (HMENU)2002, GetModuleHandleW(nullptr), nullptr);
+                               hwnd_panel_, (HMENU)2002, hinst, nullptr);
 
     hwnd_import_ = CreateWindowW(L"BUTTON", L"Import OBJ",
                                  WS_CHILD | WS_VISIBLE,
                                  100, 40, 110, 26,
-                                 hwnd_panel_, (HMENU)2003, GetModuleHandleW(nullptr), nullptr);
+                                 hwnd_panel_, (HMENU)2003, hinst, nullptr);
 
     hwnd_bootstrap_ = CreateWindowW(L"BUTTON", L"Bootstrap Engine",
                                WS_CHILD | WS_VISIBLE,
                                220, 40, 190, 26,
-                               hwnd_panel_, (HMENU)2006, GetModuleHandleW(nullptr), nullptr);
+                               hwnd_panel_, (HMENU)2006, hinst, nullptr);
 
     hwnd_objlist_ = CreateWindowW(L"LISTBOX", L"",
                                   WS_CHILD | WS_VISIBLE | WS_BORDER | LBS_NOTIFY,
                                   10, 76, 400, 180,
-                                  hwnd_panel_, (HMENU)2004, GetModuleHandleW(nullptr), nullptr);
+                                  hwnd_panel_, (HMENU)2004, hinst, nullptr);
     // Transform controls (position in meters). UI emits ObjectSetTransform packets.
-    CreateWindowW(L"STATIC", L"Pos X", WS_CHILD | WS_VISIBLE, 10, 266, 44, 18, hwnd_panel_, nullptr, GetModuleHandleW(nullptr), nullptr);
-    hwnd_posx_ = CreateWindowW(L"EDIT", L"0", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 58, 262, 90, 24, hwnd_panel_, (HMENU)2010, GetModuleHandleW(nullptr), nullptr);
-    CreateWindowW(L"STATIC", L"Y", WS_CHILD | WS_VISIBLE, 154, 266, 14, 18, hwnd_panel_, nullptr, GetModuleHandleW(nullptr), nullptr);
-    hwnd_posy_ = CreateWindowW(L"EDIT", L"0", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 172, 262, 90, 24, hwnd_panel_, (HMENU)2011, GetModuleHandleW(nullptr), nullptr);
-    CreateWindowW(L"STATIC", L"Z", WS_CHILD | WS_VISIBLE, 268, 266, 14, 18, hwnd_panel_, nullptr, GetModuleHandleW(nullptr), nullptr);
-    hwnd_posz_ = CreateWindowW(L"EDIT", L"0", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 286, 262, 90, 24, hwnd_panel_, (HMENU)2012, GetModuleHandleW(nullptr), nullptr);
-    hwnd_apply_xform_ = CreateWindowW(L"BUTTON", L"Apply", WS_CHILD | WS_VISIBLE, 10, 292, 80, 26, hwnd_panel_, (HMENU)2013, GetModuleHandleW(nullptr), nullptr);
+    hwnd_lbl_posx_ = CreateWindowW(L"STATIC", L"Pos X", WS_CHILD | WS_VISIBLE, 10, 266, 44, 18, hwnd_panel_, nullptr, hinst, nullptr);
+    hwnd_posx_ = CreateWindowW(L"EDIT", L"0", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 58, 262, 90, 24, hwnd_panel_, (HMENU)2010, hinst, nullptr);
+    hwnd_lbl_posy_ = CreateWindowW(L"STATIC", L"Y", WS_CHILD | WS_VISIBLE, 154, 266, 14, 18, hwnd_panel_, nullptr, hinst, nullptr);
+    hwnd_posy_ = CreateWindowW(L"EDIT", L"0", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 172, 262, 90, 24, hwnd_panel_, (HMENU)2011, hinst, nullptr);
+    hwnd_lbl_posz_ = CreateWindowW(L"STATIC", L"Z", WS_CHILD | WS_VISIBLE, 268, 266, 14, 18, hwnd_panel_, nullptr, hinst, nullptr);
+    hwnd_posz_ = CreateWindowW(L"EDIT", L"0", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 286, 262, 90, 24, hwnd_panel_, (HMENU)2012, hinst, nullptr);
+    hwnd_apply_xform_ = CreateWindowW(L"BUTTON", L"Apply", WS_CHILD | WS_VISIBLE, 10, 292, 80, 26, hwnd_panel_, (HMENU)2013, hinst, nullptr);
 
     // Gizmo + snap controls.
-    hwnd_mode_translate_ = CreateWindowW(L"BUTTON", L"Translate", WS_CHILD | WS_VISIBLE, 100, 292, 90, 26, hwnd_panel_, (HMENU)2020, GetModuleHandleW(nullptr), nullptr);
-    hwnd_mode_rotate_    = CreateWindowW(L"BUTTON", L"Rotate", WS_CHILD | WS_VISIBLE, 196, 292, 70, 26, hwnd_panel_, (HMENU)2021, GetModuleHandleW(nullptr), nullptr);
-    hwnd_frame_sel_      = CreateWindowW(L"BUTTON", L"Frame", WS_CHILD | WS_VISIBLE, 272, 292, 60, 26, hwnd_panel_, (HMENU)2022, GetModuleHandleW(nullptr), nullptr);
+    hwnd_mode_translate_ = CreateWindowW(L"BUTTON", L"Translate", WS_CHILD | WS_VISIBLE, 100, 292, 90, 26, hwnd_panel_, (HMENU)2020, hinst, nullptr);
+    hwnd_mode_rotate_    = CreateWindowW(L"BUTTON", L"Rotate", WS_CHILD | WS_VISIBLE, 196, 292, 70, 26, hwnd_panel_, (HMENU)2021, hinst, nullptr);
+    hwnd_frame_sel_      = CreateWindowW(L"BUTTON", L"Frame", WS_CHILD | WS_VISIBLE, 272, 292, 60, 26, hwnd_panel_, (HMENU)2022, hinst, nullptr);
 // Axis constraint + undo/redo.
-hwnd_axis_none_ = CreateWindowW(L"BUTTON", L"Axis:None", WS_CHILD | WS_VISIBLE, 10, 350, 80, 24, hwnd_panel_, (HMENU)2026, GetModuleHandleW(nullptr), nullptr);
-hwnd_axis_x_    = CreateWindowW(L"BUTTON", L"X", WS_CHILD | WS_VISIBLE, 96, 350, 28, 24, hwnd_panel_, (HMENU)2027, GetModuleHandleW(nullptr), nullptr);
-hwnd_axis_y_    = CreateWindowW(L"BUTTON", L"Y", WS_CHILD | WS_VISIBLE, 128, 350, 28, 24, hwnd_panel_, (HMENU)2028, GetModuleHandleW(nullptr), nullptr);
-hwnd_axis_z_    = CreateWindowW(L"BUTTON", L"Z", WS_CHILD | WS_VISIBLE, 160, 350, 28, 24, hwnd_panel_, (HMENU)2029, GetModuleHandleW(nullptr), nullptr);
-hwnd_undo_      = CreateWindowW(L"BUTTON", L"Undo", WS_CHILD | WS_VISIBLE, 196, 350, 60, 24, hwnd_panel_, (HMENU)2030, GetModuleHandleW(nullptr), nullptr);
-hwnd_redo_      = CreateWindowW(L"BUTTON", L"Redo", WS_CHILD | WS_VISIBLE, 262, 350, 60, 24, hwnd_panel_, (HMENU)2031, GetModuleHandleW(nullptr), nullptr);
+hwnd_axis_none_ = CreateWindowW(L"BUTTON", L"Axis:None", WS_CHILD | WS_VISIBLE, 10, 350, 80, 24, hwnd_panel_, (HMENU)2026, hinst, nullptr);
+hwnd_axis_x_    = CreateWindowW(L"BUTTON", L"X", WS_CHILD | WS_VISIBLE, 96, 350, 28, 24, hwnd_panel_, (HMENU)2027, hinst, nullptr);
+hwnd_axis_y_    = CreateWindowW(L"BUTTON", L"Y", WS_CHILD | WS_VISIBLE, 128, 350, 28, 24, hwnd_panel_, (HMENU)2028, hinst, nullptr);
+hwnd_axis_z_    = CreateWindowW(L"BUTTON", L"Z", WS_CHILD | WS_VISIBLE, 160, 350, 28, 24, hwnd_panel_, (HMENU)2029, hinst, nullptr);
+hwnd_undo_      = CreateWindowW(L"BUTTON", L"Undo", WS_CHILD | WS_VISIBLE, 196, 350, 60, 24, hwnd_panel_, (HMENU)2030, hinst, nullptr);
+hwnd_redo_      = CreateWindowW(L"BUTTON", L"Redo", WS_CHILD | WS_VISIBLE, 262, 350, 60, 24, hwnd_panel_, (HMENU)2031, hinst, nullptr);
 
-    hwnd_snap_enable_ = CreateWindowW(L"BUTTON", L"Snap", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 338, 296, 70, 22, hwnd_panel_, (HMENU)2023, GetModuleHandleW(nullptr), nullptr);
+    hwnd_snap_enable_ = CreateWindowW(L"BUTTON", L"Snap", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 338, 296, 70, 22, hwnd_panel_, (HMENU)2023, hinst, nullptr);
     // Grid/angle fields
-    CreateWindowW(L"STATIC", L"Grid(m)", WS_CHILD | WS_VISIBLE, 10, 322, 56, 18, hwnd_panel_, nullptr, GetModuleHandleW(nullptr), nullptr);
-    hwnd_grid_step_ = CreateWindowW(L"EDIT", L"1.0", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 68, 318, 72, 24, hwnd_panel_, (HMENU)2024, GetModuleHandleW(nullptr), nullptr);
-    CreateWindowW(L"STATIC", L"Angle(deg)", WS_CHILD | WS_VISIBLE, 150, 322, 72, 18, hwnd_panel_, nullptr, GetModuleHandleW(nullptr), nullptr);
-    hwnd_angle_step_ = CreateWindowW(L"EDIT", L"15", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 226, 318, 60, 24, hwnd_panel_, (HMENU)2025, GetModuleHandleW(nullptr), nullptr);
+    hwnd_lbl_grid_step_ = CreateWindowW(L"STATIC", L"Grid(m)", WS_CHILD | WS_VISIBLE, 10, 322, 56, 18, hwnd_panel_, nullptr, hinst, nullptr);
+    hwnd_grid_step_ = CreateWindowW(L"EDIT", L"1.0", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 68, 318, 72, 24, hwnd_panel_, (HMENU)2024, hinst, nullptr);
+    hwnd_lbl_angle_step_ = CreateWindowW(L"STATIC", L"Angle(deg)", WS_CHILD | WS_VISIBLE, 150, 322, 72, 18, hwnd_panel_, nullptr, hinst, nullptr);
+    hwnd_angle_step_ = CreateWindowW(L"EDIT", L"15", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 226, 318, 60, 24, hwnd_panel_, (HMENU)2025, hinst, nullptr);
 
     // Photon simulation controls.
-    CreateWindowW(L"STATIC", L"Photon Sim", WS_CHILD | WS_VISIBLE, 10, 378, 90, 18, hwnd_panel_, nullptr, GetModuleHandleW(nullptr), nullptr);
-    hwnd_mode_freq_ = CreateWindowW(L"BUTTON", L"Frequency", WS_CHILD | WS_VISIBLE, 10, 398, 86, 24, hwnd_panel_, (HMENU)2040, GetModuleHandleW(nullptr), nullptr);
-    hwnd_mode_vector_ = CreateWindowW(L"BUTTON", L"Vector", WS_CHILD | WS_VISIBLE, 102, 398, 70, 24, hwnd_panel_, (HMENU)2041, GetModuleHandleW(nullptr), nullptr);
-    hwnd_stov_toggle_ = CreateWindowW(L"BUTTON", L"STOV", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 178, 398, 60, 24, hwnd_panel_, (HMENU)2042, GetModuleHandleW(nullptr), nullptr);
+    hwnd_lbl_photon_sim_ = CreateWindowW(L"STATIC", L"Photon Sim", WS_CHILD | WS_VISIBLE, 10, 378, 90, 18, hwnd_panel_, nullptr, hinst, nullptr);
+    hwnd_mode_freq_ = CreateWindowW(L"BUTTON", L"Frequency", WS_CHILD | WS_VISIBLE, 10, 398, 86, 24, hwnd_panel_, (HMENU)2040, hinst, nullptr);
+    hwnd_mode_vector_ = CreateWindowW(L"BUTTON", L"Vector", WS_CHILD | WS_VISIBLE, 102, 398, 70, 24, hwnd_panel_, (HMENU)2041, hinst, nullptr);
+    hwnd_stov_toggle_ = CreateWindowW(L"BUTTON", L"STOV", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 178, 398, 60, 24, hwnd_panel_, (HMENU)2042, hinst, nullptr);
 
-    CreateWindowW(L"STATIC", L"A", WS_CHILD | WS_VISIBLE, 10, 430, 14, 18, hwnd_panel_, nullptr, GetModuleHandleW(nullptr), nullptr);
-    hwnd_param_a_ = CreateWindowW(L"EDIT", L"0.19", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 24, 426, 64, 24, hwnd_panel_, (HMENU)2043, GetModuleHandleW(nullptr), nullptr);
-    CreateWindowW(L"STATIC", L"F", WS_CHILD | WS_VISIBLE, 92, 430, 14, 18, hwnd_panel_, nullptr, GetModuleHandleW(nullptr), nullptr);
-    hwnd_param_f_ = CreateWindowW(L"EDIT", L"0.245", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 106, 426, 64, 24, hwnd_panel_, (HMENU)2044, GetModuleHandleW(nullptr), nullptr);
-    CreateWindowW(L"STATIC", L"I", WS_CHILD | WS_VISIBLE, 174, 430, 14, 18, hwnd_panel_, nullptr, GetModuleHandleW(nullptr), nullptr);
-    hwnd_param_i_ = CreateWindowW(L"EDIT", L"0.35", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 188, 426, 64, 24, hwnd_panel_, (HMENU)2045, GetModuleHandleW(nullptr), nullptr);
-    CreateWindowW(L"STATIC", L"V", WS_CHILD | WS_VISIBLE, 256, 430, 14, 18, hwnd_panel_, nullptr, GetModuleHandleW(nullptr), nullptr);
-    hwnd_param_v_ = CreateWindowW(L"EDIT", L"0.35", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 270, 426, 64, 24, hwnd_panel_, (HMENU)2046, GetModuleHandleW(nullptr), nullptr);
-    hwnd_apply_sim_params_ = CreateWindowW(L"BUTTON", L"Apply Params", WS_CHILD | WS_VISIBLE, 340, 426, 70, 24, hwnd_panel_, (HMENU)2047, GetModuleHandleW(nullptr), nullptr);
+    hwnd_lbl_param_a_ = CreateWindowW(L"STATIC", L"A", WS_CHILD | WS_VISIBLE, 10, 430, 14, 18, hwnd_panel_, nullptr, hinst, nullptr);
+    hwnd_param_a_ = CreateWindowW(L"EDIT", L"0.19", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 24, 426, 64, 24, hwnd_panel_, (HMENU)2043, hinst, nullptr);
+    hwnd_lbl_param_f_ = CreateWindowW(L"STATIC", L"F", WS_CHILD | WS_VISIBLE, 92, 430, 14, 18, hwnd_panel_, nullptr, hinst, nullptr);
+    hwnd_param_f_ = CreateWindowW(L"EDIT", L"0.245", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 106, 426, 64, 24, hwnd_panel_, (HMENU)2044, hinst, nullptr);
+    hwnd_lbl_param_i_ = CreateWindowW(L"STATIC", L"I", WS_CHILD | WS_VISIBLE, 174, 430, 14, 18, hwnd_panel_, nullptr, hinst, nullptr);
+    hwnd_param_i_ = CreateWindowW(L"EDIT", L"0.35", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 188, 426, 64, 24, hwnd_panel_, (HMENU)2045, hinst, nullptr);
+    hwnd_lbl_param_v_ = CreateWindowW(L"STATIC", L"V", WS_CHILD | WS_VISIBLE, 256, 430, 14, 18, hwnd_panel_, nullptr, hinst, nullptr);
+    hwnd_param_v_ = CreateWindowW(L"EDIT", L"0.35", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 270, 426, 64, 24, hwnd_panel_, (HMENU)2046, hinst, nullptr);
+    hwnd_apply_sim_params_ = CreateWindowW(L"BUTTON", L"Apply Params", WS_CHILD | WS_VISIBLE, 340, 426, 70, 24, hwnd_panel_, (HMENU)2047, hinst, nullptr);
 
-    CreateWindowW(L"STATIC", L"Lattice", WS_CHILD | WS_VISIBLE, 10, 460, 44, 18, hwnd_panel_, nullptr, GetModuleHandleW(nullptr), nullptr);
-    hwnd_lattice_edge_ = CreateWindowW(L"EDIT", L"256", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 56, 456, 72, 24, hwnd_panel_, (HMENU)2048, GetModuleHandleW(nullptr), nullptr);
-    hwnd_apply_lattice_edge_ = CreateWindowW(L"BUTTON", L"Apply Edge", WS_CHILD | WS_VISIBLE, 134, 456, 76, 24, hwnd_panel_, (HMENU)2049, GetModuleHandleW(nullptr), nullptr);
-    CreateWindowW(L"STATIC", L"StreamHz", WS_CHILD | WS_VISIBLE, 218, 460, 54, 18, hwnd_panel_, nullptr, GetModuleHandleW(nullptr), nullptr);
-    hwnd_stream_hz_ = CreateWindowW(L"EDIT", L"360", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 274, 456, 56, 24, hwnd_panel_, (HMENU)2050, GetModuleHandleW(nullptr), nullptr);
-    hwnd_apply_stream_hz_ = CreateWindowW(L"BUTTON", L"Apply Hz", WS_CHILD | WS_VISIBLE, 336, 456, 74, 24, hwnd_panel_, (HMENU)2051, GetModuleHandleW(nullptr), nullptr);
+    hwnd_lbl_lattice_ = CreateWindowW(L"STATIC", L"Lattice", WS_CHILD | WS_VISIBLE, 10, 460, 44, 18, hwnd_panel_, nullptr, hinst, nullptr);
+    hwnd_lattice_edge_ = CreateWindowW(L"EDIT", L"256", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 56, 456, 72, 24, hwnd_panel_, (HMENU)2048, hinst, nullptr);
+    hwnd_apply_lattice_edge_ = CreateWindowW(L"BUTTON", L"Apply Edge", WS_CHILD | WS_VISIBLE, 134, 456, 76, 24, hwnd_panel_, (HMENU)2049, hinst, nullptr);
+    hwnd_lbl_stream_hz_ = CreateWindowW(L"STATIC", L"StreamHz", WS_CHILD | WS_VISIBLE, 218, 460, 54, 18, hwnd_panel_, nullptr, hinst, nullptr);
+    hwnd_stream_hz_ = CreateWindowW(L"EDIT", L"360", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT, 274, 456, 56, 24, hwnd_panel_, (HMENU)2050, hinst, nullptr);
+    hwnd_apply_stream_hz_ = CreateWindowW(L"BUTTON", L"Apply Hz", WS_CHILD | WS_VISIBLE, 336, 456, 74, 24, hwnd_panel_, (HMENU)2051, hinst, nullptr);
 
     hwnd_output_ = CreateWindowW(L"EDIT", L"",
                                  WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL,
                                  10, 490, 400, client_h_ - 500,
-                                 hwnd_panel_, (HMENU)2005, GetModuleHandleW(nullptr), nullptr);
+                                 hwnd_panel_, (HMENU)2005, hinst, nullptr);
     if (stov_mode_) {
         SendMessageW(hwnd_stov_toggle_, BM_SETCHECK, BST_CHECKED, 0);
     }
+    SetSidePanelActiveTab(SidePanelTabChatGpt, false);
     LayoutChildren(client_w_, client_h_);
 }
 
 void App::LayoutChildren(int w, int h) {
-    int panel_w = 420;
+    const int panel_w = kSidePanelWidthPx;
+    const int pad = 10;
+    const int tab_top = 10;
+    const int tab_h = 42;
+    const int tab_gap = 4;
+    const int tab_w = (panel_w - pad * 2 - tab_gap * (SidePanelTabCount - 1)) / SidePanelTabCount;
+
     MoveWindow(hwnd_viewport_, 0, 0, w - panel_w, h, TRUE);
     MoveWindow(hwnd_panel_, w - panel_w, 0, panel_w, h, TRUE);
+    for (int i = 0; i < SidePanelTabCount; ++i) {
+        const int x = pad + i * (tab_w + tab_gap);
+        MoveWindow(hwnd_side_tabs_[i], x, tab_top, tab_w, tab_h, TRUE);
+    }
 
-    MoveWindow(hwnd_output_, 10, 490, panel_w - 20, std::max(80, h - 500), TRUE);
+    auto show = [](HWND hwnd, bool visible) {
+        if (hwnd) ShowWindow(hwnd, visible ? SW_SHOW : SW_HIDE);
+    };
+
+    const bool show_chat = (side_panel_active_tab_index_ == SidePanelTabChatGpt);
+    const bool show_scene = (side_panel_active_tab_index_ == SidePanelTabScene);
+    const bool show_research = (side_panel_active_tab_index_ == SidePanelTabResearch);
+
+    show(hwnd_input_, show_chat);
+    show(hwnd_send_, show_chat);
+
+    show(hwnd_import_, show_scene);
+    show(hwnd_bootstrap_, show_scene);
+    show(hwnd_objlist_, show_scene);
+    show(hwnd_lbl_posx_, show_scene);
+    show(hwnd_lbl_posy_, show_scene);
+    show(hwnd_lbl_posz_, show_scene);
+    show(hwnd_posx_, show_scene);
+    show(hwnd_posy_, show_scene);
+    show(hwnd_posz_, show_scene);
+    show(hwnd_apply_xform_, show_scene);
+    show(hwnd_mode_translate_, show_scene);
+    show(hwnd_mode_rotate_, show_scene);
+    show(hwnd_frame_sel_, show_scene);
+    show(hwnd_axis_none_, show_scene);
+    show(hwnd_axis_x_, show_scene);
+    show(hwnd_axis_y_, show_scene);
+    show(hwnd_axis_z_, show_scene);
+    show(hwnd_undo_, show_scene);
+    show(hwnd_redo_, show_scene);
+    show(hwnd_snap_enable_, show_scene);
+    show(hwnd_lbl_grid_step_, show_scene);
+    show(hwnd_grid_step_, show_scene);
+    show(hwnd_lbl_angle_step_, show_scene);
+    show(hwnd_angle_step_, show_scene);
+
+    show(hwnd_lbl_photon_sim_, show_research);
+    show(hwnd_mode_freq_, show_research);
+    show(hwnd_mode_vector_, show_research);
+    show(hwnd_stov_toggle_, show_research);
+    show(hwnd_lbl_param_a_, show_research);
+    show(hwnd_param_a_, show_research);
+    show(hwnd_lbl_param_f_, show_research);
+    show(hwnd_param_f_, show_research);
+    show(hwnd_lbl_param_i_, show_research);
+    show(hwnd_param_i_, show_research);
+    show(hwnd_lbl_param_v_, show_research);
+    show(hwnd_param_v_, show_research);
+    show(hwnd_apply_sim_params_, show_research);
+    show(hwnd_lbl_lattice_, show_research);
+    show(hwnd_lattice_edge_, show_research);
+    show(hwnd_apply_lattice_edge_, show_research);
+    show(hwnd_lbl_stream_hz_, show_research);
+    show(hwnd_stream_hz_, show_research);
+    show(hwnd_apply_stream_hz_, show_research);
+
+    SetWindowTextW(hwnd_send_, show_chat ? L"Ask GPT" : L"Send");
+
+    const int content_top = tab_top + tab_h + 12;
+    int output_top = 0;
+
+    if (show_chat) {
+        MoveWindow(hwnd_input_, pad, content_top, panel_w - pad * 2, 28, TRUE);
+        MoveWindow(hwnd_send_, panel_w - pad - 116, content_top + 34, 116, 28, TRUE);
+        output_top = content_top + 74;
+    } else if (show_scene) {
+        MoveWindow(hwnd_import_, pad, content_top, 112, 28, TRUE);
+        MoveWindow(hwnd_bootstrap_, pad + 120, content_top, panel_w - (pad * 2 + 120), 28, TRUE);
+        MoveWindow(hwnd_objlist_, pad, content_top + 38, panel_w - pad * 2, 160, TRUE);
+
+        const int row0 = content_top + 210;
+        MoveWindow(hwnd_lbl_posx_, pad, row0 + 4, 44, 18, TRUE);
+        MoveWindow(hwnd_posx_, pad + 48, row0, 92, 24, TRUE);
+        MoveWindow(hwnd_lbl_posy_, pad + 148, row0 + 4, 16, 18, TRUE);
+        MoveWindow(hwnd_posy_, pad + 166, row0, 92, 24, TRUE);
+        MoveWindow(hwnd_lbl_posz_, pad + 266, row0 + 4, 16, 18, TRUE);
+        MoveWindow(hwnd_posz_, pad + 284, row0, 92, 24, TRUE);
+        MoveWindow(hwnd_apply_xform_, pad, row0 + 32, 80, 26, TRUE);
+
+        MoveWindow(hwnd_mode_translate_, pad + 90, row0 + 32, 90, 26, TRUE);
+        MoveWindow(hwnd_mode_rotate_, pad + 186, row0 + 32, 70, 26, TRUE);
+        MoveWindow(hwnd_frame_sel_, pad + 262, row0 + 32, 70, 26, TRUE);
+        MoveWindow(hwnd_snap_enable_, pad + 338, row0 + 34, 70, 22, TRUE);
+
+        const int row1 = row0 + 64;
+        MoveWindow(hwnd_lbl_grid_step_, pad, row1 + 4, 56, 18, TRUE);
+        MoveWindow(hwnd_grid_step_, pad + 58, row1, 72, 24, TRUE);
+        MoveWindow(hwnd_lbl_angle_step_, pad + 142, row1 + 4, 72, 18, TRUE);
+        MoveWindow(hwnd_angle_step_, pad + 220, row1, 60, 24, TRUE);
+
+        const int row2 = row1 + 32;
+        MoveWindow(hwnd_axis_none_, pad, row2, 80, 24, TRUE);
+        MoveWindow(hwnd_axis_x_, pad + 86, row2, 28, 24, TRUE);
+        MoveWindow(hwnd_axis_y_, pad + 118, row2, 28, 24, TRUE);
+        MoveWindow(hwnd_axis_z_, pad + 150, row2, 28, 24, TRUE);
+        MoveWindow(hwnd_undo_, pad + 186, row2, 60, 24, TRUE);
+        MoveWindow(hwnd_redo_, pad + 252, row2, 60, 24, TRUE);
+
+        output_top = row2 + 38;
+    } else {
+        MoveWindow(hwnd_lbl_photon_sim_, pad, content_top, 90, 18, TRUE);
+        MoveWindow(hwnd_mode_freq_, pad, content_top + 22, 86, 24, TRUE);
+        MoveWindow(hwnd_mode_vector_, pad + 92, content_top + 22, 72, 24, TRUE);
+        MoveWindow(hwnd_stov_toggle_, pad + 170, content_top + 22, 70, 24, TRUE);
+
+        const int row0 = content_top + 60;
+        MoveWindow(hwnd_lbl_param_a_, pad, row0 + 4, 14, 18, TRUE);
+        MoveWindow(hwnd_param_a_, pad + 16, row0, 64, 24, TRUE);
+        MoveWindow(hwnd_lbl_param_f_, pad + 88, row0 + 4, 14, 18, TRUE);
+        MoveWindow(hwnd_param_f_, pad + 104, row0, 64, 24, TRUE);
+        MoveWindow(hwnd_lbl_param_i_, pad + 176, row0 + 4, 14, 18, TRUE);
+        MoveWindow(hwnd_param_i_, pad + 192, row0, 64, 24, TRUE);
+        MoveWindow(hwnd_lbl_param_v_, pad + 264, row0 + 4, 14, 18, TRUE);
+        MoveWindow(hwnd_param_v_, pad + 280, row0, 64, 24, TRUE);
+        MoveWindow(hwnd_apply_sim_params_, pad + 350, row0, 60, 24, TRUE);
+
+        const int row1 = row0 + 34;
+        MoveWindow(hwnd_lbl_lattice_, pad, row1 + 4, 44, 18, TRUE);
+        MoveWindow(hwnd_lattice_edge_, pad + 48, row1, 72, 24, TRUE);
+        MoveWindow(hwnd_apply_lattice_edge_, pad + 126, row1, 78, 24, TRUE);
+        MoveWindow(hwnd_lbl_stream_hz_, pad + 212, row1 + 4, 54, 18, TRUE);
+        MoveWindow(hwnd_stream_hz_, pad + 270, row1, 56, 24, TRUE);
+        MoveWindow(hwnd_apply_stream_hz_, pad + 332, row1, 78, 24, TRUE);
+
+        output_top = row1 + 38;
+    }
+
+    output_top = std::max(output_top, content_top + 70);
+    output_top = std::min(output_top, h - 120);
+    MoveWindow(hwnd_output_, pad, output_top, panel_w - 20, std::max(110, h - output_top - 10), TRUE);
+}
+
+void App::SetSidePanelActiveTab(int tab_index, bool focus_tab) {
+    if (tab_index < 0) tab_index = 0;
+    if (tab_index >= SidePanelTabCount) tab_index = SidePanelTabCount - 1;
+    side_panel_active_tab_index_ = tab_index;
+    side_panel_hover_tab_index_ = tab_index;
+    if (client_w_ > 0 && client_h_ > 0) {
+        LayoutChildren(client_w_, client_h_);
+    }
+    for (int i = 0; i < SidePanelTabCount; ++i) {
+        if (hwnd_side_tabs_[i]) InvalidateRect(hwnd_side_tabs_[i], nullptr, TRUE);
+    }
+    if (focus_tab && hwnd_side_tabs_[tab_index]) {
+        SetFocus(hwnd_side_tabs_[tab_index]);
+    }
+}
+
+void App::SetSidePanelHoverTab(int tab_index) {
+    if (tab_index < -1) tab_index = -1;
+    if (tab_index >= SidePanelTabCount) tab_index = SidePanelTabCount - 1;
+    if (side_panel_hover_tab_index_ == tab_index) return;
+    const int old = side_panel_hover_tab_index_;
+    side_panel_hover_tab_index_ = tab_index;
+    if (old >= 0 && old < SidePanelTabCount && hwnd_side_tabs_[old]) {
+        InvalidateRect(hwnd_side_tabs_[old], nullptr, TRUE);
+    }
+    if (tab_index >= 0 && tab_index < SidePanelTabCount && hwnd_side_tabs_[tab_index]) {
+        InvalidateRect(hwnd_side_tabs_[tab_index], nullptr, TRUE);
+    }
+}
+
+void App::HandleSidePanelTabStep(int delta, bool focus_tab) {
+    if (delta == 0) return;
+    int next = side_panel_active_tab_index_;
+    if (delta > 0) next = (next + 1) % SidePanelTabCount;
+    else next = (next + SidePanelTabCount - 1) % SidePanelTabCount;
+    SetSidePanelActiveTab(next, focus_tab);
+}
+
+void App::StepSidePanelTabAnimations(float dt) {
+    const float step = std::min(1.0f, dt * 10.0f);
+    for (int i = 0; i < SidePanelTabCount; ++i) {
+        const float target = (i == side_panel_active_tab_index_) ? 1.0f
+                             : (i == side_panel_hover_tab_index_) ? 0.55f
+                             : 0.0f;
+        const float current = side_panel_tab_anim_[i];
+        const float next = current + (target - current) * step;
+        if (std::fabs(next - current) > 0.001f) {
+            side_panel_tab_anim_[i] = next;
+            if (hwnd_side_tabs_[i]) InvalidateRect(hwnd_side_tabs_[i], nullptr, TRUE);
+        }
+    }
+}
+
+void App::DrawSidePanelTab(HWND hwnd, HDC hdc, const RECT& rc) {
+    const int index = ew_side_panel_tab_index_from_id(GetDlgCtrlID(hwnd));
+    const bool active = (index == side_panel_active_tab_index_);
+    const bool hot = (index == side_panel_hover_tab_index_);
+    const bool focused = (GetFocus() == hwnd);
+    const float anim = (index >= 0 && index < SidePanelTabCount) ? side_panel_tab_anim_[index] : 0.0f;
+
+    const COLORREF fill_rgb = active ? RGB(214, 214, 214) : hot ? RGB(226, 226, 226) : RGB(240, 240, 240);
+    const COLORREF border_rgb = focused ? RGB(198, 161, 58) : active ? RGB(180, 180, 180) : RGB(205, 205, 205);
+    const COLORREF text_rgb = active ? RGB(214, 176, 64) : hot ? RGB(196, 160, 60) : RGB(164, 132, 44);
+    const int font_px = 18 + (int)std::lround(anim * 5.0f);
+
+    HBRUSH fill_brush = CreateSolidBrush(fill_rgb);
+    HPEN border_pen = CreatePen(PS_SOLID, 1, border_rgb);
+    HGDIOBJ old_brush = SelectObject(hdc, fill_brush);
+    HGDIOBJ old_pen = SelectObject(hdc, border_pen);
+    RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, 18, 18);
+    SelectObject(hdc, old_pen);
+    SelectObject(hdc, old_brush);
+    DeleteObject(border_pen);
+    DeleteObject(fill_brush);
+
+    RECT text_rc = rc;
+    text_rc.top -= active ? 1 : 0;
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, text_rgb);
+    HFONT font = ew_create_ui_font_px(hdc, font_px, active ? FW_BOLD : FW_SEMIBOLD);
+    HGDIOBJ old_font = SelectObject(hdc, font);
+    wchar_t label[64] = {};
+    GetWindowTextW(hwnd, label, 63);
+    DrawTextW(hdc, label, -1, &text_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    SelectObject(hdc, old_font);
+    DeleteObject(font);
+
+    if (active) {
+        RECT underline{rc.left + 18, rc.bottom - 5, rc.right - 18, rc.bottom - 2};
+        HBRUSH gold_brush = CreateSolidBrush(RGB(214, 176, 64));
+        FillRect(hdc, &underline, gold_brush);
+        DeleteObject(gold_brush);
+    }
+}
+
+LRESULT CALLBACK App::SideTabWndProcThunk(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+    if (msg == WM_NCCREATE) {
+        auto* cs = (CREATESTRUCTW*)lparam;
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)cs->lpCreateParams);
+    }
+    App* self = (App*)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+    if (self) return self->SideTabWndProc(hwnd, msg, wparam, lparam);
+    return DefWindowProcW(hwnd, msg, wparam, lparam);
+}
+
+LRESULT App::SideTabWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+    const int index = ew_side_panel_tab_index_from_id(GetDlgCtrlID(hwnd));
+    switch (msg) {
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_GETDLGCODE:
+            return DLGC_WANTARROWS;
+        case WM_MOUSEMOVE: {
+            TRACKMOUSEEVENT tme{};
+            tme.cbSize = sizeof(tme);
+            tme.dwFlags = TME_LEAVE;
+            tme.hwndTrack = hwnd;
+            TrackMouseEvent(&tme);
+            SetSidePanelHoverTab(index);
+            return 0;
+        }
+        case WM_MOUSELEAVE:
+            if (side_panel_hover_tab_index_ == index) {
+                SetSidePanelHoverTab(-1);
+            }
+            return 0;
+        case WM_LBUTTONDOWN:
+            SetFocus(hwnd);
+            return 0;
+        case WM_LBUTTONUP:
+            SetSidePanelActiveTab(index, true);
+            return 0;
+        case WM_MOUSEWHEEL:
+            HandleSidePanelTabStep((GET_WHEEL_DELTA_WPARAM(wparam) > 0) ? -1 : 1, true);
+            return 0;
+        case WM_KEYDOWN:
+            if (wparam == VK_UP || wparam == VK_LEFT) {
+                HandleSidePanelTabStep(-1, true);
+                return 0;
+            }
+            if (wparam == VK_DOWN || wparam == VK_RIGHT) {
+                HandleSidePanelTabStep(1, true);
+                return 0;
+            }
+            if (wparam == VK_RETURN || wparam == VK_SPACE) {
+                SetSidePanelActiveTab(index, true);
+                return 0;
+            }
+            break;
+        case WM_SETFOCUS:
+            SetSidePanelHoverTab(index);
+            InvalidateRect(hwnd, nullptr, TRUE);
+            return 0;
+        case WM_KILLFOCUS:
+            InvalidateRect(hwnd, nullptr, TRUE);
+            return 0;
+        case WM_PAINT: {
+            PAINTSTRUCT ps{};
+            HDC hdc = BeginPaint(hwnd, &ps);
+            RECT rc{};
+            GetClientRect(hwnd, &rc);
+            DrawSidePanelTab(hwnd, hdc, rc);
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
+        default:
+            break;
+    }
+    return DefWindowProcW(hwnd, msg, wparam, lparam);
 }
 
 int App::Run(HINSTANCE hInst) {
@@ -5175,6 +5570,8 @@ void App::Tick() {
     if (dt <= 0.f) dt = tick_dt;
     if (dt > 0.1f) dt = 0.1f;
     last = now;
+
+    StepSidePanelTabAnimations(dt);
 
     if (!scene_) return;
 
@@ -6794,11 +7191,79 @@ push.pointSize = 20000.0f;
 void App::OnSend() {
     wchar_t wbuf[4096];
     GetWindowTextW(hwnd_input_, wbuf, 4096);
-    std::string utf8 = wide_to_utf8(wbuf);
-    if (!utf8.empty() && scene_) {
+    const std::string utf8 = ew_trim_ascii_copy(wide_to_utf8(wbuf));
+    if (utf8.empty()) return;
+
+    bool consumed = false;
+    if (side_panel_active_tab_index_ == SidePanelTabChatGpt) {
+        consumed = SubmitChatGptPrompt(utf8);
+    } else if (scene_) {
         scene_->SubmitUiLine(utf8);
+        consumed = true;
+    }
+
+    if (consumed) {
         SetWindowTextW(hwnd_input_, L"");
     }
+}
+
+bool App::SubmitChatGptPrompt(const std::string& utf8) {
+    const std::string prompt = ew_trim_ascii_copy(utf8);
+    if (prompt.empty()) return false;
+
+    if (ew_is_engine_command_like_ascii(prompt)) {
+        AppendOutputUtf8("ENGINE> " + prompt);
+        if (scene_) {
+            scene_->SubmitUiLine(prompt);
+        } else {
+            AppendOutputUtf8("ENGINE ERR: runtime scene unavailable");
+        }
+        return true;
+    }
+
+    AppendOutputUtf8("CHATGPT> " + prompt);
+
+    EwOpenAiTextRequest request{};
+    request.instructions_utf8 =
+        "You are integrated into the Genesis Engine AI side panel. "
+        "Give concise, useful answers, and when the user asks about the engine prefer concrete runtime or repository guidance.";
+    request.input_utf8 = prompt;
+    request.model_utf8 = ew_openai_default_model_utf8();
+    request.enable_web_search = true;
+    request.max_output_tokens_u32 = 900u;
+
+    EwOpenAiTextResponse response{};
+    AppendOutputUtf8("CHATGPT: requesting...");
+    const bool ok = ew_openai_send_text_request(request, &response);
+    if (ok && response.ok) {
+        std::istringstream iss(response.output_text_utf8);
+        std::string line;
+        bool emitted = false;
+        while (std::getline(iss, line)) {
+            line = ew_trim_ascii_copy(line);
+            if (!line.empty()) {
+                AppendOutputUtf8("CHATGPT " + line);
+                emitted = true;
+            }
+        }
+        if (!emitted) {
+            AppendOutputUtf8("CHATGPT: response received");
+        }
+        return true;
+    }
+
+    std::ostringstream oss;
+    oss << "CHATGPT ERR";
+    if (response.http_status_u32 != 0u) {
+        oss << " http=" << response.http_status_u32;
+    }
+    if (!response.error_utf8.empty()) {
+        oss << " " << response.error_utf8;
+    } else {
+        oss << " request failed";
+    }
+    AppendOutputUtf8(oss.str());
+    return true;
 }
 
 void App::OnImportObj() {
@@ -7241,6 +7706,20 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); AppendOutputUtf8("EDIT
         case WM_MBUTTONDOWN: input_.mmb = true; SetCapture(hwnd); break;
         case WM_MBUTTONUP: input_.mmb = false; ReleaseCapture(); break;
         case WM_MOUSEWHEEL: {
+            POINT screen_pt{};
+            screen_pt.x = GET_X_LPARAM(lparam);
+            screen_pt.y = GET_Y_LPARAM(lparam);
+            POINT client_pt = screen_pt;
+            ScreenToClient(hwnd_main_, &client_pt);
+            const bool in_panel =
+                (client_pt.x >= (client_w_ - kSidePanelWidthPx) &&
+                 client_pt.x < client_w_ &&
+                 client_pt.y >= 10 &&
+                 client_pt.y < 52);
+            if (in_panel) {
+                HandleSidePanelTabStep((GET_WHEEL_DELTA_WPARAM(wparam) > 0) ? -1 : 1, true);
+                return 0;
+            }
             input_.wheel_delta += GET_WHEEL_DELTA_WPARAM(wparam);
         } break;
         case WM_MOUSEMOVE: {

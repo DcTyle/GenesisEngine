@@ -35,12 +35,20 @@ public:
     void OutputSTOVAudio(const std::vector<float>& phase, const std::vector<float>& oam, const std::vector<int>& winding);
 
 private:
+    enum SidePanelTabIndex {
+        SidePanelTabChatGpt = 0,
+        SidePanelTabScene = 1,
+        SidePanelTabResearch = 2,
+        SidePanelTabCount = 3
+    };
+
     AppConfig cfg_;
 
     // Win64
     HWND hwnd_main_ = nullptr;
     HWND hwnd_viewport_ = nullptr;
     HWND hwnd_panel_ = nullptr;
+    HWND hwnd_side_tabs_[SidePanelTabCount] = {nullptr, nullptr, nullptr};
 
     // UI controls
     HWND hwnd_input_ = nullptr;
@@ -51,6 +59,9 @@ private:
     HWND hwnd_objlist_ = nullptr;
 
     // Transform UI (authoritative in anchors; UI emits control packets)
+    HWND hwnd_lbl_posx_ = nullptr;
+    HWND hwnd_lbl_posy_ = nullptr;
+    HWND hwnd_lbl_posz_ = nullptr;
     HWND hwnd_posx_ = nullptr;
     HWND hwnd_posy_ = nullptr;
     HWND hwnd_posz_ = nullptr;
@@ -67,18 +78,27 @@ private:
     HWND hwnd_undo_ = nullptr;
     HWND hwnd_redo_ = nullptr;
     HWND hwnd_snap_enable_ = nullptr;
+    HWND hwnd_lbl_grid_step_ = nullptr;
     HWND hwnd_grid_step_ = nullptr;
+    HWND hwnd_lbl_angle_step_ = nullptr;
     HWND hwnd_angle_step_ = nullptr;
+    HWND hwnd_lbl_photon_sim_ = nullptr;
     HWND hwnd_mode_freq_ = nullptr;
     HWND hwnd_mode_vector_ = nullptr;
     HWND hwnd_stov_toggle_ = nullptr;
+    HWND hwnd_lbl_param_a_ = nullptr;
     HWND hwnd_param_a_ = nullptr;
+    HWND hwnd_lbl_param_f_ = nullptr;
     HWND hwnd_param_f_ = nullptr;
+    HWND hwnd_lbl_param_i_ = nullptr;
     HWND hwnd_param_i_ = nullptr;
+    HWND hwnd_lbl_param_v_ = nullptr;
     HWND hwnd_param_v_ = nullptr;
     HWND hwnd_apply_sim_params_ = nullptr;
+    HWND hwnd_lbl_lattice_ = nullptr;
     HWND hwnd_lattice_edge_ = nullptr;
     HWND hwnd_apply_lattice_edge_ = nullptr;
+    HWND hwnd_lbl_stream_hz_ = nullptr;
     HWND hwnd_stream_hz_ = nullptr;
     HWND hwnd_apply_stream_hz_ = nullptr;
 
@@ -130,6 +150,9 @@ private:
     bool stov_mode_ = false;
     std::string stov_data_log_path_utf8_;
     std::string stov_audio_out_path_utf8_;
+    int side_panel_active_tab_index_ = SidePanelTabChatGpt;
+    int side_panel_hover_tab_index_ = -1;
+    float side_panel_tab_anim_[SidePanelTabCount] = {1.0f, 0.0f, 0.0f};
 
 // View modes
     bool immersion_mode_ = false; // Standard vs Immersion
@@ -137,11 +160,18 @@ private:
 
     // Win64 plumbing
     static LRESULT CALLBACK WndProcThunk(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
+    static LRESULT CALLBACK SideTabWndProcThunk(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
     LRESULT WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
+    LRESULT SideTabWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
 
     void CreateMainWindow(HINSTANCE hInst);
     void CreateChildWindows();
     void LayoutChildren(int w, int h);
+    void SetSidePanelActiveTab(int tab_index, bool focus_tab);
+    void SetSidePanelHoverTab(int tab_index);
+    void StepSidePanelTabAnimations(float dt);
+    void HandleSidePanelTabStep(int delta, bool focus_tab);
+    void DrawSidePanelTab(HWND hwnd, HDC hdc, const RECT& rc);
 
     void Tick();
     void Render();
@@ -166,6 +196,7 @@ private:
     void EmitCameraSetFromRig();
 
     void AppendOutputUtf8(const std::string& line);
+    bool SubmitChatGptPrompt(const std::string& utf8);
 };
 
 } // namespace ewv
