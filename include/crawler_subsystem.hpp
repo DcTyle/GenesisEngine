@@ -42,6 +42,8 @@ struct CrawlerStats {
     uint64_t truncated_segments_u64;
     uint64_t dropped_obs_u64;
     uint64_t last_tick_u64;
+    uint32_t pending_obs_u32 = 0;
+    uint32_t last_utf8_bytes_u32 = 0;
     EigenWare::EwId9 last_coord_id9;
 };
 

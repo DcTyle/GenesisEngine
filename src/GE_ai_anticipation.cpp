@@ -130,6 +130,64 @@ bool EwAiAnticipator::route(SubstrateManager* sm,
         return false;
     }
 
+    std::string s_lower = s;
+    for (char& ch : s_lower) ch = (char)std::tolower((unsigned char)ch);
+    auto starts_phrase = [&](const char* phrase_ascii)->bool {
+        if (!phrase_ascii) return false;
+        size_t n = 0u;
+        while (phrase_ascii[n] != 0) ++n;
+        if (s_lower.size() < n) return false;
+        for (size_t i = 0u; i < n; ++i) {
+            if (s_lower[i] != phrase_ascii[i]) return false;
+        }
+        return true;
+    };
+    auto tail_after_phrase = [&](const char* phrase_ascii)->std::string {
+        size_t n = 0u;
+        while (phrase_ascii[n] != 0) ++n;
+        if (s.size() <= n) return std::string();
+        std::string out = s.substr(n);
+        ge_trim_left(out);
+        ge_trim_right(out);
+        return out;
+    };
+
+    if (starts_phrase("list assets") || starts_phrase("list asset library") ||
+        starts_phrase("show asset library")) {
+        out_line = "ASSET_LIBRARY_LIST:";
+        ui_tag = "AI_ANTICIPATE route=ASSET_LIBRARY_LIST";
+        return true;
+    }
+    if (starts_phrase("sandbox status")) {
+        out_line = "SANDBOX_STATUS:";
+        ui_tag = "AI_ANTICIPATE route=SANDBOX_STATUS";
+        return true;
+    }
+    if (starts_phrase("open scene ")) {
+        const std::string target = tail_after_phrase("open scene ");
+        if (!target.empty()) {
+            out_line = std::string("SCENE_OPEN:") + target;
+            ui_tag = "AI_ANTICIPATE route=SCENE_OPEN";
+            return true;
+        }
+    }
+    if (starts_phrase("open simulation ")) {
+        const std::string target = tail_after_phrase("open simulation ");
+        if (!target.empty()) {
+            out_line = std::string("SIM_OPEN:") + target;
+            ui_tag = "AI_ANTICIPATE route=SIM_OPEN";
+            return true;
+        }
+    }
+    if (starts_phrase("open sandbox ")) {
+        const std::string target = tail_after_phrase("open sandbox ");
+        if (!target.empty()) {
+            out_line = std::string("SANDBOX_OPEN: scene=") + target + " replace=1";
+            ui_tag = "AI_ANTICIPATE route=SANDBOX_OPEN";
+            return true;
+        }
+    }
+
     // OPEN routing.
     uint32_t open_idx = 0u;
     if (ge_parse_open_index(s, open_idx)) {
@@ -149,6 +207,9 @@ bool EwAiAnticipator::route(SubstrateManager* sm,
 
     // Prefer local corpus when strongly grounded.
     const uint32_t local_best = sm->corpus_query_best_score(s);
+    const EwAiDataSubstrateTelemetry& ai_data = sm->ai_data_substrate_telemetry;
+    const uint16_t crawler_drift_q15 = ai_data.crawler_drift_norm_q15;
+    const uint16_t crawler_coherence_q15 = ai_data.crawler_coherence_norm_q15;
 
     // Deterministic scoring.
     // local_best is already 0..N; promote it.
@@ -156,6 +217,11 @@ bool EwAiAnticipator::route(SubstrateManager* sm,
     uint32_t score_web = ge_looks_like_question(s) ? 2u : 0u;
     // If local grounding is weak and it looks like a question, web gets a bump.
     if (local_best < 3u && ge_looks_like_question(s)) score_web += 3u;
+    if (crawler_drift_q15 > crawler_coherence_q15) {
+        score_query += (uint32_t)((crawler_drift_q15 - crawler_coherence_q15) / 4096u);
+    } else if (crawler_coherence_q15 > crawler_drift_q15) {
+        score_web += (uint32_t)((crawler_coherence_q15 - crawler_drift_q15) / 4096u);
+    }
 
     const bool choose_web = (score_web > score_query);
     if (choose_web) {

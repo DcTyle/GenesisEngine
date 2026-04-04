@@ -124,6 +124,7 @@ struct EwProcessSubstrateTelemetry {
 };
 
 static constexpr uint32_t EW_SUBSYSTEM_SUBSTRATE_LANE_CAP = 16u;
+static constexpr uint32_t EW_AI_GPU_GRADIENT_DIM_CAP = 10u;
 
 enum EwSubsystemPlaneId : uint32_t {
     EW_SUBSYSTEM_PLANE_NONE = 0u,
@@ -215,6 +216,14 @@ struct EwAiSubstrateTelemetry {
     uint16_t controller_authority_q15 = 0;
     uint16_t op_gain_q15 = 0;
     uint16_t op_phase_bias_q15 = 0;
+    uint16_t memory_norm_q15 = 0;
+    uint16_t reasoning_norm_q15 = 0;
+    uint16_t planning_norm_q15 = 0;
+    uint16_t creativity_norm_q15 = 0;
+    uint16_t perception_norm_q15 = 0;
+    uint16_t temporal_binding_norm_q15 = 0;
+    uint16_t crawler_drift_norm_q15 = 0;
+    uint16_t network_coherence_norm_q15 = 0;
 
     uint16_t carrier_band_q15[8] = {0,0,0,0,0,0,0,0};
 
@@ -253,10 +262,23 @@ struct EwAiDataSubstrateTelemetry {
 
     uint32_t pending_external_api_u32 = 0;
     uint32_t inflight_external_api_u32 = 0;
+    uint32_t crawler_pending_obs_u32 = 0;
+    uint32_t crawler_last_utf8_bytes_u32 = 0;
+
+    uint64_t crawler_enqueued_obs_u64 = 0;
+    uint64_t crawler_admitted_pulses_u64 = 0;
+    uint64_t crawler_dropped_obs_u64 = 0;
+    uint64_t crawler_truncated_segments_u64 = 0;
+    uint64_t api_decode_request_id_u64 = 0;
+    uint64_t gpu_spider_carrier_phase_u64 = 0;
 
     int64_t error_q32_32 = 0;
     int64_t error_delta_q32_32 = 0;
     int64_t error_integral_q32_32 = 0;
+    int64_t temporal_prediction_q32_32 = 0;
+    int32_t gpu_spider_f_code_i32 = 0;
+    int32_t api_decode_f_code_i32 = 0;
+    int32_t api_decode_http_status_s32 = -1;
 
     uint16_t intent_norm_q15 = 0;
     uint16_t measured_norm_q15 = 0;
@@ -264,6 +286,25 @@ struct EwAiDataSubstrateTelemetry {
     uint16_t error_delta_norm_q15 = 0;
     uint16_t error_integral_norm_q15 = 0;
     uint16_t controller_authority_q15 = 0;
+    uint16_t crawler_flow_norm_q15 = 0;
+    uint16_t crawler_drift_norm_q15 = 0;
+    uint16_t crawler_interference_norm_q15 = 0;
+    uint16_t crawler_coherence_norm_q15 = 0;
+    uint16_t temporal_memory_norm_q15 = 0;
+    uint16_t temporal_prediction_norm_q15 = 0;
+    uint16_t gpu_spider_a_code_u16 = 0;
+    uint16_t gpu_spider_v_code_u16 = 0;
+    uint16_t gpu_spider_i_code_u16 = 0;
+    uint16_t gpu_gradient_energy_norm_q15 = 0;
+    uint16_t api_decode_count_u16 = 0;
+    uint16_t api_decode_body_bytes_u16 = 0;
+    uint16_t api_decode_a_code_u16 = 0;
+    uint16_t api_decode_v_code_u16 = 0;
+    uint16_t api_decode_i_code_u16 = 0;
+    uint16_t api_decode_norm_q15 = 0;
+    uint16_t api_decode_http_status_q15 = 0;
+
+    uint16_t gpu_gradient_dim_q15[EW_AI_GPU_GRADIENT_DIM_CAP] = {0,0,0,0,0,0,0,0,0,0};
 
     uint16_t intent_band_q15[8] = {0,0,0,0,0,0,0,0};
     uint16_t measured_band_q15[8] = {0,0,0,0,0,0,0,0};

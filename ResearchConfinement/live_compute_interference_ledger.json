@@ -2,18 +2,18 @@
   "model": "live_compute_interference_ledger",
   "live_compute_enabled": 1,
   "live_compute_active": 1,
-  "activation_tick": 0,
-  "trajectory_spectral_id": 15454437867910017794,
-  "readiness_norm": 0.830029,
-  "interference_ledger_norm": 0.552181,
-  "encoded_extrapolation_norm": 0.528372,
+  "activation_tick": 1,
+  "trajectory_spectral_id": 17217152326324718125,
+  "readiness_norm": 0.725429,
+  "interference_ledger_norm": 0.464951,
+  "encoded_extrapolation_norm": 0.447969,
   "score_alignment_norm": 1,
   "trap_alignment_norm": 1,
-  "coherence_alignment_norm": 0.999802,
+  "coherence_alignment_norm": 0.999801,
   "compute_quartet": {
-    "F": 0.226526,
-    "A": 0.166721,
-    "I": 0.326641,
-    "V": 0.320438
+    "F": 0.229872,
+    "A": 0.176726,
+    "I": 0.327111,
+    "V": 0.322004
   }
 }

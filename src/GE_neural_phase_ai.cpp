@@ -3,6 +3,7 @@
 #include "code_artifact_ops.hpp"
 #include "GE_runtime.hpp"
 #include "fixed_point.hpp"
+#include "spec_aux_ops.hpp"
 #include <climits>
 
 EwNeuralPhaseAI::EwNeuralPhaseAI() : seed_u64_(1) {
@@ -180,12 +181,23 @@ void EwNeuralPhaseAI::pre_tick(SubstrateManager* sm) {
     // network scheduling when a command-bearing observation remains resident.
     if (starts_with_ascii("QUERY:") || starts_with_ascii("ANSWER:")) {
         submit_ops_once(kQueryOps, 3u);
+    } else if (starts_with_ascii("ASSET_LIBRARY_STATUS:") ||
+               starts_with_ascii("ASSET_LIBRARY_LIST:") ||
+               starts_with_ascii("SANDBOX_STATUS:")) {
+        submit_ops_once(kQueryOps, 3u);
     } else if (starts_with_ascii("WEBSEARCH:") || starts_with_ascii("SEARCH:") ||
                starts_with_ascii("WEBFETCH:") ||
                starts_with_ascii("OPEN:") || starts_with_ascii("OPEN_RESULT:")) {
         submit_ops_once(kFetchOps, 4u);
     } else if (starts_with_ascii("WEBSEARCH_CFG:")) {
         submit_ops_once(kConfigOps, 3u);
+    } else if (starts_with_ascii("SCENE_OPEN:") ||
+               starts_with_ascii("SIM_OPEN:") ||
+               starts_with_ascii("SANDBOX_OPEN:") ||
+               starts_with_ascii("SANDBOX_CLOSE:") ||
+               starts_with_ascii("SCENE_SAVE:") ||
+               starts_with_ascii("SIM_SAVE:")) {
+        submit_ops_once(kStoreOps, 2u);
     } else if (starts_with_ascii("CODEGEN:") || starts_with_ascii("SYNTHCODE:") ||
                starts_with_ascii("CODEEDIT:") || starts_with_ascii("PATCH:") ||
                starts_with_ascii("HYDRATE:") || starts_with_ascii("GAMEBOOT:")) {
@@ -209,6 +221,83 @@ void EwNeuralPhaseAI::pre_tick(SubstrateManager* sm) {
 
     // Select a policy decision.
     const EwAiPolicyDecision pd = sm->ai_policy.decide(class_id, conf_q32_32, strength_q32_32);
+    const EwAiSubstrateTelemetry& ai = sm->ai_substrate_telemetry;
+    const EwAiDataSubstrateTelemetry& ai_data = sm->ai_data_substrate_telemetry;
+    const uint16_t memory_q15 = ai.memory_norm_q15;
+    const uint16_t reasoning_q15 = ai.reasoning_norm_q15;
+    const uint16_t planning_q15 = ai.planning_norm_q15;
+    const uint16_t creativity_q15 = ai.creativity_norm_q15;
+    const uint16_t perception_q15 = ai.perception_norm_q15;
+    const uint16_t temporal_binding_q15 = ai.temporal_binding_norm_q15;
+    const uint16_t crawler_drift_q15 = ai.crawler_drift_norm_q15;
+    const uint16_t network_coherence_q15 = ai.network_coherence_norm_q15;
+    const uint16_t prediction_q15 = ai_data.temporal_prediction_norm_q15;
+    const uint16_t crawler_flow_q15 = ai_data.crawler_flow_norm_q15;
+    const uint16_t gpu_gradient_energy_q15 = ai_data.gpu_gradient_energy_norm_q15;
+    const int32_t gpu_spider_f_code_i32 = ai_data.gpu_spider_f_code_i32;
+    const uint16_t gpu_spider_a_code_u16 = ai_data.gpu_spider_a_code_u16;
+    const uint16_t gpu_spider_v_code_u16 = ai_data.gpu_spider_v_code_u16;
+    const uint16_t gpu_spider_i_code_u16 = ai_data.gpu_spider_i_code_u16;
+    const uint16_t api_decode_norm_q15 = ai_data.api_decode_norm_q15;
+    const uint16_t api_decode_http_q15 = ai_data.api_decode_http_status_q15;
+    const int32_t api_decode_f_code_i32 = ai_data.api_decode_f_code_i32;
+    const uint16_t api_decode_a_code_u16 = ai_data.api_decode_a_code_u16;
+    const uint16_t api_decode_v_code_u16 = ai_data.api_decode_v_code_u16;
+    const uint16_t api_decode_i_code_u16 = ai_data.api_decode_i_code_u16;
+
+    auto clamp_u16 = [](uint32_t v)->uint16_t {
+        if (v == 0u) return 1u;
+        if (v > 65535u) return 65535u;
+        return (uint16_t)v;
+    };
+    auto clamp_i32 = [](int32_t v, int32_t lo, int32_t hi)->int32_t {
+        if (v < lo) return lo;
+        if (v > hi) return hi;
+        return v;
+    };
+    auto signed_shift_from_q15 = [](uint16_t q15, int32_t scale_div)->int32_t {
+        if (scale_div <= 0) return 0;
+        return (int32_t)((uint32_t)q15 / (uint32_t)scale_div);
+    };
+
+    uint16_t a_code_u16 = clamp_u16((uint32_t)pd.a_code_u16 +
+                                    ((uint32_t)reasoning_q15 / 32u) +
+                                    ((uint32_t)temporal_binding_q15 / 48u) +
+                                    ((uint32_t)prediction_q15 / 64u) +
+                                    ((uint32_t)gpu_gradient_energy_q15 / 64u) +
+                                    ((uint32_t)gpu_spider_a_code_u16 / 128u) +
+                                    ((uint32_t)api_decode_a_code_u16 / 192u));
+    uint16_t v_code_u16 = clamp_u16((uint32_t)pd.v_code_u16 +
+                                    ((uint32_t)memory_q15 / 32u) +
+                                    ((uint32_t)planning_q15 / 48u) +
+                                    ((uint32_t)network_coherence_q15 / 64u) +
+                                    ((uint32_t)gpu_spider_v_code_u16 / 128u) +
+                                    ((uint32_t)api_decode_v_code_u16 / 192u) +
+                                    ((uint32_t)api_decode_http_q15 / 96u));
+    uint16_t i_code_u16 = clamp_u16((uint32_t)pd.i_code_u16 +
+                                    ((uint32_t)reasoning_q15 / 32u) +
+                                    ((uint32_t)perception_q15 / 48u) +
+                                    ((uint32_t)crawler_flow_q15 / 64u) +
+                                    ((uint32_t)gpu_spider_i_code_u16 / 128u) +
+                                    ((uint32_t)api_decode_i_code_u16 / 192u) +
+                                    ((uint32_t)api_decode_norm_q15 / 128u));
+    int32_t f_code_i32 = pd.f_code_i32;
+    const int32_t positive_bias =
+        signed_shift_from_q15(temporal_binding_q15, 4096) +
+        signed_shift_from_q15(creativity_q15, 8192);
+    const int32_t negative_bias = signed_shift_from_q15(crawler_drift_q15, 4096);
+    const int32_t spider_bias =
+        clamp_i32(gpu_spider_f_code_i32 / 64, -64, 64) +
+        clamp_i32(api_decode_f_code_i32 / 96, -64, 64) +
+        (((gpu_spider_v_code_u16 >= gpu_spider_i_code_u16) ? 1 : -1) *
+         (signed_shift_from_q15(gpu_gradient_energy_q15, 2048) +
+          signed_shift_from_q15(api_decode_norm_q15, 4096)));
+    const int32_t net_bias = positive_bias - negative_bias + spider_bias;
+    if (net_bias != 0) {
+        if (f_code_i32 >= 0) f_code_i32 += net_bias;
+        else f_code_i32 -= net_bias;
+    }
+    if (f_code_i32 == 0) f_code_i32 = (pd.f_code_i32 < 0) ? -1 : 1;
 
     // Emit policy pulse only above a minimal confidence band.
     // Minimal action emission threshold for testability.
@@ -216,14 +305,19 @@ void EwNeuralPhaseAI::pre_tick(SubstrateManager* sm) {
     // produce at least one pulse per tick when anchors exist.
     if (!sm->anchors.empty()) {
         const uint32_t idx = (uint32_t)(class_id % (uint32_t)sm->anchors.size());
-        const uint32_t aid = sm->anchors[idx].id;
+        uint32_t aid = sm->anchors[idx].id;
+        if (temporal_binding_q15 >= memory_q15 &&
+            sm->process_substrate_telemetry.valid_u32 != 0u &&
+            sm->process_substrate_telemetry.spectral_anchor_id_u32 < sm->anchors.size()) {
+            aid = sm->anchors[sm->process_substrate_telemetry.spectral_anchor_id_u32].id;
+        }
 
         Pulse p;
         p.anchor_id = aid;
-        p.f_code = pd.f_code_i32;
-        p.a_code = pd.a_code_u16;
-        p.v_code = pd.v_code_u16;
-        p.i_code = pd.i_code_u16;
+        p.f_code = f_code_i32;
+        p.a_code = a_code_u16;
+        p.v_code = v_code_u16;
+        p.i_code = i_code_u16;
         p.profile_id = pd.profile_id_u8;
         // Spec: 0x1 = ACTIVATE (context activation favored).
         p.causal_tag = 0x1u;
@@ -239,10 +333,10 @@ void EwNeuralPhaseAI::pre_tick(SubstrateManager* sm) {
         ev.kind_u16 = (uint16_t)EW_AI_ACTION_PULSE_EMIT;
         ev.profile_id_u16 = (uint16_t)pd.profile_id_u8;
         ev.target_anchor_id_u32 = aid;
-        ev.f_code_i32 = pd.f_code_i32;
-        ev.a_code_u32 = (uint32_t)pd.a_code_u16;
-        ev.v_code_u32 = (uint32_t)pd.v_code_u16;
-        ev.i_code_u32 = (uint32_t)pd.i_code_u16;
+        ev.f_code_i32 = f_code_i32;
+        ev.a_code_u32 = (uint32_t)a_code_u16;
+        ev.v_code_u32 = (uint32_t)v_code_u16;
+        ev.i_code_u32 = (uint32_t)i_code_u16;
         ev.confidence_q32_32 = conf_q32_32;
         ev.attractor_strength_q32_32 = strength_q32_32;
         ev.frame_gamma_turns_q = sm->frame_gamma_turns_q;
@@ -333,8 +427,11 @@ void EwNeuralPhaseAI::post_tick(SubstrateManager* sm) {
 
     for (size_t i = 0; i < mem_.size(); ++i) {
         if (mem_[i].sig9_u64 == status_.sig9_u64) {
-            const int64_t add = mul_q32_32((int64_t)((1LL << 32) / 16), status_.confidence_q32_32);
-            mem_[i].strength_q32_32 += add;
+            int64_t normalized_strength_q32_32 = mem_[i].strength_q32_32 >> 3;
+            if (normalized_strength_q32_32 < 0) normalized_strength_q32_32 = 0;
+            if (normalized_strength_q32_32 > (1LL << 32)) normalized_strength_q32_32 = (1LL << 32);
+            normalized_strength_q32_32 = admit_memory(normalized_strength_q32_32, status_.confidence_q32_32);
+            mem_[i].strength_q32_32 = normalized_strength_q32_32 << 3;
             if (mem_[i].strength_q32_32 > (8LL << 32)) mem_[i].strength_q32_32 = (8LL << 32);
             mem_[i].last_tick_u64 = sm->canonical_tick;
             last_strength_q32_32_ = mem_[i].strength_q32_32;
@@ -344,7 +441,7 @@ void EwNeuralPhaseAI::post_tick(SubstrateManager* sm) {
 
     EwAttractorEntry e;
     e.sig9_u64 = status_.sig9_u64;
-    e.strength_q32_32 = mul_q32_32((int64_t)((1LL << 32) / 8), status_.confidence_q32_32);
+    e.strength_q32_32 = admit_memory(0, status_.confidence_q32_32) << 3;
     e.last_tick_u64 = sm->canonical_tick;
 
     if (mem_.size() < 16) {

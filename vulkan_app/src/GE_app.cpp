@@ -28,6 +28,9 @@
 #include "ew_openai_chat.hpp"
 #include "carrier_bundle_cuda.hpp"
 #include "GE_control_packets.hpp"
+#include "GE_g2p_lexicon.hpp"
+#include "GE_prosody_planner.hpp"
+#include "GE_voice_predictive_model.hpp"
 #include "VirtualStateDrive.hpp"
 #include "ew_id9.hpp"
 
@@ -51,13 +54,95 @@ static std::wstring utf8_to_wide(const std::string& s);
 static std::string wide_to_utf8(const std::wstring& s);
 
 static constexpr int kSidePanelTabCount = 3;
-static constexpr int kSidePanelWidthPx = 420;
+static constexpr int kSidePanelWidthPx = 520;
 static constexpr int kSidePanelTabIds[kSidePanelTabCount] = {2060, 2061, 2062};
 static const wchar_t* const kSidePanelTabLabels[kSidePanelTabCount] = {
     L"ChatGPT",
     L"Scene",
     L"Research"
 };
+static constexpr int kAiWorkspaceTabCount = 5;
+static constexpr int kAiWorkspaceTabIds[kAiWorkspaceTabCount] = {2103, 2104, 2105, 2106, 2107};
+static const wchar_t* const kAiWorkspaceTabLabels[kAiWorkspaceTabCount] = {
+    L"Chat",
+    L"Images",
+    L"Sim",
+    L"Memory",
+    L"Tools"
+};
+static constexpr int kAiButtonProviderChatGpt = 2100;
+static constexpr int kAiButtonProviderGrok = 2101;
+static constexpr int kAiButtonDockToggle = 2102;
+static constexpr int kAiButtonNewChat = 2108;
+static constexpr int kAiButtonWebToggle = 2109;
+static constexpr int kAiListHistory = 2110;
+static constexpr int kAiButtonPrimaryAction = 2111;
+static constexpr int kAiButtonSecondaryAction = 2112;
+static constexpr int kAiEditAssetName = 2113;
+static constexpr int kAiButtonOpenScene = 2114;
+static constexpr int kAiButtonOpenSim = 2115;
+static constexpr int kAiButtonOpenSandbox = 2116;
+static constexpr int kAiButtonStatus = 2117;
+static constexpr int kAiButtonVoiceToggle = 2118;
+static constexpr int kAiButtonSpeakLast = 2119;
+static constexpr int kAiButtonEmbedSim = 2120;
+static constexpr int kMenuFileNewDefaultScene = 3000;
+static constexpr int kMenuFileOpenScene = 3001;
+static constexpr int kMenuFileOpenSimulation = 3002;
+static constexpr int kMenuFileSaveSceneAs = 3003;
+static constexpr int kMenuFileSaveSimulationAs = 3004;
+static constexpr int kMenuFileImportObj = 3005;
+static constexpr int kMenuFileBootstrap = 3006;
+static constexpr int kMenuFileExit = 3007;
+static constexpr int kMenuEditUndo = 3100;
+static constexpr int kMenuEditRedo = 3101;
+static constexpr int kMenuEditTranslate = 3102;
+static constexpr int kMenuEditRotate = 3103;
+static constexpr int kMenuEditFrameSelection = 3104;
+static constexpr int kMenuEditSnapToggle = 3105;
+static constexpr int kMenuEditInputBindings = 3106;
+static constexpr int kMenuAiOpenPanel = 3200;
+static constexpr int kMenuAiOpenWindow = 3201;
+static constexpr int kMenuAiNewChat = 3202;
+static constexpr int kMenuAiProviderChatGpt = 3203;
+static constexpr int kMenuAiProviderGrok = 3204;
+static constexpr int kMenuAiTabChat = 3205;
+static constexpr int kMenuAiTabImages = 3206;
+static constexpr int kMenuAiTabSimulation = 3207;
+static constexpr int kMenuAiTabMemory = 3208;
+static constexpr int kMenuAiTabTools = 3209;
+static constexpr int kMenuAiWebToggle = 3210;
+static constexpr int kMenuAiVoiceToggle = 3211;
+static constexpr int kMenuAiEmbedViewport = 3212;
+static constexpr int kMenuAiStatus = 3213;
+static constexpr int kMenuAiDataStatus = 3214;
+static constexpr int kMenuAiOpenAiStatus = 3215;
+static constexpr int kMenuAiOpenScene = 3216;
+static constexpr int kMenuAiOpenSimulation = 3217;
+static constexpr int kMenuAiOpenSandbox = 3218;
+static constexpr int kMenuAiSpeakLast = 3219;
+static constexpr int kMenuWindowSideChat = 3300;
+static constexpr int kMenuWindowSideScene = 3301;
+static constexpr int kMenuWindowSideResearch = 3302;
+static constexpr int kMenuWindowAiWorkspace = 3303;
+static constexpr int kMenuWindowAiDocked = 3304;
+static constexpr int kMenuWindowAiFloating = 3305;
+static constexpr int kMenuWindowSandboxStatus = 3306;
+static constexpr int kMenuWindowCloseSandbox = 3307;
+static constexpr int kMenuWindowAssetLibraryStatus = 3308;
+static constexpr int kMenuWindowAssetLibraryList = 3309;
+static constexpr int kMenuToolsResearchStatus = 3400;
+static constexpr int kMenuToolsProcessStatus = 3401;
+static constexpr int kMenuToolsSubsystemStatus = 3402;
+static constexpr int kMenuToolsRunFrequencySimulation = 3403;
+static constexpr int kMenuToolsReloadResearchArchive = 3404;
+static constexpr int kMenuToolsFrequencyMode = 3405;
+static constexpr int kMenuToolsVectorMode = 3406;
+static constexpr int kMenuToolsStovMode = 3407;
+static constexpr int kMenuToolsRepoReaderStatus = 3408;
+static constexpr int kMenuToolsMergedRepoStatus = 3409;
+static constexpr int kMenuHelpAbout = 3500;
+static constexpr int kMenuHelpAiQuickstart = 3501;
 
 static int ew_side_panel_tab_index_from_id(int id) {
     for (int i = 0; i < kSidePanelTabCount; ++i) {
@@ -323,6 +408,7 @@ struct App::Scene {
 
     struct Object {
         std::string name_utf8;
+        std::string source_path_utf8;
         Transform xf;
         EwObjMesh mesh;
         uint64_t object_id_u64 = 0;
@@ -419,6 +505,37 @@ void refresh_fixed_cache() {
     bool merged_openai_last_ok = false;
     std::wstring merged_openai_key_file_w;
     std::string merged_openai_last_error_utf8;
+    bool asset_library_initialized = false;
+    bool sandbox_viewport_active = false;
+    bool sandbox_output_connected = false;
+    bool sandbox_simulation_running = false;
+    uint32_t sandbox_viewport_id_u32 = 0u;
+    uint32_t sandbox_viewport_replace_world_u32 = 0u;
+    uint32_t sandbox_output_width_px_u32 = 0u;
+    uint32_t sandbox_output_height_px_u32 = 0u;
+    uint64_t sandbox_viewport_target_object_id_u64 = 0u;
+    uint64_t sandbox_scene_open_tick_u64 = 0u;
+    uint64_t sandbox_runtime_ticks_u64 = 0u;
+    uint64_t sandbox_last_output_connected_tick_u64 = 0u;
+    uint64_t sandbox_last_output_disconnected_tick_u64 = 0u;
+    float sandbox_viewport_center_m[3] = {0.0f, 0.0f, 0.0f};
+    float sandbox_viewport_size_m[3] = {0.0f, 0.0f, 0.0f};
+    genesis::GeResearchPulseQuartet research_trace_emitted_quartet{};
+    genesis::GeResearchPulseQuartet research_trace_sample_delta_quartet{};
+    genesis::GeResearchPulseQuartet research_trace_observed_quartet{};
+    genesis::GeResearchPulseQuartet research_trace_observed_delta_quartet{};
+    double research_trace_coupling_fa_norm = 0.0;
+    double research_trace_coupling_fv_norm = 0.0;
+    double research_trace_coupling_fi_norm = 0.0;
+    double research_trace_coupling_av_norm = 0.0;
+    double research_trace_coupling_ai_norm = 0.0;
+    double research_trace_coupling_vi_norm = 0.0;
+    uint32_t research_trace_pulse_interval_ticks_u32 = 0u;
+    uint64_t research_trace_last_persist_tick_u64 = 0u;
+    bool research_trace_has_sample_history = false;
+    bool viewport_focus_pending = false;
+    float viewport_focus_target_m[3] = {0.0f, 0.0f, 0.0f};
+    float viewport_focus_distance_m = 5.0f;
 
     void PushLocalUiLine(const std::string& line_utf8) {
         if (line_utf8.empty()) return;
@@ -490,6 +607,339 @@ void refresh_fixed_cache() {
         return oss.str();
     }
 
+    static std::string LowerAsciiCopy(std::string s) {
+        for (char& ch : s) {
+            if (ch >= 'A' && ch <= 'Z') ch = (char)(ch - 'A' + 'a');
+        }
+        return s;
+    }
+
+    static bool ExtractOptionValue(const std::string& utf8,
+                                   const char* key_ascii,
+                                   std::string& out_utf8) {
+        out_utf8.clear();
+        if (!key_ascii || !*key_ascii) return false;
+        const std::string needle = std::string(key_ascii) + "=";
+        const std::size_t p = utf8.find(needle);
+        if (p == std::string::npos) return false;
+        std::size_t begin = p + needle.size();
+        while (begin < utf8.size() && (utf8[begin] == ' ' || utf8[begin] == '\t')) ++begin;
+        if (begin >= utf8.size()) return false;
+        bool quoted = false;
+        if (utf8[begin] == '"') {
+            quoted = true;
+            ++begin;
+        }
+        std::size_t end = begin;
+        if (quoted) {
+            while (end < utf8.size() && utf8[end] != '"') ++end;
+        } else {
+            while (end < utf8.size() &&
+                   utf8[end] != ' ' &&
+                   utf8[end] != '\t' &&
+                   utf8[end] != '\r' &&
+                   utf8[end] != '\n') {
+                ++end;
+            }
+        }
+        out_utf8 = utf8.substr(begin, end - begin);
+        return !out_utf8.empty();
+    }
+
+    static std::string CommandPayloadAfterSeparator(const std::string& utf8) {
+        std::size_t pos = std::string::npos;
+        const std::size_t colon = utf8.find(':');
+        const std::size_t space = utf8.find(' ');
+        if (colon != std::string::npos) pos = colon + 1u;
+        else if (space != std::string::npos) pos = space + 1u;
+        if (pos == std::string::npos || pos >= utf8.size()) return std::string();
+        return TrimAscii(utf8.substr(pos));
+    }
+
+    static const char* AssetPartitionName(genesis::GeAssetPartition partition) {
+        switch (partition) {
+            case genesis::GeAssetPartition::Worlds: return "Worlds";
+            case genesis::GeAssetPartition::Planets: return "Planets";
+            case genesis::GeAssetPartition::Simulations: return "Simulations";
+            case genesis::GeAssetPartition::Actors: return "Actors";
+            case genesis::GeAssetPartition::Character: return "Character";
+            case genesis::GeAssetPartition::Foliage: return "Foliage";
+            case genesis::GeAssetPartition::Assets: return "Assets";
+            case genesis::GeAssetPartition::Ai: return "AI";
+            default: return "Assets";
+        }
+    }
+
+    static bool ParseAssetPartition(const std::string& token_utf8,
+                                    genesis::GeAssetPartition& out_partition) {
+        const std::string t = LowerAsciiCopy(TrimAscii(token_utf8));
+        if (t == "world" || t == "worlds" || t == "scene" || t == "scenes") {
+            out_partition = genesis::GeAssetPartition::Worlds;
+            return true;
+        }
+        if (t == "planet" || t == "planets") {
+            out_partition = genesis::GeAssetPartition::Planets;
+            return true;
+        }
+        if (t == "simulation" || t == "simulations" || t == "sim" || t == "sandbox") {
+            out_partition = genesis::GeAssetPartition::Simulations;
+            return true;
+        }
+        if (t == "actor" || t == "actors") {
+            out_partition = genesis::GeAssetPartition::Actors;
+            return true;
+        }
+        if (t == "character" || t == "characters") {
+            out_partition = genesis::GeAssetPartition::Character;
+            return true;
+        }
+        if (t == "foliage") {
+            out_partition = genesis::GeAssetPartition::Foliage;
+            return true;
+        }
+        if (t == "asset" || t == "assets") {
+            out_partition = genesis::GeAssetPartition::Assets;
+            return true;
+        }
+        if (t == "ai") {
+            out_partition = genesis::GeAssetPartition::Ai;
+            return true;
+        }
+        return false;
+    }
+
+    std::filesystem::path AssetLibraryProjectRootPath() const {
+        return std::filesystem::path("Draft Container") / "AssetLibrary" / "Project";
+    }
+
+    std::filesystem::path AssetLibraryGlobalRootPath() const {
+        return std::filesystem::path("Draft Container") / "AssetLibrary" / "GlobalCache";
+    }
+
+    void EnsureAssetLibraryInitialized(bool emit_ui) {
+        if (asset_library_initialized && !sm.asset_substrate.project_root().empty()) return;
+        std::string err_utf8;
+        asset_library_initialized =
+            sm.asset_substrate.init(AssetLibraryProjectRootPath().string(),
+                                    AssetLibraryGlobalRootPath().string(),
+                                    "content_index.gecontent",
+                                    &err_utf8);
+        if (emit_ui || !asset_library_initialized) {
+            std::ostringstream oss;
+            oss << "ASSET_LIBRARY_INIT ready=" << (asset_library_initialized ? 1u : 0u)
+                << " project_root=" << AssetLibraryProjectRootPath().string()
+                << " global_root=" << AssetLibraryGlobalRootPath().string();
+            if (!err_utf8.empty()) oss << " err=" << err_utf8;
+            PushLocalUiLine(oss.str());
+        }
+    }
+
+    static std::string SceneAssetKindForPartition(genesis::GeAssetPartition partition) {
+        return (partition == genesis::GeAssetPartition::Simulations)
+                   ? std::string("sandbox_sim_viewport_v1")
+                   : std::string("scene_viewport_v1");
+    }
+
+    uint32_t AnchorKindForObject(const Object& o) const {
+        if (o.name_utf8 == "Sun" || o.name_utf8 == "Earth") {
+            return EW_ANCHOR_KIND_PLANET;
+        }
+        return EW_ANCHOR_KIND_OBJECT;
+    }
+
+    void RequestViewportFocus(double x_m,
+                              double y_m,
+                              double z_m,
+                              double focus_distance_m) {
+        viewport_focus_target_m[0] = (float)x_m;
+        viewport_focus_target_m[1] = (float)y_m;
+        viewport_focus_target_m[2] = (float)z_m;
+        viewport_focus_distance_m = (float)std::max(5.0, focus_distance_m);
+        viewport_focus_pending = true;
+    }
+
+    void ClearSandboxViewportState() {
+        sandbox_viewport_active = false;
+        sandbox_output_connected = false;
+        sandbox_simulation_running = false;
+        sandbox_viewport_id_u32 = 0u;
+        sandbox_viewport_replace_world_u32 = 0u;
+        sandbox_output_width_px_u32 = 0u;
+        sandbox_output_height_px_u32 = 0u;
+        sandbox_viewport_target_object_id_u64 = 0u;
+        sandbox_scene_open_tick_u64 = 0u;
+        sandbox_runtime_ticks_u64 = 0u;
+        sandbox_last_output_connected_tick_u64 = 0u;
+        sandbox_last_output_disconnected_tick_u64 = 0u;
+        sandbox_viewport_center_m[0] = 0.0f;
+        sandbox_viewport_center_m[1] = 0.0f;
+        sandbox_viewport_center_m[2] = 0.0f;
+        sandbox_viewport_size_m[0] = 0.0f;
+        sandbox_viewport_size_m[1] = 0.0f;
+        sandbox_viewport_size_m[2] = 0.0f;
+    }
+
+    uint64_t SandboxSceneLifespanTicks() const {
+        if (!sandbox_viewport_active || sandbox_scene_open_tick_u64 == 0u) return 0u;
+        const uint64_t tick_u64 = sm.canonical_tick_u64();
+        return (tick_u64 >= sandbox_scene_open_tick_u64)
+                   ? (tick_u64 - sandbox_scene_open_tick_u64)
+                   : 0u;
+    }
+
+    void StartSandboxSceneLifecycle() {
+        const uint64_t tick_u64 = sm.canonical_tick_u64();
+        sandbox_scene_open_tick_u64 = tick_u64;
+        sandbox_runtime_ticks_u64 = 0u;
+        sandbox_output_connected = false;
+        sandbox_simulation_running = false;
+        sandbox_output_width_px_u32 = 0u;
+        sandbox_output_height_px_u32 = 0u;
+        sandbox_last_output_connected_tick_u64 = 0u;
+        sandbox_last_output_disconnected_tick_u64 = tick_u64;
+    }
+
+    void UpdateSandboxOutputConnectionState(bool connected,
+                                            uint32_t width_px_u32,
+                                            uint32_t height_px_u32) {
+        connected = connected && width_px_u32 > 0u && height_px_u32 > 0u;
+        if (!sandbox_viewport_active) {
+            sandbox_output_connected = false;
+            sandbox_simulation_running = false;
+            sandbox_output_width_px_u32 = 0u;
+            sandbox_output_height_px_u32 = 0u;
+            return;
+        }
+
+        const uint64_t tick_u64 = sm.canonical_tick_u64();
+        if (sandbox_scene_open_tick_u64 == 0u) {
+            sandbox_scene_open_tick_u64 = tick_u64;
+        }
+
+        const bool prev_connected = sandbox_output_connected;
+        const bool prev_running = sandbox_simulation_running;
+        sandbox_output_connected = connected;
+        sandbox_output_width_px_u32 = connected ? width_px_u32 : 0u;
+        sandbox_output_height_px_u32 = connected ? height_px_u32 : 0u;
+        sandbox_simulation_running = connected;
+        if (connected) {
+            sandbox_last_output_connected_tick_u64 = tick_u64;
+        } else {
+            sandbox_last_output_disconnected_tick_u64 = tick_u64;
+        }
+
+        if (prev_connected != sandbox_output_connected || prev_running != sandbox_simulation_running) {
+            std::ostringstream oss;
+            oss << "SANDBOX_RUNTIME"
+                << " output_connected=" << (sandbox_output_connected ? 1u : 0u)
+                << " running=" << (sandbox_simulation_running ? 1u : 0u)
+                << " tick=" << tick_u64
+                << " size_px=(" << sandbox_output_width_px_u32
+                << "," << sandbox_output_height_px_u32 << ")";
+            const std::string line_utf8 = oss.str();
+            PushLocalUiLine(line_utf8);
+            AppendResearchRunLogLine(line_utf8);
+            PersistResearchRuntimeState();
+        }
+    }
+
+    void UpdateResearchPulseTraceState(const genesis::GeResearchPulseQuartet& quartet,
+                                       const EwProcessSubstrateTelemetry* telemetry_opt,
+                                       uint32_t cadence_u32) {
+        const double observed_f =
+            telemetry_opt ? ((double)telemetry_opt->gpu_freq_norm_q15 / 65535.0) : quartet.F;
+        const double observed_a =
+            telemetry_opt ? ((double)telemetry_opt->gpu_amp_norm_q15 / 65535.0) : quartet.A;
+        const double observed_i =
+            telemetry_opt ? ((double)telemetry_opt->last_i_code_u16 / 65535.0) : quartet.I;
+        const double observed_v =
+            telemetry_opt ? ((double)telemetry_opt->gpu_volt_norm_q15 / 65535.0) : quartet.V;
+        const double temporal_feedback_norm =
+            ClampNorm01(0.44 * research_guidance.temporal_coupling_norm +
+                        0.24 * research_lattice_probe_temporal_coupling_norm +
+                        0.20 * research_gpu_calibration.best_temporal_coupling_norm +
+                        0.12 * research_gpu_calibration.next_pulse_correction_norm);
+
+        if (research_trace_has_sample_history) {
+            research_trace_sample_delta_quartet.F = quartet.F - research_trace_emitted_quartet.F;
+            research_trace_sample_delta_quartet.A = quartet.A - research_trace_emitted_quartet.A;
+            research_trace_sample_delta_quartet.I = quartet.I - research_trace_emitted_quartet.I;
+            research_trace_sample_delta_quartet.V = quartet.V - research_trace_emitted_quartet.V;
+        } else {
+            research_trace_sample_delta_quartet = genesis::GeResearchPulseQuartet{};
+        }
+
+        research_trace_emitted_quartet = quartet;
+        research_trace_observed_quartet.F = observed_f;
+        research_trace_observed_quartet.A = observed_a;
+        research_trace_observed_quartet.I = observed_i;
+        research_trace_observed_quartet.V = observed_v;
+        research_trace_observed_delta_quartet.F = quartet.F - observed_f;
+        research_trace_observed_delta_quartet.A = quartet.A - observed_a;
+        research_trace_observed_delta_quartet.I = quartet.I - observed_i;
+        research_trace_observed_delta_quartet.V = quartet.V - observed_v;
+        research_trace_coupling_fa_norm =
+            ClampNorm01(0.74 * std::sqrt(ClampNorm01(quartet.F * quartet.A)) + 0.26 * temporal_feedback_norm);
+        research_trace_coupling_fv_norm =
+            ClampNorm01(0.74 * std::sqrt(ClampNorm01(quartet.F * quartet.V)) + 0.26 * temporal_feedback_norm);
+        research_trace_coupling_fi_norm =
+            ClampNorm01(0.74 * std::sqrt(ClampNorm01(quartet.F * quartet.I)) + 0.26 * temporal_feedback_norm);
+        research_trace_coupling_av_norm =
+            ClampNorm01(0.74 * std::sqrt(ClampNorm01(quartet.A * quartet.V)) + 0.26 * temporal_feedback_norm);
+        research_trace_coupling_ai_norm =
+            ClampNorm01(0.74 * std::sqrt(ClampNorm01(quartet.A * quartet.I)) + 0.26 * temporal_feedback_norm);
+        research_trace_coupling_vi_norm =
+            ClampNorm01(0.74 * std::sqrt(ClampNorm01(quartet.V * quartet.I)) + 0.26 * temporal_feedback_norm);
+        research_trace_pulse_interval_ticks_u32 = cadence_u32;
+        research_trace_has_sample_history = true;
+    }
+
+    std::string BuildSandboxStatusLine() const {
+        std::ostringstream oss;
+        const uint64_t tick_u64 = sm.canonical_tick_u64();
+        oss << "SANDBOX_STATUS"
+            << " active=" << (sandbox_viewport_active ? 1u : 0u)
+            << " output_connected=" << (sandbox_output_connected ? 1u : 0u)
+            << " running=" << (sandbox_simulation_running ? 1u : 0u)
+            << " id=" << sandbox_viewport_id_u32
+            << " replace_world=" << sandbox_viewport_replace_world_u32
+            << " target_object_id=" << sandbox_viewport_target_object_id_u64
+            << " open_tick=" << sandbox_scene_open_tick_u64
+            << " lifespan_ticks=" << SandboxSceneLifespanTicks()
+            << " runtime_ticks=" << sandbox_runtime_ticks_u64
+            << " last_output_connected_tick=" << sandbox_last_output_connected_tick_u64
+            << " last_output_disconnected_tick=" << sandbox_last_output_disconnected_tick_u64
+            << " output_px=(" << sandbox_output_width_px_u32
+            << "," << sandbox_output_height_px_u32 << ")"
+            << " center=(" << sandbox_viewport_center_m[0]
+            << "," << sandbox_viewport_center_m[1]
+            << "," << sandbox_viewport_center_m[2] << ")"
+            << " size=(" << sandbox_viewport_size_m[0]
+            << "," << sandbox_viewport_size_m[1]
+            << "," << sandbox_viewport_size_m[2] << ")"
+            << " pulse_interval=" << research_trace_pulse_interval_ticks_u32
+            << " quartet=(" << research_trace_emitted_quartet.F
+            << "," << research_trace_emitted_quartet.A
+            << "," << research_trace_emitted_quartet.I
+            << "," << research_trace_emitted_quartet.V << ")"
+            << " delta=(" << research_trace_sample_delta_quartet.F
+            << "," << research_trace_sample_delta_quartet.A
+            << "," << research_trace_sample_delta_quartet.I
+            << "," << research_trace_sample_delta_quartet.V << ")"
+            << " obs_delta=(" << research_trace_observed_delta_quartet.F
+            << "," << research_trace_observed_delta_quartet.A
+            << "," << research_trace_observed_delta_quartet.I
+            << "," << research_trace_observed_delta_quartet.V << ")"
+            << " couplingFA=" << research_trace_coupling_fa_norm
+            << " couplingFV=" << research_trace_coupling_fv_norm
+            << " couplingFI=" << research_trace_coupling_fi_norm
+            << " couplingAV=" << research_trace_coupling_av_norm
+            << " couplingAI=" << research_trace_coupling_ai_norm
+            << " couplingVI=" << research_trace_coupling_vi_norm
+            << " tick=" << tick_u64;
+        return oss.str();
+    }
+
     std::string BuildMergedRepositoryStatusLine() const {
         const std::filesystem::path repo_root =
             sm.repo_reader.repo_root_ascii.empty()
@@ -546,6 +996,518 @@ void refresh_fixed_cache() {
             PushPrefixedMultiline("OPENAI_CHAT ", response.output_text_utf8, 16u);
         } else if (!response.error_utf8.empty()) {
             PushPrefixedMultiline("OPENAI_CHAT error=", response.error_utf8, 8u);
+        }
+    }
+
+    genesis::VirtualStateDrive BuildSceneDescriptorDrive(const std::string& label_utf8,
+                                                         genesis::GeAssetPartition partition) const {
+        genesis::VirtualStateDrive drive;
+        const std::string meta_utf8 =
+            "domain=asset_library\nschema=scene_viewport_descriptor_v1\npartition=" +
+            std::string(AssetPartitionName(partition));
+        (void)drive.put_text("genesis/asset_kind", meta_utf8, SceneAssetKindForPartition(partition));
+        (void)drive.put_text("scene/label", meta_utf8, label_utf8);
+        (void)drive.put_u64("scene/object_count", meta_utf8, (uint64_t)objects.size());
+        (void)drive.put_i64("scene/selected_index", meta_utf8, (int64_t)selected);
+        (void)drive.put_u64("scene/next_object_id", meta_utf8, next_object_id_u64);
+
+        (void)drive.put_f64("research/A", meta_utf8, (double)research_param_a);
+        (void)drive.put_f64("research/F", meta_utf8, (double)research_param_f);
+        (void)drive.put_f64("research/I", meta_utf8, (double)research_param_i);
+        (void)drive.put_f64("research/V", meta_utf8, (double)research_param_v);
+        (void)drive.put_u64("research/lattice_edge", meta_utf8, (uint64_t)research_lattice_edge_u32);
+        (void)drive.put_u64("research/stream_hz", meta_utf8, (uint64_t)research_visual_stream_hz_u32);
+        (void)drive.put_u64("research/output_mode", meta_utf8, (uint64_t)research_output_mode_u8);
+        (void)drive.put_u64("research/stov_mode", meta_utf8, research_stov_mode ? 1u : 0u);
+        (void)drive.put_u64("sandbox/active", meta_utf8, sandbox_viewport_active ? 1u : 0u);
+        (void)drive.put_u64("sandbox/output_connected", meta_utf8, sandbox_output_connected ? 1u : 0u);
+        (void)drive.put_u64("sandbox/simulation_running", meta_utf8, sandbox_simulation_running ? 1u : 0u);
+        (void)drive.put_u64("sandbox/id", meta_utf8, (uint64_t)sandbox_viewport_id_u32);
+        (void)drive.put_u64("sandbox/replace_world", meta_utf8, (uint64_t)sandbox_viewport_replace_world_u32);
+        (void)drive.put_u64("sandbox/output_width_px", meta_utf8, (uint64_t)sandbox_output_width_px_u32);
+        (void)drive.put_u64("sandbox/output_height_px", meta_utf8, (uint64_t)sandbox_output_height_px_u32);
+        (void)drive.put_u64("sandbox/target_object_id", meta_utf8, sandbox_viewport_target_object_id_u64);
+        (void)drive.put_u64("sandbox/scene_open_tick", meta_utf8, sandbox_scene_open_tick_u64);
+        (void)drive.put_u64("sandbox/runtime_ticks", meta_utf8, sandbox_runtime_ticks_u64);
+        (void)drive.put_u64("sandbox/last_output_connected_tick", meta_utf8, sandbox_last_output_connected_tick_u64);
+        (void)drive.put_u64("sandbox/last_output_disconnected_tick", meta_utf8, sandbox_last_output_disconnected_tick_u64);
+        (void)drive.put_f64("sandbox/center_x", meta_utf8, (double)sandbox_viewport_center_m[0]);
+        (void)drive.put_f64("sandbox/center_y", meta_utf8, (double)sandbox_viewport_center_m[1]);
+        (void)drive.put_f64("sandbox/center_z", meta_utf8, (double)sandbox_viewport_center_m[2]);
+        (void)drive.put_f64("sandbox/size_x", meta_utf8, (double)sandbox_viewport_size_m[0]);
+        (void)drive.put_f64("sandbox/size_y", meta_utf8, (double)sandbox_viewport_size_m[1]);
+        (void)drive.put_f64("sandbox/size_z", meta_utf8, (double)sandbox_viewport_size_m[2]);
+        (void)drive.put_u64("gpu_trace/pulse_interval_ticks", meta_utf8, (uint64_t)research_trace_pulse_interval_ticks_u32);
+        (void)drive.put_f64("gpu_trace/emitted_f", meta_utf8, research_trace_emitted_quartet.F);
+        (void)drive.put_f64("gpu_trace/emitted_a", meta_utf8, research_trace_emitted_quartet.A);
+        (void)drive.put_f64("gpu_trace/emitted_i", meta_utf8, research_trace_emitted_quartet.I);
+        (void)drive.put_f64("gpu_trace/emitted_v", meta_utf8, research_trace_emitted_quartet.V);
+        (void)drive.put_f64("gpu_trace/sample_delta_f", meta_utf8, research_trace_sample_delta_quartet.F);
+        (void)drive.put_f64("gpu_trace/sample_delta_a", meta_utf8, research_trace_sample_delta_quartet.A);
+        (void)drive.put_f64("gpu_trace/sample_delta_i", meta_utf8, research_trace_sample_delta_quartet.I);
+        (void)drive.put_f64("gpu_trace/sample_delta_v", meta_utf8, research_trace_sample_delta_quartet.V);
+        (void)drive.put_f64("gpu_trace/observed_f", meta_utf8, research_trace_observed_quartet.F);
+        (void)drive.put_f64("gpu_trace/observed_a", meta_utf8, research_trace_observed_quartet.A);
+        (void)drive.put_f64("gpu_trace/observed_i", meta_utf8, research_trace_observed_quartet.I);
+        (void)drive.put_f64("gpu_trace/observed_v", meta_utf8, research_trace_observed_quartet.V);
+        (void)drive.put_f64("gpu_trace/observed_delta_f", meta_utf8, research_trace_observed_delta_quartet.F);
+        (void)drive.put_f64("gpu_trace/observed_delta_a", meta_utf8, research_trace_observed_delta_quartet.A);
+        (void)drive.put_f64("gpu_trace/observed_delta_i", meta_utf8, research_trace_observed_delta_quartet.I);
+        (void)drive.put_f64("gpu_trace/observed_delta_v", meta_utf8, research_trace_observed_delta_quartet.V);
+        (void)drive.put_f64("gpu_trace/coupling_fa_norm", meta_utf8, research_trace_coupling_fa_norm);
+        (void)drive.put_f64("gpu_trace/coupling_fv_norm", meta_utf8, research_trace_coupling_fv_norm);
+        (void)drive.put_f64("gpu_trace/coupling_fi_norm", meta_utf8, research_trace_coupling_fi_norm);
+        (void)drive.put_f64("gpu_trace/coupling_av_norm", meta_utf8, research_trace_coupling_av_norm);
+        (void)drive.put_f64("gpu_trace/coupling_ai_norm", meta_utf8, research_trace_coupling_ai_norm);
+        (void)drive.put_f64("gpu_trace/coupling_vi_norm", meta_utf8, research_trace_coupling_vi_norm);
+
+        for (size_t i = 0u; i < objects.size(); ++i) {
+            const Object& o = objects[i];
+            const std::string base = std::string("scene/object/") + std::to_string((unsigned long long)i);
+            (void)drive.put_text(base + "/name", meta_utf8, o.name_utf8);
+            (void)drive.put_text(base + "/source_path", meta_utf8, o.source_path_utf8);
+            (void)drive.put_u64(base + "/object_id", meta_utf8, o.object_id_u64);
+            (void)drive.put_u64(base + "/anchor_kind", meta_utf8, (uint64_t)AnchorKindForObject(o));
+            (void)drive.put_f64(base + "/pos_x", meta_utf8, (double)o.xf.pos[0]);
+            (void)drive.put_f64(base + "/pos_y", meta_utf8, (double)o.xf.pos[1]);
+            (void)drive.put_f64(base + "/pos_z", meta_utf8, (double)o.xf.pos[2]);
+            (void)drive.put_f64(base + "/radius_m", meta_utf8, (double)o.radius_m_f32);
+            (void)drive.put_f64(base + "/atmosphere_thickness_m", meta_utf8, (double)o.atmosphere_thickness_m_f32);
+            (void)drive.put_f64(base + "/emissive", meta_utf8, (double)o.emissive_f32);
+            (void)drive.put_u64(base + "/albedo_rgba8", meta_utf8, (uint64_t)o.albedo_rgba8);
+            (void)drive.put_u64(base + "/atmosphere_rgba8", meta_utf8, (uint64_t)o.atmosphere_rgba8);
+        }
+        return drive;
+    }
+
+    bool SaveSceneAssetDescriptor(const std::string& label_utf8,
+                                  genesis::GeAssetPartition partition,
+                                  bool emit_ui) {
+        EnsureAssetLibraryInitialized(false);
+        if (!asset_library_initialized) {
+            if (emit_ui) PushLocalUiLine("ASSET_LIBRARY_SAVE status=init_failed");
+            return false;
+        }
+        const std::string label = TrimAscii(label_utf8.empty() ? std::string("scene_asset") : label_utf8);
+        genesis::VirtualStateDrive drive = BuildSceneDescriptorDrive(label, partition);
+        std::string path_utf8;
+        std::string err_utf8;
+        const bool ok =
+            sm.asset_substrate.save_virtual_state_drive(drive,
+                                                        label,
+                                                        partition,
+                                                        false,
+                                                        &path_utf8,
+                                                        &err_utf8);
+        if (emit_ui) {
+            std::ostringstream oss;
+            oss << "ASSET_LIBRARY_SAVE status=" << (ok ? "ok" : "error")
+                << " partition=" << AssetPartitionName(partition)
+                << " label=" << label;
+            if (!path_utf8.empty()) oss << " path=" << path_utf8;
+            if (!err_utf8.empty()) oss << " err=" << err_utf8;
+            PushLocalUiLine(oss.str());
+        }
+        return ok;
+    }
+
+    void EnsureBootstrapAssetLibraryAssets() {
+        EnsureAssetLibraryInitialized(false);
+        if (!asset_library_initialized) return;
+        const std::filesystem::path default_scene_path =
+            AssetLibraryProjectRootPath() / "Worlds" / "default_scene.gevsd";
+        const std::filesystem::path default_sim_path =
+            AssetLibraryProjectRootPath() / "Simulations" / "default_sandbox_sim.gevsd";
+        std::error_code ec;
+        if (!std::filesystem::exists(default_scene_path, ec)) {
+            (void)SaveSceneAssetDescriptor("default_scene", genesis::GeAssetPartition::Worlds, false);
+        }
+        ec.clear();
+        if (!std::filesystem::exists(default_sim_path, ec)) {
+            (void)SaveSceneAssetDescriptor("default_sandbox_sim", genesis::GeAssetPartition::Simulations, false);
+        }
+    }
+
+    bool ReadSceneAssetKind(const std::string& path_utf8, std::string& out_kind_utf8) const {
+        out_kind_utf8.clear();
+        genesis::VirtualStateDrive drive;
+        std::string err_utf8;
+        if (!sm.asset_substrate.load_virtual_state_drive(path_utf8, drive, &err_utf8)) return false;
+        return drive.get_text("genesis/asset_kind", out_kind_utf8);
+    }
+
+    bool ResolveSceneAssetPath(const std::string& ident_utf8,
+                               genesis::GeAssetPartition partition_hint,
+                               const char* required_kind_ascii,
+                               std::string& out_path_utf8,
+                               std::string& out_kind_utf8) const {
+        out_path_utf8.clear();
+        out_kind_utf8.clear();
+        const std::string ident = TrimAscii(ident_utf8);
+        if (ident.empty()) return false;
+
+        auto accept_kind = [&](const std::string& kind_utf8)->bool {
+            if (!required_kind_ascii || !*required_kind_ascii) return true;
+            return LowerAsciiCopy(kind_utf8) == LowerAsciiCopy(required_kind_ascii);
+        };
+
+        std::vector<std::filesystem::path> candidates;
+        const std::filesystem::path raw(ident);
+        const std::filesystem::path project_path = AssetLibraryProjectRootPath() / raw;
+        const std::filesystem::path partition_path = AssetLibraryProjectRootPath() / AssetPartitionName(partition_hint) / raw;
+        std::error_code ec;
+        if (raw.is_absolute() && std::filesystem::exists(raw, ec)) candidates.push_back(raw);
+        ec.clear();
+        if (std::filesystem::exists(project_path, ec)) candidates.push_back(project_path);
+        ec.clear();
+        if (std::filesystem::exists(partition_path, ec)) candidates.push_back(partition_path);
+
+        for (const auto& c : candidates) {
+            std::string kind_utf8;
+            if (ReadSceneAssetKind(c.string(), kind_utf8) && accept_kind(kind_utf8)) {
+                out_path_utf8 = c.string();
+                out_kind_utf8 = kind_utf8;
+                return true;
+            }
+        }
+
+        std::vector<genesis::GeAssetEntry> entries;
+        std::string err_utf8;
+        if (!sm.asset_substrate.list_project_entries(entries, &err_utf8)) return false;
+        const std::string ident_lower = LowerAsciiCopy(ident);
+        std::string fallback_path_utf8;
+        std::string fallback_kind_utf8;
+        for (const genesis::GeAssetEntry& e : entries) {
+            if (e.partition != partition_hint) continue;
+            if (std::filesystem::path(e.relpath_utf8).extension().string() != ".gevsd") continue;
+            const std::filesystem::path full = AssetLibraryProjectRootPath() / e.relpath_utf8;
+            std::string kind_utf8;
+            if (!ReadSceneAssetKind(full.string(), kind_utf8) || !accept_kind(kind_utf8)) continue;
+            const std::string rel_lower = LowerAsciiCopy(e.relpath_utf8);
+            const std::string label_lower = LowerAsciiCopy(e.label_utf8);
+            const std::string stem_lower = LowerAsciiCopy(std::filesystem::path(e.relpath_utf8).stem().string());
+            if (rel_lower == ident_lower || label_lower == ident_lower || stem_lower == ident_lower) {
+                out_path_utf8 = full.string();
+                out_kind_utf8 = kind_utf8;
+                return true;
+            }
+            if (fallback_path_utf8.empty() &&
+                (rel_lower.find(ident_lower) != std::string::npos ||
+                 label_lower.find(ident_lower) != std::string::npos ||
+                 stem_lower.find(ident_lower) != std::string::npos)) {
+                fallback_path_utf8 = full.string();
+                fallback_kind_utf8 = kind_utf8;
+            }
+        }
+        if (!fallback_path_utf8.empty()) {
+            out_path_utf8 = fallback_path_utf8;
+            out_kind_utf8 = fallback_kind_utf8;
+            return true;
+        }
+        return false;
+    }
+
+    void ResetViewportSceneState() {
+        objects.clear();
+        selected = -1;
+        next_object_id_u64 = 1u;
+        density_mask_u8.assign((size_t)128u * (size_t)128u * (size_t)128u, 0u);
+        lattice.init(0xE16E5151ULL);
+        sm.object_store = EwObjectStore{};
+        ClearSandboxViewportState();
+    }
+
+    bool RegisterSceneObjectFromDescriptor(const Object& in_object,
+                                           uint32_t anchor_kind_u32) {
+        Object o = in_object;
+        if (o.object_id_u64 == 0u) {
+            o.object_id_u64 = next_object_id_u64++;
+        } else {
+            next_object_id_u64 = std::max<uint64_t>(next_object_id_u64, o.object_id_u64 + 1u);
+        }
+
+        EwObjectEntry e{};
+        e.object_id_u64 = o.object_id_u64;
+        e.label_utf8 = o.name_utf8;
+        e.mass_or_cost_q32_32 = (int64_t)(1ull << 32);
+        e.geomcoord9_u64x9.u64x9[0] = (uint64_t)q32_32_from_f32(o.xf.pos[0]);
+        e.geomcoord9_u64x9.u64x9[1] = (uint64_t)q32_32_from_f32(o.xf.pos[1]);
+        e.geomcoord9_u64x9.u64x9[2] = (uint64_t)q32_32_from_f32(o.xf.pos[2]);
+        e.geomcoord9_u64x9.u64x9[3] = (uint64_t)q32_32_from_f32(o.radius_m_f32 * 2.0f);
+        e.geomcoord9_u64x9.u64x9[4] = (uint64_t)q32_32_from_f32(o.radius_m_f32 * 2.0f);
+        e.geomcoord9_u64x9.u64x9[5] = (uint64_t)q32_32_from_f32(o.radius_m_f32 * 2.0f);
+        e.geomcoord9_u64x9.u64x9[6] = (uint64_t)o.albedo_rgba8;
+        e.geomcoord9_u64x9.u64x9[7] = (uint64_t)o.atmosphere_rgba8;
+        e.geomcoord9_u64x9.u64x9[8] = o.object_id_u64;
+        e.phase_seed_u64 =
+            (o.object_id_u64 * 6364136223846793005ULL) ^
+            ((uint64_t)anchor_kind_u32 << 32u) ^
+            (uint64_t)o.name_utf8.size();
+        (void)sm.object_store.upsert(e);
+
+        EwControlPacket cp{};
+        cp.kind = EwControlPacketKind::ObjectRegister;
+        cp.source_u16 = 1;
+        cp.tick_u64 = sm.canonical_tick;
+        cp.payload.object_register.object_id_u64 = o.object_id_u64;
+        cp.payload.object_register.kind_u32 = anchor_kind_u32;
+        cp.payload.object_register.pad0_u32 = 0u;
+        cp.payload.object_register.pos_q16_16[0] = (int32_t)llround((double)o.xf.pos[0] * 65536.0);
+        cp.payload.object_register.pos_q16_16[1] = (int32_t)llround((double)o.xf.pos[1] * 65536.0);
+        cp.payload.object_register.pos_q16_16[2] = (int32_t)llround((double)o.xf.pos[2] * 65536.0);
+        cp.payload.object_register.rot_quat_q16_16[0] = 0;
+        cp.payload.object_register.rot_quat_q16_16[1] = 0;
+        cp.payload.object_register.rot_quat_q16_16[2] = 0;
+        cp.payload.object_register.rot_quat_q16_16[3] = 65536;
+        cp.payload.object_register.radius_m_q16_16 = (int32_t)llround((double)o.radius_m_f32 * 65536.0);
+        cp.payload.object_register.albedo_rgba8 = o.albedo_rgba8;
+        cp.payload.object_register.atmosphere_rgba8 = o.atmosphere_rgba8;
+        cp.payload.object_register.atmosphere_thickness_m_q16_16 =
+            (int32_t)llround((double)o.atmosphere_thickness_m_f32 * 65536.0);
+        cp.payload.object_register.emissive_q16_16 =
+            (int32_t)llround((double)o.emissive_f32 * 65536.0);
+        (void)ew_runtime_submit_control_packet(&sm, &cp);
+
+        o.anchor_id_u32 = 0u;
+        o.refresh_fixed_cache();
+        objects.push_back(o);
+        return true;
+    }
+
+    bool LoadSceneAssetDescriptor(const std::string& path_utf8, bool emit_ui) {
+        EnsureAssetLibraryInitialized(false);
+        if (!asset_library_initialized) return false;
+
+        genesis::VirtualStateDrive drive;
+        std::string err_utf8;
+        if (!sm.asset_substrate.load_virtual_state_drive(path_utf8, drive, &err_utf8)) {
+            if (emit_ui) {
+                PushLocalUiLine(std::string("SCENE_OPEN status=error err=") + err_utf8);
+            }
+            return false;
+        }
+
+        std::string kind_utf8;
+        if (!drive.get_text("genesis/asset_kind", kind_utf8)) {
+            if (emit_ui) PushLocalUiLine("SCENE_OPEN status=error err=missing_asset_kind");
+            return false;
+        }
+
+        uint64_t object_count_u64 = 0u;
+        (void)drive.get_u64("scene/object_count", object_count_u64);
+        int64_t selected_idx_i64 = -1;
+        (void)drive.get_i64("scene/selected_index", selected_idx_i64);
+        uint64_t next_id_u64 = 1u;
+        (void)drive.get_u64("scene/next_object_id", next_id_u64);
+
+        ResetViewportSceneState();
+        next_object_id_u64 = std::max<uint64_t>(next_id_u64, 1u);
+
+        double dval = 0.0;
+        uint64_t uval = 0u;
+        if (drive.get_f64("research/A", dval)) research_param_a = (float)dval;
+        if (drive.get_f64("research/F", dval)) research_param_f = (float)dval;
+        if (drive.get_f64("research/I", dval)) research_param_i = (float)dval;
+        if (drive.get_f64("research/V", dval)) research_param_v = (float)dval;
+        if (drive.get_u64("research/lattice_edge", uval)) research_lattice_edge_u32 = (uint32_t)uval;
+        if (drive.get_u64("research/stream_hz", uval)) research_visual_stream_hz_u32 = (uint32_t)uval;
+        if (drive.get_u64("research/output_mode", uval)) research_output_mode_u8 = (uint8_t)uval;
+        if (drive.get_u64("research/stov_mode", uval)) research_stov_mode = (uval != 0u);
+        PersistResearchRuntimeState();
+
+        for (uint64_t i = 0u; i < object_count_u64; ++i) {
+            const std::string base = std::string("scene/object/") + std::to_string((unsigned long long)i);
+            Object o{};
+            uint64_t oid_u64 = 0u;
+            uint64_t anchor_kind_u64 = (uint64_t)EW_ANCHOR_KIND_OBJECT;
+            (void)drive.get_text(base + "/name", o.name_utf8);
+            (void)drive.get_text(base + "/source_path", o.source_path_utf8);
+            (void)drive.get_u64(base + "/object_id", oid_u64);
+            (void)drive.get_u64(base + "/anchor_kind", anchor_kind_u64);
+            if (drive.get_f64(base + "/pos_x", dval)) o.xf.pos[0] = (float)dval;
+            if (drive.get_f64(base + "/pos_y", dval)) o.xf.pos[1] = (float)dval;
+            if (drive.get_f64(base + "/pos_z", dval)) o.xf.pos[2] = (float)dval;
+            if (drive.get_f64(base + "/radius_m", dval)) o.radius_m_f32 = (float)dval;
+            if (drive.get_f64(base + "/atmosphere_thickness_m", dval)) o.atmosphere_thickness_m_f32 = (float)dval;
+            if (drive.get_f64(base + "/emissive", dval)) o.emissive_f32 = (float)dval;
+            if (drive.get_u64(base + "/albedo_rgba8", uval)) o.albedo_rgba8 = (uint32_t)uval;
+            if (drive.get_u64(base + "/atmosphere_rgba8", uval)) o.atmosphere_rgba8 = (uint32_t)uval;
+            o.object_id_u64 = oid_u64;
+            if (o.name_utf8.empty()) o.name_utf8 = std::string("SceneObject") + std::to_string((unsigned long long)i);
+            (void)RegisterSceneObjectFromDescriptor(o, (uint32_t)anchor_kind_u64);
+        }
+
+        if (selected_idx_i64 >= 0 && selected_idx_i64 < (int64_t)objects.size()) {
+            selected = (int)selected_idx_i64;
+            const Object& o = objects[(size_t)selected];
+            RequestViewportFocus((double)o.xf.pos[0],
+                                 (double)o.xf.pos[1],
+                                 (double)o.xf.pos[2],
+                                 std::max(5.0, (double)o.radius_m_f32 * 4.0));
+        } else if (!objects.empty()) {
+            selected = 0;
+            const Object& o = objects[0];
+            RequestViewportFocus((double)o.xf.pos[0],
+                                 (double)o.xf.pos[1],
+                                 (double)o.xf.pos[2],
+                                 std::max(5.0, (double)o.radius_m_f32 * 4.0));
+        }
+
+        uint64_t sandbox_active_u64 = 0u;
+        if (drive.get_u64("sandbox/active", sandbox_active_u64) && sandbox_active_u64 != 0u) {
+            sandbox_viewport_active = true;
+            StartSandboxSceneLifecycle();
+            if (drive.get_u64("sandbox/id", uval)) sandbox_viewport_id_u32 = (uint32_t)uval;
+            if (drive.get_u64("sandbox/replace_world", uval)) sandbox_viewport_replace_world_u32 = (uint32_t)uval;
+            if (drive.get_u64("sandbox/target_object_id", uval)) sandbox_viewport_target_object_id_u64 = uval;
+            if (drive.get_f64("sandbox/center_x", dval)) sandbox_viewport_center_m[0] = (float)dval;
+            if (drive.get_f64("sandbox/center_y", dval)) sandbox_viewport_center_m[1] = (float)dval;
+            if (drive.get_f64("sandbox/center_z", dval)) sandbox_viewport_center_m[2] = (float)dval;
+            if (drive.get_f64("sandbox/size_x", dval)) sandbox_viewport_size_m[0] = (float)dval;
+            if (drive.get_f64("sandbox/size_y", dval)) sandbox_viewport_size_m[1] = (float)dval;
+            if (drive.get_f64("sandbox/size_z", dval)) sandbox_viewport_size_m[2] = (float)dval;
+            (void)sm.probe_lattice_gpu_for_learning(sandbox_viewport_id_u32);
+            RequestViewportFocus((double)sandbox_viewport_center_m[0],
+                                 (double)sandbox_viewport_center_m[1],
+                                 (double)sandbox_viewport_center_m[2],
+                                 std::max(5.0,
+                                          std::max(std::max((double)sandbox_viewport_size_m[0],
+                                                            (double)sandbox_viewport_size_m[1]),
+                                                   (double)sandbox_viewport_size_m[2]) * 0.9));
+        }
+
+        if (emit_ui) {
+            std::ostringstream oss;
+            oss << "SCENE_OPEN status=ok kind=" << kind_utf8
+                << " path=" << path_utf8
+                << " objects=" << objects.size();
+            PushLocalUiLine(oss.str());
+            if (sandbox_viewport_active) PushLocalUiLine(BuildSandboxStatusLine());
+        }
+        if (sandbox_viewport_active) {
+            PersistResearchRuntimeState();
+        }
+        return true;
+    }
+
+    void ActivateSandboxViewportForObject(uint64_t object_id_u64,
+                                          bool replace_world,
+                                          uint32_t sandbox_id_u32,
+                                          double size_override_m,
+                                          bool emit_ui) {
+        const Object* match = nullptr;
+        for (const auto& o : objects) {
+            if (o.object_id_u64 == object_id_u64) {
+                match = &o;
+                break;
+            }
+        }
+        if (!match && selected >= 0 && selected < (int)objects.size()) {
+            match = &objects[(size_t)selected];
+        }
+        if (!match) {
+            if (emit_ui) PushLocalUiLine("SANDBOX_OPEN status=error err=no_target_object");
+            return;
+        }
+
+        sandbox_viewport_active = true;
+        sandbox_viewport_id_u32 = sandbox_id_u32;
+        sandbox_viewport_replace_world_u32 = replace_world ? 1u : 0u;
+        sandbox_viewport_target_object_id_u64 = match->object_id_u64;
+        StartSandboxSceneLifecycle();
+        sandbox_viewport_center_m[0] = match->xf.pos[0];
+        sandbox_viewport_center_m[1] = match->xf.pos[1];
+        sandbox_viewport_center_m[2] = match->xf.pos[2];
+        const double extent_m =
+            std::max(4.0, (size_override_m > 0.0) ? size_override_m : (double)match->radius_m_f32 * 6.0);
+        sandbox_viewport_size_m[0] = (float)extent_m;
+        sandbox_viewport_size_m[1] = (float)extent_m;
+        sandbox_viewport_size_m[2] = (float)extent_m;
+        (void)sm.probe_lattice_gpu_for_learning(sandbox_viewport_id_u32);
+        RequestViewportFocus((double)match->xf.pos[0],
+                             (double)match->xf.pos[1],
+                             (double)match->xf.pos[2],
+                             std::max(5.0, extent_m * 0.85));
+        PersistResearchRuntimeState();
+        if (emit_ui) PushLocalUiLine(BuildSandboxStatusLine());
+    }
+
+    void CloseSandboxViewport(bool emit_ui) {
+        ClearSandboxViewportState();
+        PersistResearchRuntimeState();
+        if (emit_ui) PushLocalUiLine(BuildSandboxStatusLine());
+    }
+
+    std::string BuildAssetLibraryStatusLine() {
+        EnsureAssetLibraryInitialized(false);
+        std::vector<genesis::GeAssetEntry> entries;
+        std::string err_utf8;
+        const bool ok = asset_library_initialized && sm.asset_substrate.list_project_entries(entries, &err_utf8);
+        uint32_t scene_count_u32 = 0u;
+        uint32_t sim_count_u32 = 0u;
+        if (ok) {
+            for (const genesis::GeAssetEntry& e : entries) {
+                if (std::filesystem::path(e.relpath_utf8).extension().string() != ".gevsd") continue;
+                const std::filesystem::path full = AssetLibraryProjectRootPath() / e.relpath_utf8;
+                std::string kind_utf8;
+                if (!ReadSceneAssetKind(full.string(), kind_utf8)) continue;
+                const std::string kind_lower = LowerAsciiCopy(kind_utf8);
+                if (kind_lower == "scene_viewport_v1") ++scene_count_u32;
+                else if (kind_lower == "sandbox_sim_viewport_v1") ++sim_count_u32;
+            }
+        }
+        std::ostringstream oss;
+        oss << "ASSET_LIBRARY_STATUS ready=" << ((asset_library_initialized && ok) ? 1u : 0u)
+            << " project_root=" << AssetLibraryProjectRootPath().string()
+            << " entries=" << entries.size()
+            << " scenes=" << scene_count_u32
+            << " simulations=" << sim_count_u32;
+        if (!err_utf8.empty()) oss << " err=" << err_utf8;
+        return oss.str();
+    }
+
+    void EmitAssetLibraryList(const std::string& partition_filter_utf8,
+                              const std::string& kind_filter_utf8,
+                              uint32_t limit_u32) {
+        EnsureAssetLibraryInitialized(false);
+        std::vector<genesis::GeAssetEntry> entries;
+        std::string err_utf8;
+        if (!asset_library_initialized || !sm.asset_substrate.list_project_entries(entries, &err_utf8)) {
+            PushLocalUiLine(std::string("ASSET_LIBRARY_LIST status=error err=") +
+                            (err_utf8.empty() ? "list_failed" : err_utf8));
+            return;
+        }
+
+        genesis::GeAssetPartition partition_filter = genesis::GeAssetPartition::Assets;
+        const bool filter_partition = ParseAssetPartition(partition_filter_utf8, partition_filter);
+        const std::string kind_filter = LowerAsciiCopy(TrimAscii(kind_filter_utf8));
+        const uint32_t limit = std::max<uint32_t>(1u, std::min<uint32_t>(limit_u32, 64u));
+
+        uint32_t emitted = 0u;
+        for (const genesis::GeAssetEntry& e : entries) {
+            if (filter_partition && e.partition != partition_filter) continue;
+            std::string descriptor_kind_utf8 = "binary_asset";
+            if (std::filesystem::path(e.relpath_utf8).extension().string() == ".gevsd") {
+                const std::filesystem::path full = AssetLibraryProjectRootPath() / e.relpath_utf8;
+                (void)ReadSceneAssetKind(full.string(), descriptor_kind_utf8);
+            }
+            const std::string descriptor_kind_lower = LowerAsciiCopy(descriptor_kind_utf8);
+            if (kind_filter == "scene" && descriptor_kind_lower != "scene_viewport_v1") continue;
+            if ((kind_filter == "simulation" || kind_filter == "sandbox") &&
+                descriptor_kind_lower != "sandbox_sim_viewport_v1") continue;
+
+            std::ostringstream oss;
+            oss << "ASSET_LIBRARY_ENTRY idx=" << (emitted + 1u)
+                << " partition=" << AssetPartitionName(e.partition)
+                << " label=" << e.label_utf8
+                << " kind=" << descriptor_kind_utf8
+                << " rel=" << e.relpath_utf8;
+            PushLocalUiLine(oss.str());
+            ++emitted;
+            if (emitted >= limit) break;
+        }
+        if (emitted == 0u) {
+            PushLocalUiLine("ASSET_LIBRARY_ENTRY none=1");
         }
     }
 
@@ -661,7 +1623,16 @@ void refresh_fixed_cache() {
                ResearchCommandMatchesPrefix(utf8, "/merged_repo_status") ||
                ResearchCommandMatchesPrefix(utf8, "merged_repo_status:") ||
                ResearchCommandMatchesPrefix(utf8, "/openai_status") ||
-               ResearchCommandMatchesPrefix(utf8, "openai_status:");
+               ResearchCommandMatchesPrefix(utf8, "openai_status:") ||
+               ResearchCommandMatchesPrefix(utf8, "/asset_library_status") ||
+               ResearchCommandMatchesPrefix(utf8, "asset_library_status:") ||
+               ResearchCommandMatchesPrefix(utf8, "ASSET_LIBRARY_STATUS:") ||
+               ResearchCommandMatchesPrefix(utf8, "/asset_library_list") ||
+               ResearchCommandMatchesPrefix(utf8, "asset_library_list:") ||
+               ResearchCommandMatchesPrefix(utf8, "ASSET_LIBRARY_LIST:") ||
+               ResearchCommandMatchesPrefix(utf8, "/sandbox_status") ||
+               ResearchCommandMatchesPrefix(utf8, "sandbox_status:") ||
+               ResearchCommandMatchesPrefix(utf8, "SANDBOX_STATUS:");
     }
 
     bool ResearchBasicTrialShouldBlockAdvancedCommand(const std::string& utf8) const {
@@ -1106,6 +2077,15 @@ void refresh_fixed_cache() {
                 f << "    \"live_compute_active\": " << (research_live_compute_active ? 1 : 0) << ",\n";
                 f << "    \"guidance_watchdog_fault\": " << (research_guidance_watchdog_fault ? 1 : 0) << ",\n";
                 f << "    \"guidance_watchdog_fault_count\": " << research_guidance_watchdog_fault_count_u32 << ",\n";
+                f << "    \"sandbox_output_connected\": " << (sandbox_output_connected ? 1 : 0) << ",\n";
+                f << "    \"sandbox_simulation_running\": " << (sandbox_simulation_running ? 1 : 0) << ",\n";
+                f << "    \"sandbox_scene_open_tick\": " << sandbox_scene_open_tick_u64 << ",\n";
+                f << "    \"sandbox_runtime_ticks\": " << sandbox_runtime_ticks_u64 << ",\n";
+                f << "    \"sandbox_lifespan_ticks\": " << SandboxSceneLifespanTicks() << ",\n";
+                f << "    \"sandbox_output_width_px\": " << sandbox_output_width_px_u32 << ",\n";
+                f << "    \"sandbox_output_height_px\": " << sandbox_output_height_px_u32 << ",\n";
+                f << "    \"vram_trace_cache_resident\": 1,\n";
+                f << "    \"vram_trace_prediction_cells\": " << research_gpu_predictions.size() << ",\n";
                 f << "    \"quartet\": {\"F\": " << research_param_f
                   << ", \"A\": " << research_param_a
                   << ", \"I\": " << research_param_i
@@ -1132,6 +2112,31 @@ void refresh_fixed_cache() {
                   << ", \"A\": " << research_gpu_calibration.next_pulse_quartet.A
                   << ", \"I\": " << research_gpu_calibration.next_pulse_quartet.I
                   << ", \"V\": " << research_gpu_calibration.next_pulse_quartet.V << "}\n";
+                f << "  },\n";
+                f << "  \"gpu_pulse_trace\": {\n";
+                f << "    \"pulse_interval_ticks\": " << research_trace_pulse_interval_ticks_u32 << ",\n";
+                f << "    \"emitted_quartet\": {\"F\": " << research_trace_emitted_quartet.F
+                  << ", \"A\": " << research_trace_emitted_quartet.A
+                  << ", \"I\": " << research_trace_emitted_quartet.I
+                  << ", \"V\": " << research_trace_emitted_quartet.V << "},\n";
+                f << "    \"sample_delta_quartet\": {\"F\": " << research_trace_sample_delta_quartet.F
+                  << ", \"A\": " << research_trace_sample_delta_quartet.A
+                  << ", \"I\": " << research_trace_sample_delta_quartet.I
+                  << ", \"V\": " << research_trace_sample_delta_quartet.V << "},\n";
+                f << "    \"observed_quartet\": {\"F\": " << research_trace_observed_quartet.F
+                  << ", \"A\": " << research_trace_observed_quartet.A
+                  << ", \"I\": " << research_trace_observed_quartet.I
+                  << ", \"V\": " << research_trace_observed_quartet.V << "},\n";
+                f << "    \"observed_delta_quartet\": {\"F\": " << research_trace_observed_delta_quartet.F
+                  << ", \"A\": " << research_trace_observed_delta_quartet.A
+                  << ", \"I\": " << research_trace_observed_delta_quartet.I
+                  << ", \"V\": " << research_trace_observed_delta_quartet.V << "},\n";
+                f << "    \"coupling_fa_norm\": " << research_trace_coupling_fa_norm << ",\n";
+                f << "    \"coupling_fv_norm\": " << research_trace_coupling_fv_norm << ",\n";
+                f << "    \"coupling_fi_norm\": " << research_trace_coupling_fi_norm << ",\n";
+                f << "    \"coupling_av_norm\": " << research_trace_coupling_av_norm << ",\n";
+                f << "    \"coupling_ai_norm\": " << research_trace_coupling_ai_norm << ",\n";
+                f << "    \"coupling_vi_norm\": " << research_trace_coupling_vi_norm << "\n";
                 f << "  },\n";
                 f << "  \"process_substrate\": {\n";
                 f << "    \"valid\": " << process.valid_u32 << ",\n";
@@ -1161,7 +2166,15 @@ void refresh_fixed_cache() {
                 f << "    \"command_count_u32\": " << ai.command_count_u32 << ",\n";
                 f << "    \"action_log_count_u32\": " << ai.action_log_count_u32 << ",\n";
                 f << "    \"pending_external_api_u32\": " << ai.pending_external_api_u32 << ",\n";
-                f << "    \"inflight_external_api_u32\": " << ai.inflight_external_api_u32 << "\n";
+                f << "    \"inflight_external_api_u32\": " << ai.inflight_external_api_u32 << ",\n";
+                f << "    \"memory_norm_q15\": " << ai.memory_norm_q15 << ",\n";
+                f << "    \"reasoning_norm_q15\": " << ai.reasoning_norm_q15 << ",\n";
+                f << "    \"planning_norm_q15\": " << ai.planning_norm_q15 << ",\n";
+                f << "    \"creativity_norm_q15\": " << ai.creativity_norm_q15 << ",\n";
+                f << "    \"perception_norm_q15\": " << ai.perception_norm_q15 << ",\n";
+                f << "    \"temporal_binding_norm_q15\": " << ai.temporal_binding_norm_q15 << ",\n";
+                f << "    \"crawler_drift_norm_q15\": " << ai.crawler_drift_norm_q15 << ",\n";
+                f << "    \"network_coherence_norm_q15\": " << ai.network_coherence_norm_q15 << "\n";
                 f << "  },\n";
                 f << "  \"ai_data_substrate\": {\n";
                 f << "    \"valid\": " << ai_data.valid_u32 << ",\n";
@@ -1170,7 +2183,26 @@ void refresh_fixed_cache() {
                 f << "    \"manifest_record_count_u32\": " << ai_data.manifest_record_count_u32 << ",\n";
                 f << "    \"pending_external_api_u32\": " << ai_data.pending_external_api_u32 << ",\n";
                 f << "    \"inflight_external_api_u32\": " << ai_data.inflight_external_api_u32 << ",\n";
-                f << "    \"residual_norm_q15\": " << ai_data.residual_norm_q15 << "\n";
+                f << "    \"residual_norm_q15\": " << ai_data.residual_norm_q15 << ",\n";
+                f << "    \"crawler_pending_obs_u32\": " << ai_data.crawler_pending_obs_u32 << ",\n";
+                f << "    \"crawler_enqueued_obs_u64\": " << ai_data.crawler_enqueued_obs_u64 << ",\n";
+                f << "    \"crawler_admitted_pulses_u64\": " << ai_data.crawler_admitted_pulses_u64 << ",\n";
+                f << "    \"crawler_dropped_obs_u64\": " << ai_data.crawler_dropped_obs_u64 << ",\n";
+                f << "    \"crawler_flow_norm_q15\": " << ai_data.crawler_flow_norm_q15 << ",\n";
+                f << "    \"crawler_drift_norm_q15\": " << ai_data.crawler_drift_norm_q15 << ",\n";
+                f << "    \"crawler_interference_norm_q15\": " << ai_data.crawler_interference_norm_q15 << ",\n";
+                f << "    \"crawler_coherence_norm_q15\": " << ai_data.crawler_coherence_norm_q15 << ",\n";
+                f << "    \"temporal_memory_norm_q15\": " << ai_data.temporal_memory_norm_q15 << ",\n";
+                f << "    \"temporal_prediction_norm_q15\": " << ai_data.temporal_prediction_norm_q15 << ",\n";
+                f << "    \"gpu_gradient_energy_norm_q15\": " << ai_data.gpu_gradient_energy_norm_q15 << ",\n";
+                f << "    \"gpu_spider_f_code_i32\": " << ai_data.gpu_spider_f_code_i32 << ",\n";
+                f << "    \"gpu_spider_a_code_u16\": " << ai_data.gpu_spider_a_code_u16 << ",\n";
+                f << "    \"gpu_spider_v_code_u16\": " << ai_data.gpu_spider_v_code_u16 << ",\n";
+                f << "    \"gpu_spider_i_code_u16\": " << ai_data.gpu_spider_i_code_u16 << ",\n";
+                f << "    \"api_decode_count_u16\": " << ai_data.api_decode_count_u16 << ",\n";
+                f << "    \"api_decode_http_status_s32\": " << ai_data.api_decode_http_status_s32 << ",\n";
+                f << "    \"api_decode_norm_q15\": " << ai_data.api_decode_norm_q15 << ",\n";
+                f << "    \"api_decode_f_code_i32\": " << ai_data.api_decode_f_code_i32 << "\n";
                 f << "  },\n";
                 f << "  \"artifacts\": {\n";
                 f << "    \"run_log\": \"run.log\",\n";
@@ -1269,6 +2301,33 @@ void refresh_fixed_cache() {
         (void)research_runtime_vsd.put_u64("photon/runtime/live_compute_active",
                                            "1=substrate is actively running live compute mode",
                                            research_live_compute_active ? 1u : 0u);
+        (void)research_runtime_vsd.put_u64("photon/runtime/sandbox_output_connected",
+                                           "1=active sandbox viewport output is connected to a live window",
+                                           sandbox_output_connected ? 1u : 0u);
+        (void)research_runtime_vsd.put_u64("photon/runtime/sandbox_simulation_running",
+                                           "1=sandbox scene simulation is actively ticking",
+                                           sandbox_simulation_running ? 1u : 0u);
+        (void)research_runtime_vsd.put_u64("photon/runtime/sandbox_scene_open_tick",
+                                           "tick when the current sandbox scene lifecycle started",
+                                           sandbox_scene_open_tick_u64);
+        (void)research_runtime_vsd.put_u64("photon/runtime/sandbox_runtime_ticks",
+                                           "ticks the current sandbox scene has actively simulated",
+                                           sandbox_runtime_ticks_u64);
+        (void)research_runtime_vsd.put_u64("photon/runtime/sandbox_lifespan_ticks",
+                                           "ticks the current sandbox scene has remained open",
+                                           SandboxSceneLifespanTicks());
+        (void)research_runtime_vsd.put_u64("photon/runtime/sandbox_last_output_connected_tick",
+                                           "last tick the sandbox output was confirmed connected",
+                                           sandbox_last_output_connected_tick_u64);
+        (void)research_runtime_vsd.put_u64("photon/runtime/sandbox_last_output_disconnected_tick",
+                                           "last tick the sandbox output disconnected",
+                                           sandbox_last_output_disconnected_tick_u64);
+        (void)research_runtime_vsd.put_u64("photon/runtime/sandbox_output_width_px",
+                                           "current sandbox output width in pixels",
+                                           (uint64_t)sandbox_output_width_px_u32);
+        (void)research_runtime_vsd.put_u64("photon/runtime/sandbox_output_height_px",
+                                           "current sandbox output height in pixels",
+                                           (uint64_t)sandbox_output_height_px_u32);
         (void)research_runtime_vsd.put_u64("photon/runtime/basic_trial_enabled",
                                            "1=basic trial mode is enabled for limited play access",
                                            research_basic_trial_enabled ? 1u : 0u);
@@ -1317,6 +2376,12 @@ void refresh_fixed_cache() {
         (void)research_runtime_vsd.put_u64("photon/runtime/gpu_prediction_count",
                                            "cached gpu adaptive prediction count",
                                            (uint64_t)research_gpu_predictions.size());
+        (void)research_runtime_vsd.put_u64("photon/runtime/vram_trace_cache_resident",
+                                           "1=runtime substrate metadata is kept resident in the in-memory drive",
+                                           1u);
+        (void)research_runtime_vsd.put_u64("photon/runtime/vram_trace_prediction_cells",
+                                           "count of prediction cells currently cached for fast traceability",
+                                           (uint64_t)research_gpu_predictions.size());
         (void)research_runtime_vsd.put_u64("photon/runtime/gpu_prediction_last_tick",
                                            "last tick gpu adaptive predictions were rebuilt",
                                            research_gpu_prediction_last_tick_u64);
@@ -1362,6 +2427,75 @@ void refresh_fixed_cache() {
         (void)research_runtime_vsd.put_f64("photon/runtime/gpu_prediction_next_pulse_v",
                                            "next gpu pulse voltage derived from predicted interference",
                                            research_gpu_calibration.next_pulse_quartet.V);
+        (void)research_runtime_vsd.put_u64("photon/runtime/gpu_trace_pulse_interval_ticks",
+                                           "active gpu pulse cadence in ticks",
+                                           (uint64_t)research_trace_pulse_interval_ticks_u32);
+        (void)research_runtime_vsd.put_f64("photon/runtime/gpu_trace_emitted_f",
+                                           "last emitted gpu pulse frequency",
+                                           research_trace_emitted_quartet.F);
+        (void)research_runtime_vsd.put_f64("photon/runtime/gpu_trace_emitted_a",
+                                           "last emitted gpu pulse amplitude",
+                                           research_trace_emitted_quartet.A);
+        (void)research_runtime_vsd.put_f64("photon/runtime/gpu_trace_emitted_i",
+                                           "last emitted gpu pulse amperage",
+                                           research_trace_emitted_quartet.I);
+        (void)research_runtime_vsd.put_f64("photon/runtime/gpu_trace_emitted_v",
+                                           "last emitted gpu pulse voltage",
+                                           research_trace_emitted_quartet.V);
+        (void)research_runtime_vsd.put_f64("photon/runtime/gpu_trace_sample_delta_f",
+                                           "delta from previous emitted gpu pulse frequency",
+                                           research_trace_sample_delta_quartet.F);
+        (void)research_runtime_vsd.put_f64("photon/runtime/gpu_trace_sample_delta_a",
+                                           "delta from previous emitted gpu pulse amplitude",
+                                           research_trace_sample_delta_quartet.A);
+        (void)research_runtime_vsd.put_f64("photon/runtime/gpu_trace_sample_delta_i",
+                                           "delta from previous emitted gpu pulse amperage",
+                                           research_trace_sample_delta_quartet.I);
+        (void)research_runtime_vsd.put_f64("photon/runtime/gpu_trace_sample_delta_v",
+                                           "delta from previous emitted gpu pulse voltage",
+                                           research_trace_sample_delta_quartet.V);
+        (void)research_runtime_vsd.put_f64("photon/runtime/gpu_trace_observed_f",
+                                           "observed gpu frequency norm at the time of pulse emission",
+                                           research_trace_observed_quartet.F);
+        (void)research_runtime_vsd.put_f64("photon/runtime/gpu_trace_observed_a",
+                                           "observed gpu amplitude norm at the time of pulse emission",
+                                           research_trace_observed_quartet.A);
+        (void)research_runtime_vsd.put_f64("photon/runtime/gpu_trace_observed_i",
+                                           "observed gpu amperage norm at the time of pulse emission",
+                                           research_trace_observed_quartet.I);
+        (void)research_runtime_vsd.put_f64("photon/runtime/gpu_trace_observed_v",
+                                           "observed gpu voltage norm at the time of pulse emission",
+                                           research_trace_observed_quartet.V);
+        (void)research_runtime_vsd.put_f64("photon/runtime/gpu_trace_observed_delta_f",
+                                           "delta between emitted and observed gpu frequency",
+                                           research_trace_observed_delta_quartet.F);
+        (void)research_runtime_vsd.put_f64("photon/runtime/gpu_trace_observed_delta_a",
+                                           "delta between emitted and observed gpu amplitude",
+                                           research_trace_observed_delta_quartet.A);
+        (void)research_runtime_vsd.put_f64("photon/runtime/gpu_trace_observed_delta_i",
+                                           "delta between emitted and observed gpu amperage",
+                                           research_trace_observed_delta_quartet.I);
+        (void)research_runtime_vsd.put_f64("photon/runtime/gpu_trace_observed_delta_v",
+                                           "delta between emitted and observed gpu voltage",
+                                           research_trace_observed_delta_quartet.V);
+        (void)research_runtime_vsd.put_f64("photon/runtime/gpu_trace_coupling_fa_norm",
+                                           "frequency to amplitude coupling factor",
+                                           research_trace_coupling_fa_norm);
+        (void)research_runtime_vsd.put_f64("photon/runtime/gpu_trace_coupling_fv_norm",
+                                           "frequency to voltage coupling factor",
+                                           research_trace_coupling_fv_norm);
+        (void)research_runtime_vsd.put_f64("photon/runtime/gpu_trace_coupling_fi_norm",
+                                           "frequency to amperage coupling factor",
+                                           research_trace_coupling_fi_norm);
+        (void)research_runtime_vsd.put_f64("photon/runtime/gpu_trace_coupling_av_norm",
+                                           "amplitude to voltage coupling factor",
+                                           research_trace_coupling_av_norm);
+        (void)research_runtime_vsd.put_f64("photon/runtime/gpu_trace_coupling_ai_norm",
+                                           "amplitude to amperage coupling factor",
+                                           research_trace_coupling_ai_norm);
+        (void)research_runtime_vsd.put_f64("photon/runtime/gpu_trace_coupling_vi_norm",
+                                           "voltage to amperage coupling factor",
+                                           research_trace_coupling_vi_norm);
         (void)research_runtime_vsd.put_u64("photon/runtime/stream_hz",
                                            "visual stream hz",
                                            (uint64_t)research_visual_stream_hz_u32);
@@ -1510,8 +2644,15 @@ void refresh_fixed_cache() {
         pulse.causal_tag = 91u;
         pulse.tick = tick_u64;
         sm.submit_pulse(pulse);
+        UpdateResearchPulseTraceState(quartet, telemetry_opt, cadence_u32);
         research_guidance_last_pulse_tick_u64 = tick_u64;
         research_guidance_has_pulse_history = true;
+        const uint64_t persist_interval_u64 = (uint64_t)std::max<uint32_t>(cadence_u32, 15u);
+        if (research_trace_last_persist_tick_u64 == 0u ||
+            tick_u64 >= research_trace_last_persist_tick_u64 + persist_interval_u64) {
+            research_trace_last_persist_tick_u64 = tick_u64;
+            PersistResearchRuntimeState();
+        }
     }
 
     void ApplyResearchLiveBootPreset(bool announce) {
@@ -1545,6 +2686,19 @@ void refresh_fixed_cache() {
         research_guidance_watchdog_fault = false;
         research_guidance_watchdog_fault_count_u32 = 0u;
         research_guidance_watchdog_last_fault_tick_u64 = 0u;
+        research_trace_emitted_quartet = genesis::GeResearchPulseQuartet{};
+        research_trace_sample_delta_quartet = genesis::GeResearchPulseQuartet{};
+        research_trace_observed_quartet = genesis::GeResearchPulseQuartet{};
+        research_trace_observed_delta_quartet = genesis::GeResearchPulseQuartet{};
+        research_trace_coupling_fa_norm = 0.0;
+        research_trace_coupling_fv_norm = 0.0;
+        research_trace_coupling_fi_norm = 0.0;
+        research_trace_coupling_av_norm = 0.0;
+        research_trace_coupling_ai_norm = 0.0;
+        research_trace_coupling_vi_norm = 0.0;
+        research_trace_pulse_interval_ticks_u32 = 0u;
+        research_trace_last_persist_tick_u64 = 0u;
+        research_trace_has_sample_history = false;
         UpdateResearchAxisScaleState(center);
         PersistResearchRuntimeState();
 
@@ -2217,6 +3371,19 @@ void refresh_fixed_cache() {
             research_live_compute_active = false;
             research_live_compute_activation_tick_u64 = 0u;
             research_guidance_watchdog_fault = false;
+            research_trace_emitted_quartet = genesis::GeResearchPulseQuartet{};
+            research_trace_sample_delta_quartet = genesis::GeResearchPulseQuartet{};
+            research_trace_observed_quartet = genesis::GeResearchPulseQuartet{};
+            research_trace_observed_delta_quartet = genesis::GeResearchPulseQuartet{};
+            research_trace_coupling_fa_norm = 0.0;
+            research_trace_coupling_fv_norm = 0.0;
+            research_trace_coupling_fi_norm = 0.0;
+            research_trace_coupling_av_norm = 0.0;
+            research_trace_coupling_ai_norm = 0.0;
+            research_trace_coupling_vi_norm = 0.0;
+            research_trace_pulse_interval_ticks_u32 = 0u;
+            research_trace_last_persist_tick_u64 = 0u;
+            research_trace_has_sample_history = false;
             SyncResearchWatchState();
             if (research_basic_trial_enabled) {
                 research_live_boot_enabled = false;
@@ -2387,6 +3554,7 @@ void refresh_fixed_cache() {
 
         // Deterministic reservoir baseline for early import bring-up.
         sm.reservoir = (int64_t)(sm.anchors.size()) << 32;
+        EnsureAssetLibraryInitialized(false);
 
         density_mask_u8.assign((size_t)128u * (size_t)128u * (size_t)128u, 0u);
         // Deterministic seed constant (ASCII mnemonic encoded as hex-ish).
@@ -2471,13 +3639,23 @@ void refresh_fixed_cache() {
         emit_planet(objects[1]);
     }
 }
+        EnsureBootstrapAssetLibraryAssets();
     }
 
     
     void Tick() {
     UpdateResearchBasicTrialState();
+
+    const bool sandbox_tick_allowed = !sandbox_viewport_active || sandbox_simulation_running;
+    if (!sandbox_tick_allowed) {
+        return;
+    }
+
     UpdateResearchTemporalGuidance();
     sm.tick();
+    if (sandbox_viewport_active && sandbox_simulation_running) {
+        ++sandbox_runtime_ticks_u64;
+    }
     PollResearchArchiveHotReload();
     PollResearchCommandFile();
 
@@ -2721,6 +3899,14 @@ void refresh_fixed_cache() {
                 << " ctrl_q15=" << telemetry.controller_authority_q15
                 << " gain_q15=" << telemetry.op_gain_q15
                 << " phase_q15=" << telemetry.op_phase_bias_q15
+                << " mem_q15=" << telemetry.memory_norm_q15
+                << " reason_q15=" << telemetry.reasoning_norm_q15
+                << " plan_q15=" << telemetry.planning_norm_q15
+                << " create_q15=" << telemetry.creativity_norm_q15
+                << " perceive_q15=" << telemetry.perception_norm_q15
+                << " bind_q15=" << telemetry.temporal_binding_norm_q15
+                << " drift_q15=" << telemetry.crawler_drift_norm_q15
+                << " net_q15=" << telemetry.network_coherence_norm_q15
                 << " b0=" << telemetry.carrier_band_q15[0]
                 << " b1=" << telemetry.carrier_band_q15[1]
                 << " b2=" << telemetry.carrier_band_q15[2]
@@ -2768,15 +3954,35 @@ void refresh_fixed_cache() {
                 << " khan_chars=" << telemetry.math_khan_chars_ingested_u32
                 << " pending_api=" << telemetry.pending_external_api_u32
                 << " inflight_api=" << telemetry.inflight_external_api_u32
+                << " crawl_pending=" << telemetry.crawler_pending_obs_u32
+                << " crawl_enq=" << telemetry.crawler_enqueued_obs_u64
+                << " crawl_adm=" << telemetry.crawler_admitted_pulses_u64
+                << " crawl_drop=" << telemetry.crawler_dropped_obs_u64
                 << " intent_q15=" << telemetry.intent_norm_q15
                 << " measured_q15=" << telemetry.measured_norm_q15
                 << " residual_q15=" << telemetry.residual_norm_q15
                 << " dErr_q15=" << telemetry.error_delta_norm_q15
                 << " intErr_q15=" << telemetry.error_integral_norm_q15
                 << " ctrl_q15=" << telemetry.controller_authority_q15
+                << " crawl_flow_q15=" << telemetry.crawler_flow_norm_q15
+                << " crawl_drift_q15=" << telemetry.crawler_drift_norm_q15
+                << " crawl_intf_q15=" << telemetry.crawler_interference_norm_q15
+                << " crawl_coh_q15=" << telemetry.crawler_coherence_norm_q15
+                << " mem_q15=" << telemetry.temporal_memory_norm_q15
+                << " pred_q15=" << telemetry.temporal_prediction_norm_q15
+                << " gpu_grad_q15=" << telemetry.gpu_gradient_energy_norm_q15
+                << " gpu_spider_f=" << telemetry.gpu_spider_f_code_i32
+                << " gpu_spider_a=" << telemetry.gpu_spider_a_code_u16
+                << " gpu_spider_v=" << telemetry.gpu_spider_v_code_u16
+                << " gpu_spider_i=" << telemetry.gpu_spider_i_code_u16
+                << " api_decode_n=" << telemetry.api_decode_count_u16
+                << " api_http=" << telemetry.api_decode_http_status_s32
+                << " api_decode_q15=" << telemetry.api_decode_norm_q15
+                << " api_decode_f=" << telemetry.api_decode_f_code_i32
                 << " err_q32_32=" << telemetry.error_q32_32
                 << " derr_q32_32=" << telemetry.error_delta_q32_32
                 << " ierr_q32_32=" << telemetry.error_integral_q32_32
+                << " pred_q32_32=" << telemetry.temporal_prediction_q32_32
                 << " t0=" << telemetry.intent_band_q15[0]
                 << " t1=" << telemetry.intent_band_q15[1]
                 << " t2=" << telemetry.intent_band_q15[2]
@@ -2966,6 +4172,184 @@ void refresh_fixed_cache() {
             else if (pco != std::string::npos) p = pco + 1u;
             if (p != std::string::npos && p < utf8.size()) payload = utf8.substr(p);
             SubmitMergedOpenAiPrompt(payload);
+            return;
+        }
+        if (utf8.rfind("/asset_library_status", 0) == 0 ||
+            utf8.rfind("asset_library_status:", 0) == 0 ||
+            utf8.rfind("ASSET_LIBRARY_STATUS:", 0) == 0) {
+            PushLocalUiLine(BuildAssetLibraryStatusLine());
+            sm.observe_text_line(utf8);
+            return;
+        }
+        if (utf8.rfind("/asset_library_list", 0) == 0 ||
+            utf8.rfind("asset_library_list:", 0) == 0 ||
+            utf8.rfind("ASSET_LIBRARY_LIST:", 0) == 0) {
+            std::string partition_utf8;
+            std::string kind_utf8;
+            std::string limit_utf8;
+            (void)ExtractOptionValue(utf8, "partition", partition_utf8);
+            (void)ExtractOptionValue(utf8, "kind", kind_utf8);
+            (void)ExtractOptionValue(utf8, "limit", limit_utf8);
+            if (partition_utf8.empty()) {
+                const std::string payload = CommandPayloadAfterSeparator(utf8);
+                genesis::GeAssetPartition part_tmp = genesis::GeAssetPartition::Assets;
+                if (ParseAssetPartition(payload, part_tmp)) partition_utf8 = payload;
+            }
+            const uint32_t limit_u32 =
+                limit_utf8.empty() ? 16u : (uint32_t)std::strtoul(limit_utf8.c_str(), nullptr, 10);
+            EmitAssetLibraryList(partition_utf8, kind_utf8, limit_u32);
+            sm.observe_text_line(utf8);
+            return;
+        }
+        if (utf8.rfind("/asset_library_save_scene", 0) == 0 ||
+            utf8.rfind("asset_library_save_scene:", 0) == 0 ||
+            utf8.rfind("SCENE_SAVE:", 0) == 0) {
+            std::string label_utf8;
+            if (!ExtractOptionValue(utf8, "name", label_utf8)) {
+                label_utf8 = CommandPayloadAfterSeparator(utf8);
+            }
+            (void)SaveSceneAssetDescriptor(label_utf8.empty() ? "scene_asset" : label_utf8,
+                                           genesis::GeAssetPartition::Worlds,
+                                           true);
+            sm.observe_text_line(utf8);
+            return;
+        }
+        if (utf8.rfind("/asset_library_save_sim", 0) == 0 ||
+            utf8.rfind("asset_library_save_sim:", 0) == 0 ||
+            utf8.rfind("SIM_SAVE:", 0) == 0) {
+            std::string label_utf8;
+            if (!ExtractOptionValue(utf8, "name", label_utf8)) {
+                label_utf8 = CommandPayloadAfterSeparator(utf8);
+            }
+            (void)SaveSceneAssetDescriptor(label_utf8.empty() ? "sandbox_sim_asset" : label_utf8,
+                                           genesis::GeAssetPartition::Simulations,
+                                           true);
+            sm.observe_text_line(utf8);
+            return;
+        }
+        if (utf8.rfind("/asset_library_open_scene", 0) == 0 ||
+            utf8.rfind("asset_library_open_scene:", 0) == 0 ||
+            utf8.rfind("SCENE_OPEN:", 0) == 0) {
+            std::string ident_utf8;
+            if (!ExtractOptionValue(utf8, "path", ident_utf8) &&
+                !ExtractOptionValue(utf8, "name", ident_utf8)) {
+                ident_utf8 = CommandPayloadAfterSeparator(utf8);
+            }
+            std::string path_utf8;
+            std::string kind_utf8;
+            const bool found =
+                ResolveSceneAssetPath(ident_utf8,
+                                      genesis::GeAssetPartition::Worlds,
+                                      "scene_viewport_v1",
+                                      path_utf8,
+                                      kind_utf8);
+            if (!found || !LoadSceneAssetDescriptor(path_utf8, true)) {
+                PushLocalUiLine(std::string("SCENE_OPEN status=error ident=") + ident_utf8);
+            }
+            sm.observe_text_line(utf8);
+            return;
+        }
+        if (utf8.rfind("/asset_library_open_sim", 0) == 0 ||
+            utf8.rfind("asset_library_open_sim:", 0) == 0 ||
+            utf8.rfind("SIM_OPEN:", 0) == 0) {
+            std::string ident_utf8;
+            if (!ExtractOptionValue(utf8, "path", ident_utf8) &&
+                !ExtractOptionValue(utf8, "name", ident_utf8)) {
+                ident_utf8 = CommandPayloadAfterSeparator(utf8);
+            }
+            std::string path_utf8;
+            std::string kind_utf8;
+            const bool found =
+                ResolveSceneAssetPath(ident_utf8,
+                                      genesis::GeAssetPartition::Simulations,
+                                      "sandbox_sim_viewport_v1",
+                                      path_utf8,
+                                      kind_utf8);
+            if (!found || !LoadSceneAssetDescriptor(path_utf8, true)) {
+                PushLocalUiLine(std::string("SIM_OPEN status=error ident=") + ident_utf8);
+                return;
+            }
+            if (!sandbox_viewport_active && !objects.empty()) {
+                const uint64_t oid = (selected >= 0 && selected < (int)objects.size())
+                                         ? objects[(size_t)selected].object_id_u64
+                                         : objects[0].object_id_u64;
+                ActivateSandboxViewportForObject(oid, true, 0u, 0.0, true);
+            }
+            sm.observe_text_line(utf8);
+            return;
+        }
+        if (utf8.rfind("/sandbox_status", 0) == 0 ||
+            utf8.rfind("sandbox_status:", 0) == 0 ||
+            utf8.rfind("SANDBOX_STATUS:", 0) == 0) {
+            PushLocalUiLine(BuildSandboxStatusLine());
+            sm.observe_text_line(utf8);
+            return;
+        }
+        if (utf8.rfind("/sandbox_close", 0) == 0 ||
+            utf8.rfind("sandbox_close:", 0) == 0 ||
+            utf8.rfind("SANDBOX_CLOSE:", 0) == 0) {
+            CloseSandboxViewport(true);
+            sm.observe_text_line(utf8);
+            return;
+        }
+        if (utf8.rfind("/sandbox_open", 0) == 0 ||
+            utf8.rfind("sandbox_open:", 0) == 0 ||
+            utf8.rfind("SANDBOX_OPEN:", 0) == 0) {
+            std::string scene_ident_utf8;
+            (void)ExtractOptionValue(utf8, "scene", scene_ident_utf8);
+            if (scene_ident_utf8.empty()) {
+                (void)ExtractOptionValue(utf8, "path", scene_ident_utf8);
+            }
+            if (!scene_ident_utf8.empty()) {
+                std::string path_utf8;
+                std::string kind_utf8;
+                bool found =
+                    ResolveSceneAssetPath(scene_ident_utf8,
+                                          genesis::GeAssetPartition::Simulations,
+                                          "sandbox_sim_viewport_v1",
+                                          path_utf8,
+                                          kind_utf8);
+                if (!found) {
+                    found = ResolveSceneAssetPath(scene_ident_utf8,
+                                                  genesis::GeAssetPartition::Worlds,
+                                                  "scene_viewport_v1",
+                                                  path_utf8,
+                                                  kind_utf8);
+                }
+                if (found) {
+                    (void)LoadSceneAssetDescriptor(path_utf8, true);
+                } else {
+                    PushLocalUiLine(std::string("SANDBOX_OPEN status=error scene=") + scene_ident_utf8);
+                    return;
+                }
+            }
+
+            std::string object_utf8;
+            std::string sandbox_utf8;
+            std::string size_utf8;
+            (void)ExtractOptionValue(utf8, "object", object_utf8);
+            (void)ExtractOptionValue(utf8, "sandbox", sandbox_utf8);
+            (void)ExtractOptionValue(utf8, "size", size_utf8);
+            const bool replace_world =
+                (utf8.find("replace=1") != std::string::npos ||
+                 utf8.find("replace=on") != std::string::npos ||
+                 utf8.find("replace=true") != std::string::npos);
+            const uint32_t sandbox_id_u32 =
+                sandbox_utf8.empty() ? 0u : (uint32_t)std::strtoul(sandbox_utf8.c_str(), nullptr, 10);
+            const double size_override_m =
+                size_utf8.empty() ? 0.0 : std::atof(size_utf8.c_str());
+            uint64_t object_id_u64 = 0u;
+            if (!object_utf8.empty()) {
+                object_id_u64 = std::strtoull(object_utf8.c_str(), nullptr, 10);
+            } else if (selected >= 0 && selected < (int)objects.size()) {
+                object_id_u64 = objects[(size_t)selected].object_id_u64;
+            }
+            ActivateSandboxViewportForObject(object_id_u64,
+                                             replace_world,
+                                             sandbox_id_u32,
+                                             size_override_m,
+                                             true);
+            sm.observe_text_line(utf8);
             return;
         }
         if (utf8.rfind("/research_status", 0) == 0 || utf8.rfind("research_status:", 0) == 0) {
@@ -3217,6 +4601,15 @@ void refresh_fixed_cache() {
         e.phase_seed_u64 = s0 ^ (s1 * 2862933555777941757ULL);
 
         (void)sm.object_store.upsert(e);
+        EnsureAssetLibraryInitialized(false);
+        if (asset_library_initialized) {
+            (void)sm.asset_substrate.save_object_asset(&sm,
+                                                       object_id,
+                                                       EW_ANCHOR_KIND_OBJECT,
+                                                       genesis::GeAssetPartition::Actors,
+                                                       false,
+                                                       nullptr);
+        }
 
         // Genesis synthesis enforcement: every imported object must have a voxel volume.
         // The viewport app uses a deterministic local synthesis pass here.
@@ -3263,7 +4656,8 @@ void refresh_fixed_cache() {
 
 
         Object o;
-        o.name_utf8 = path_utf8;
+        o.name_utf8 = e.label_utf8;
+        o.source_path_utf8 = path_utf8;
         o.mesh = std::move(m);
         o.object_id_u64 = object_id;
         o.anchor_id_u32 = 0;
@@ -4944,6 +6338,7 @@ void App::SetSTOVMode(bool enable) {
     stov_mode_ = enable;
     if (scene_) scene_->SetResearchStovMode(enable, false);
     AppendOutputUtf8(enable ? "STOV MODE: ON" : "STOV MODE: OFF");
+    RefreshMainMenuState();
 }
 
 void App::LogSTOVData(const std::vector<float>& phase, const std::vector<float>& oam, const std::vector<int>& winding) {
@@ -5017,6 +6412,152 @@ static void set_dpi_awareness() {
     SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
 }
 
+void App::CreateMainMenuBar() {
+    if (hmenu_main_) return;
+
+    hmenu_main_ = CreateMenu();
+    HMENU file_menu = CreatePopupMenu();
+    HMENU edit_menu = CreatePopupMenu();
+    HMENU ai_menu = CreatePopupMenu();
+    HMENU ai_tabs_menu = CreatePopupMenu();
+    HMENU window_menu = CreatePopupMenu();
+    HMENU tools_menu = CreatePopupMenu();
+    HMENU help_menu = CreatePopupMenu();
+
+    AppendMenuW(file_menu, MF_STRING, kMenuFileNewDefaultScene, L"&New Default Scene");
+    AppendMenuW(file_menu, MF_STRING, kMenuFileOpenScene, L"&Open Scene...");
+    AppendMenuW(file_menu, MF_STRING, kMenuFileOpenSimulation, L"Open &Simulation...");
+    AppendMenuW(file_menu, MF_STRING, kMenuFileSaveSceneAs, L"&Save Scene As...");
+    AppendMenuW(file_menu, MF_STRING, kMenuFileSaveSimulationAs, L"Save Simulation &As...");
+    AppendMenuW(file_menu, MF_SEPARATOR, 0u, nullptr);
+    AppendMenuW(file_menu, MF_STRING, kMenuFileImportObj, L"&Import OBJ...");
+    AppendMenuW(file_menu, MF_STRING, kMenuFileBootstrap, L"&Bootstrap Project");
+    AppendMenuW(file_menu, MF_SEPARATOR, 0u, nullptr);
+    AppendMenuW(file_menu, MF_STRING, kMenuFileExit, L"E&xit");
+
+    AppendMenuW(edit_menu, MF_STRING, kMenuEditUndo, L"&Undo\tCtrl+Z");
+    AppendMenuW(edit_menu, MF_STRING, kMenuEditRedo, L"&Redo\tCtrl+Y");
+    AppendMenuW(edit_menu, MF_SEPARATOR, 0u, nullptr);
+    AppendMenuW(edit_menu, MF_STRING, kMenuEditTranslate, L"&Translate Gizmo\tW");
+    AppendMenuW(edit_menu, MF_STRING, kMenuEditRotate, L"&Rotate Gizmo\tE");
+    AppendMenuW(edit_menu, MF_STRING, kMenuEditFrameSelection, L"&Frame Selection\tF");
+    AppendMenuW(edit_menu, MF_SEPARATOR, 0u, nullptr);
+    AppendMenuW(edit_menu, MF_STRING, kMenuEditSnapToggle, L"&Snap");
+    AppendMenuW(edit_menu, MF_STRING, kMenuEditInputBindings, L"Input &Bindings...\tF9");
+
+    AppendMenuW(ai_tabs_menu, MF_STRING, kMenuAiTabChat, L"&Chat");
+    AppendMenuW(ai_tabs_menu, MF_STRING, kMenuAiTabImages, L"&Images");
+    AppendMenuW(ai_tabs_menu, MF_STRING, kMenuAiTabSimulation, L"&Simulation");
+    AppendMenuW(ai_tabs_menu, MF_STRING, kMenuAiTabMemory, L"&Memory");
+    AppendMenuW(ai_tabs_menu, MF_STRING, kMenuAiTabTools, L"&Tools");
+
+    AppendMenuW(ai_menu, MF_STRING, kMenuAiOpenPanel, L"Open in &Panel");
+    AppendMenuW(ai_menu, MF_STRING, kMenuAiOpenWindow, L"Open in &Window");
+    AppendMenuW(ai_menu, MF_SEPARATOR, 0u, nullptr);
+    AppendMenuW(ai_menu, MF_STRING, kMenuAiProviderChatGpt, L"&ChatGPT Provider");
+    AppendMenuW(ai_menu, MF_STRING, kMenuAiProviderGrok, L"&Grok-style Provider");
+    AppendMenuW(ai_menu, MF_POPUP, (UINT_PTR)ai_tabs_menu, L"&Tabs");
+    AppendMenuW(ai_menu, MF_SEPARATOR, 0u, nullptr);
+    AppendMenuW(ai_menu, MF_STRING, kMenuAiNewChat, L"&New Chat");
+    AppendMenuW(ai_menu, MF_STRING, kMenuAiWebToggle, L"&Web Search");
+    AppendMenuW(ai_menu, MF_STRING, kMenuAiVoiceToggle, L"&Voice Output");
+    AppendMenuW(ai_menu, MF_STRING, kMenuAiEmbedViewport, L"Attach &Simulation View");
+    AppendMenuW(ai_menu, MF_SEPARATOR, 0u, nullptr);
+    AppendMenuW(ai_menu, MF_STRING, kMenuAiOpenScene, L"Open &Scene Asset");
+    AppendMenuW(ai_menu, MF_STRING, kMenuAiOpenSimulation, L"Open Si&m Asset");
+    AppendMenuW(ai_menu, MF_STRING, kMenuAiOpenSandbox, L"Open S&andbox");
+    AppendMenuW(ai_menu, MF_SEPARATOR, 0u, nullptr);
+    AppendMenuW(ai_menu, MF_STRING, kMenuAiStatus, L"AI &Status");
+    AppendMenuW(ai_menu, MF_STRING, kMenuAiDataStatus, L"AI Data St&atus");
+    AppendMenuW(ai_menu, MF_STRING, kMenuAiOpenAiStatus, L"&OpenAI Status");
+    AppendMenuW(ai_menu, MF_STRING, kMenuAiSpeakLast, L"S&peak Last Reply");
+
+    AppendMenuW(window_menu, MF_STRING, kMenuWindowSideChat, L"&ChatGPT Panel");
+    AppendMenuW(window_menu, MF_STRING, kMenuWindowSideScene, L"&Scene Panel");
+    AppendMenuW(window_menu, MF_STRING, kMenuWindowSideResearch, L"&Research Panel");
+    AppendMenuW(window_menu, MF_SEPARATOR, 0u, nullptr);
+    AppendMenuW(window_menu, MF_STRING, kMenuWindowAiWorkspace, L"&AI Workspace");
+    AppendMenuW(window_menu, MF_STRING, kMenuWindowAiDocked, L"AI Workspace in &Panel");
+    AppendMenuW(window_menu, MF_STRING, kMenuWindowAiFloating, L"AI Workspace in &Window");
+    AppendMenuW(window_menu, MF_SEPARATOR, 0u, nullptr);
+    AppendMenuW(window_menu, MF_STRING, kMenuWindowSandboxStatus, L"&Sandbox Status");
+    AppendMenuW(window_menu, MF_STRING, kMenuWindowCloseSandbox, L"&Close Sandbox");
+    AppendMenuW(window_menu, MF_STRING, kMenuWindowAssetLibraryStatus, L"Asset Library &Status");
+    AppendMenuW(window_menu, MF_STRING, kMenuWindowAssetLibraryList, L"Asset Library &List");
+
+    AppendMenuW(tools_menu, MF_STRING, kMenuToolsResearchStatus, L"&Research Status");
+    AppendMenuW(tools_menu, MF_STRING, kMenuToolsProcessStatus, L"&Process Substrate Status");
+    AppendMenuW(tools_menu, MF_STRING, kMenuToolsSubsystemStatus, L"&Subsystem Substrate Status");
+    AppendMenuW(tools_menu, MF_STRING, kMenuToolsRunFrequencySimulation, L"Run Frequency &Simulation");
+    AppendMenuW(tools_menu, MF_STRING, kMenuToolsReloadResearchArchive, L"&Reload Research Archive");
+    AppendMenuW(tools_menu, MF_SEPARATOR, 0u, nullptr);
+    AppendMenuW(tools_menu, MF_STRING, kMenuToolsFrequencyMode, L"Simulation Output: &Frequency");
+    AppendMenuW(tools_menu, MF_STRING, kMenuToolsVectorMode, L"Simulation Output: &Vector");
+    AppendMenuW(tools_menu, MF_STRING, kMenuToolsStovMode, L"&STOV Mode");
+    AppendMenuW(tools_menu, MF_SEPARATOR, 0u, nullptr);
+    AppendMenuW(tools_menu, MF_STRING, kMenuToolsRepoReaderStatus, L"&Repo Reader Status");
+    AppendMenuW(tools_menu, MF_STRING, kMenuToolsMergedRepoStatus, L"&Merged Repo Status");
+
+    AppendMenuW(help_menu, MF_STRING, kMenuHelpAbout, L"&About Genesis Engine");
+    AppendMenuW(help_menu, MF_STRING, kMenuHelpAiQuickstart, L"AI Workspace &Quickstart");
+
+    AppendMenuW(hmenu_main_, MF_POPUP, (UINT_PTR)file_menu, L"&File");
+    AppendMenuW(hmenu_main_, MF_POPUP, (UINT_PTR)edit_menu, L"&Edit");
+    AppendMenuW(hmenu_main_, MF_POPUP, (UINT_PTR)ai_menu, L"&AI");
+    AppendMenuW(hmenu_main_, MF_POPUP, (UINT_PTR)window_menu, L"&Window");
+    AppendMenuW(hmenu_main_, MF_POPUP, (UINT_PTR)tools_menu, L"&Tools");
+    AppendMenuW(hmenu_main_, MF_POPUP, (UINT_PTR)help_menu, L"&Help");
+}
+
+void App::RefreshMainMenuState() {
+    if (!hmenu_main_) return;
+
+    CheckMenuRadioItem(hmenu_main_,
+                       kMenuAiProviderChatGpt,
+                       kMenuAiProviderGrok,
+                       (ai_provider_mode_index_ == AiProviderModeGrokStyle) ? kMenuAiProviderGrok : kMenuAiProviderChatGpt,
+                       MF_BYCOMMAND);
+    CheckMenuRadioItem(hmenu_main_,
+                       kMenuAiTabChat,
+                       kMenuAiTabTools,
+                       kMenuAiTabChat + ai_workspace_active_tab_index_,
+                       MF_BYCOMMAND);
+    CheckMenuRadioItem(hmenu_main_,
+                       kMenuAiOpenPanel,
+                       kMenuAiOpenWindow,
+                       ai_workspace_docked_ ? kMenuAiOpenPanel : kMenuAiOpenWindow,
+                       MF_BYCOMMAND);
+    CheckMenuRadioItem(hmenu_main_,
+                       kMenuWindowAiDocked,
+                       kMenuWindowAiFloating,
+                       ai_workspace_docked_ ? kMenuWindowAiDocked : kMenuWindowAiFloating,
+                       MF_BYCOMMAND);
+    CheckMenuRadioItem(hmenu_main_,
+                       kMenuWindowSideChat,
+                       kMenuWindowSideResearch,
+                       kMenuWindowSideChat + side_panel_active_tab_index_,
+                       MF_BYCOMMAND);
+
+    CheckMenuItem(hmenu_main_, kMenuAiWebToggle, MF_BYCOMMAND | (ai_web_search_enabled_ ? MF_CHECKED : MF_UNCHECKED));
+    CheckMenuItem(hmenu_main_, kMenuAiVoiceToggle, MF_BYCOMMAND | (ai_voice_enabled_ ? MF_CHECKED : MF_UNCHECKED));
+    CheckMenuItem(hmenu_main_, kMenuAiEmbedViewport, MF_BYCOMMAND | (ai_viewport_embedded_ ? MF_CHECKED : MF_UNCHECKED));
+    CheckMenuItem(hmenu_main_, kMenuEditSnapToggle, MF_BYCOMMAND | (editor_snap_enabled_u8_ ? MF_CHECKED : MF_UNCHECKED));
+    CheckMenuRadioItem(hmenu_main_,
+                       kMenuEditTranslate,
+                       kMenuEditRotate,
+                       (editor_gizmo_mode_u8_ == 2u) ? kMenuEditRotate : kMenuEditTranslate,
+                       MF_BYCOMMAND);
+
+    const bool vector_mode = scene_ && scene_->research_output_mode_u8 == 2u;
+    CheckMenuRadioItem(hmenu_main_,
+                       kMenuToolsFrequencyMode,
+                       kMenuToolsVectorMode,
+                       vector_mode ? kMenuToolsVectorMode : kMenuToolsFrequencyMode,
+                       MF_BYCOMMAND);
+    CheckMenuItem(hmenu_main_, kMenuToolsStovMode, MF_BYCOMMAND | (stov_mode_ ? MF_CHECKED : MF_UNCHECKED));
+    if (hwnd_main_) DrawMenuBar(hwnd_main_);
+}
+
 void App::CreateMainWindow(HINSTANCE hInst) {
     set_dpi_awareness();
     ew_register_side_panel_tab_class(hInst, &App::SideTabWndProcThunk);
@@ -5028,8 +6569,9 @@ void App::CreateMainWindow(HINSTANCE hInst) {
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
     RegisterClassW(&wc);
 
+    CreateMainMenuBar();
     RECT r{0,0,cfg_.initial_width,cfg_.initial_height};
-    AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
+    AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, TRUE);
 
     hwnd_main_ = CreateWindowW(
         wc.lpszClassName,
@@ -5037,7 +6579,7 @@ void App::CreateMainWindow(HINSTANCE hInst) {
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT,
         r.right - r.left, r.bottom - r.top,
-        nullptr, nullptr, hInst, this);
+        nullptr, hmenu_main_, hInst, this);
 
     ShowWindow(hwnd_main_, SW_SHOW);
 }
@@ -5059,6 +6601,11 @@ void App::CreateChildWindows() {
                                 client_w_ - kSidePanelWidthPx, 0, kSidePanelWidthPx, client_h_,
                                 hwnd_main_, (HMENU)1002, hinst, nullptr);
 
+    hwnd_ai_workspace_ = CreateWindowW(L"STATIC", L"",
+                                       WS_CHILD | WS_VISIBLE | WS_BORDER,
+                                       0, 0, 10, 10,
+                                       hwnd_panel_, (HMENU)2052, hinst, nullptr);
+
     for (int i = 0; i < SidePanelTabCount; ++i) {
         hwnd_side_tabs_[i] = CreateWindowW(L"GenesisAiSidePanelTab",
                                            kSidePanelTabLabels[i],
@@ -5070,16 +6617,104 @@ void App::CreateChildWindows() {
                                            this);
     }
 
-    // Controls in panel
-    hwnd_input_ = CreateWindowW(L"EDIT", L"",
-                                WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT | ES_AUTOVSCROLL,
-                                10, 10, 400, 24,
-                                hwnd_panel_, (HMENU)2001, hinst, nullptr);
+    hwnd_ai_status_ = CreateWindowW(L"STATIC", L"Genesis AI workspace",
+                                    WS_CHILD | WS_VISIBLE,
+                                    10, 10, 10, 10,
+                                    hwnd_ai_workspace_, nullptr, hinst, nullptr);
 
-    hwnd_send_ = CreateWindowW(L"BUTTON", L"Ask GPT",
+    hwnd_ai_provider_chatgpt_ = CreateWindowW(L"BUTTON", L"ChatGPT",
+                                              WS_CHILD | WS_VISIBLE,
+                                              10, 10, 10, 10,
+                                              hwnd_ai_workspace_, (HMENU)kAiButtonProviderChatGpt, hinst, nullptr);
+    hwnd_ai_provider_grok_ = CreateWindowW(L"BUTTON", L"Grok-style",
+                                           WS_CHILD | WS_VISIBLE,
+                                           10, 10, 10, 10,
+                                           hwnd_ai_workspace_, (HMENU)kAiButtonProviderGrok, hinst, nullptr);
+    hwnd_ai_web_toggle_ = CreateWindowW(L"BUTTON", L"Web On",
+                                        WS_CHILD | WS_VISIBLE,
+                                        10, 10, 10, 10,
+                                        hwnd_ai_workspace_, (HMENU)kAiButtonWebToggle, hinst, nullptr);
+    hwnd_ai_new_chat_ = CreateWindowW(L"BUTTON", L"New Chat",
+                                      WS_CHILD | WS_VISIBLE,
+                                      10, 10, 10, 10,
+                                      hwnd_ai_workspace_, (HMENU)kAiButtonNewChat, hinst, nullptr);
+    hwnd_ai_dock_toggle_ = CreateWindowW(L"BUTTON", L"Undock",
+                                         WS_CHILD | WS_VISIBLE,
+                                         10, 10, 10, 10,
+                                         hwnd_ai_workspace_, (HMENU)kAiButtonDockToggle, hinst, nullptr);
+
+    for (int i = 0; i < kAiWorkspaceTabCount; ++i) {
+        hwnd_ai_tabs_[i] = CreateWindowW(L"BUTTON",
+                                         kAiWorkspaceTabLabels[i],
+                                         WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                                         0, 0, 10, 10,
+                                         hwnd_ai_workspace_,
+                                         (HMENU)(INT_PTR)kAiWorkspaceTabIds[i],
+                                         hinst,
+                                         nullptr);
+    }
+
+    hwnd_ai_history_ = CreateWindowW(L"LISTBOX", L"",
+                                     WS_CHILD | WS_VISIBLE | WS_BORDER | LBS_NOTIFY,
+                                     10, 10, 10, 10,
+                                     hwnd_ai_workspace_, (HMENU)kAiListHistory, hinst, nullptr);
+
+    hwnd_input_ = CreateWindowW(L"EDIT", L"",
+                                WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT | ES_MULTILINE |
+                                    ES_AUTOVSCROLL | WS_VSCROLL,
+                                10, 10, 10, 10,
+                                hwnd_ai_workspace_, (HMENU)2001, hinst, nullptr);
+
+    hwnd_send_ = CreateWindowW(L"BUTTON", L"Send",
                                WS_CHILD | WS_VISIBLE,
-                               10, 40, 80, 26,
-                               hwnd_panel_, (HMENU)2002, hinst, nullptr);
+                               10, 10, 10, 10,
+                               hwnd_ai_workspace_, (HMENU)2002, hinst, nullptr);
+
+    hwnd_ai_primary_action_ = CreateWindowW(L"BUTTON", L"AI Status",
+                                            WS_CHILD | WS_VISIBLE,
+                                            10, 10, 10, 10,
+                                            hwnd_ai_workspace_, (HMENU)kAiButtonPrimaryAction, hinst, nullptr);
+    hwnd_ai_secondary_action_ = CreateWindowW(L"BUTTON", L"Sandbox",
+                                              WS_CHILD | WS_VISIBLE,
+                                              10, 10, 10, 10,
+                                              hwnd_ai_workspace_, (HMENU)kAiButtonSecondaryAction, hinst, nullptr);
+
+    hwnd_ai_asset_label_ = CreateWindowW(L"STATIC", L"Asset / Scene",
+                                         WS_CHILD | WS_VISIBLE,
+                                         10, 10, 10, 10,
+                                         hwnd_ai_workspace_, nullptr, hinst, nullptr);
+    hwnd_ai_asset_name_ = CreateWindowW(L"EDIT", L"default_sandbox_sim",
+                                        WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT,
+                                        10, 10, 10, 10,
+                                        hwnd_ai_workspace_, (HMENU)kAiEditAssetName, hinst, nullptr);
+    hwnd_ai_scene_action_ = CreateWindowW(L"BUTTON", L"Open Scene",
+                                          WS_CHILD | WS_VISIBLE,
+                                          10, 10, 10, 10,
+                                          hwnd_ai_workspace_, (HMENU)kAiButtonOpenScene, hinst, nullptr);
+    hwnd_ai_sim_action_ = CreateWindowW(L"BUTTON", L"Open Sim",
+                                        WS_CHILD | WS_VISIBLE,
+                                        10, 10, 10, 10,
+                                        hwnd_ai_workspace_, (HMENU)kAiButtonOpenSim, hinst, nullptr);
+    hwnd_ai_sandbox_action_ = CreateWindowW(L"BUTTON", L"Open Sandbox",
+                                            WS_CHILD | WS_VISIBLE,
+                                            10, 10, 10, 10,
+                                            hwnd_ai_workspace_, (HMENU)kAiButtonOpenSandbox, hinst, nullptr);
+    hwnd_ai_status_action_ = CreateWindowW(L"BUTTON", L"Substrate",
+                                           WS_CHILD | WS_VISIBLE,
+                                           10, 10, 10, 10,
+                                           hwnd_ai_workspace_, (HMENU)kAiButtonStatus, hinst, nullptr);
+    hwnd_ai_voice_toggle_ = CreateWindowW(L"BUTTON", L"Voice On",
+                                          WS_CHILD | WS_VISIBLE,
+                                          10, 10, 10, 10,
+                                          hwnd_ai_workspace_, (HMENU)kAiButtonVoiceToggle, hinst, nullptr);
+    hwnd_ai_speak_last_ = CreateWindowW(L"BUTTON", L"Speak Last",
+                                        WS_CHILD | WS_VISIBLE,
+                                        10, 10, 10, 10,
+                                        hwnd_ai_workspace_, (HMENU)kAiButtonSpeakLast, hinst, nullptr);
+    hwnd_ai_embed_sim_ = CreateWindowW(L"BUTTON", L"Attach Sim View",
+                                       WS_CHILD | WS_VISIBLE,
+                                       10, 10, 10, 10,
+                                       hwnd_ai_workspace_, (HMENU)kAiButtonEmbedSim, hinst, nullptr);
 
     hwnd_import_ = CreateWindowW(L"BUTTON", L"Import OBJ",
                                  WS_CHILD | WS_VISIBLE,
@@ -5148,13 +6783,16 @@ hwnd_redo_      = CreateWindowW(L"BUTTON", L"Redo", WS_CHILD | WS_VISIBLE, 262, 
 
     hwnd_output_ = CreateWindowW(L"EDIT", L"",
                                  WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL,
-                                 10, 490, 400, client_h_ - 500,
-                                 hwnd_panel_, (HMENU)2005, hinst, nullptr);
+                                 10, 10, 10, 10,
+                                 hwnd_ai_workspace_, (HMENU)2005, hinst, nullptr);
     if (stov_mode_) {
         SendMessageW(hwnd_stov_toggle_, BM_SETCHECK, BST_CHECKED, 0);
     }
     SetSidePanelActiveTab(SidePanelTabChatGpt, false);
     LayoutChildren(client_w_, client_h_);
+    RefreshAiWorkspaceStatus();
+    RefreshAiWorkspaceHistory();
+    ResetAiConversation();
 }
 
 void App::LayoutChildren(int w, int h) {
@@ -5179,9 +6817,12 @@ void App::LayoutChildren(int w, int h) {
     const bool show_chat = (side_panel_active_tab_index_ == SidePanelTabChatGpt);
     const bool show_scene = (side_panel_active_tab_index_ == SidePanelTabScene);
     const bool show_research = (side_panel_active_tab_index_ == SidePanelTabResearch);
+    const bool embed_viewport = ai_viewport_embedded_ && (!ai_workspace_docked_ || show_chat);
 
-    show(hwnd_input_, show_chat);
-    show(hwnd_send_, show_chat);
+    if (GetParent(hwnd_viewport_) != (embed_viewport ? hwnd_ai_workspace_ : hwnd_main_)) {
+        SetParent(hwnd_viewport_, embed_viewport ? hwnd_ai_workspace_ : hwnd_main_);
+        resized_ = true;
+    }
 
     show(hwnd_import_, show_scene);
     show(hwnd_bootstrap_, show_scene);
@@ -5228,16 +6869,29 @@ void App::LayoutChildren(int w, int h) {
     show(hwnd_stream_hz_, show_research);
     show(hwnd_apply_stream_hz_, show_research);
 
-    SetWindowTextW(hwnd_send_, show_chat ? L"Ask GPT" : L"Send");
-
     const int content_top = tab_top + tab_h + 12;
-    int output_top = 0;
 
-    if (show_chat) {
-        MoveWindow(hwnd_input_, pad, content_top, panel_w - pad * 2, 28, TRUE);
-        MoveWindow(hwnd_send_, panel_w - pad - 116, content_top + 34, 116, 28, TRUE);
-        output_top = content_top + 74;
-    } else if (show_scene) {
+    if (ai_workspace_docked_) {
+        if (GetParent(hwnd_ai_workspace_) != hwnd_panel_) {
+            SetParent(hwnd_ai_workspace_, hwnd_panel_);
+        }
+        show(hwnd_ai_workspace_, show_chat);
+        if (show_chat) {
+            LayoutAiWorkspace(pad, content_top, panel_w - pad * 2, h - content_top - pad);
+        }
+    } else {
+        if (GetParent(hwnd_ai_workspace_) != hwnd_main_) {
+            SetParent(hwnd_ai_workspace_, hwnd_main_);
+        }
+        show(hwnd_ai_workspace_, true);
+        LayoutAiWorkspace(12, 12, std::max(680, w - panel_w - 24), std::max(540, h - 24));
+    }
+
+    if (!embed_viewport) {
+        MoveWindow(hwnd_viewport_, 0, 0, w - panel_w, h, TRUE);
+    }
+
+    if (show_scene) {
         MoveWindow(hwnd_import_, pad, content_top, 112, 28, TRUE);
         MoveWindow(hwnd_bootstrap_, pad + 120, content_top, panel_w - (pad * 2 + 120), 28, TRUE);
         MoveWindow(hwnd_objlist_, pad, content_top + 38, panel_w - pad * 2, 160, TRUE);
@@ -5269,8 +6923,6 @@ void App::LayoutChildren(int w, int h) {
         MoveWindow(hwnd_axis_z_, pad + 150, row2, 28, 24, TRUE);
         MoveWindow(hwnd_undo_, pad + 186, row2, 60, 24, TRUE);
         MoveWindow(hwnd_redo_, pad + 252, row2, 60, 24, TRUE);
-
-        output_top = row2 + 38;
     } else {
         MoveWindow(hwnd_lbl_photon_sim_, pad, content_top, 90, 18, TRUE);
         MoveWindow(hwnd_mode_freq_, pad, content_top + 22, 86, 24, TRUE);
@@ -5295,13 +6947,541 @@ void App::LayoutChildren(int w, int h) {
         MoveWindow(hwnd_lbl_stream_hz_, pad + 212, row1 + 4, 54, 18, TRUE);
         MoveWindow(hwnd_stream_hz_, pad + 270, row1, 56, 24, TRUE);
         MoveWindow(hwnd_apply_stream_hz_, pad + 332, row1, 78, 24, TRUE);
+    }
+}
 
-        output_top = row1 + 38;
+void App::LayoutAiWorkspace(int x, int y, int w, int h) {
+    if (!hwnd_ai_workspace_) return;
+    MoveWindow(hwnd_ai_workspace_, x, y, std::max(320, w), std::max(260, h), TRUE);
+
+    const int local_w = std::max(320, w);
+    const int local_h = std::max(260, h);
+    const int pad = 12;
+    const int header_h = 28;
+    const int subtab_h = 28;
+    const int quick_h = 24;
+    const int quick_count = 7;
+    const int history_w = std::max(120, std::min(160, local_w / 4));
+    const int content_x = pad + history_w + 12;
+    const int content_w = std::max(180, local_w - content_x - pad);
+
+    MoveWindow(hwnd_ai_status_, pad, pad, local_w - pad * 2, 20, TRUE);
+    MoveWindow(hwnd_ai_provider_chatgpt_, pad, pad + 24, 86, header_h, TRUE);
+    MoveWindow(hwnd_ai_provider_grok_, pad + 92, pad + 24, 94, header_h, TRUE);
+    MoveWindow(hwnd_ai_web_toggle_, pad + 192, pad + 24, 78, header_h, TRUE);
+    MoveWindow(hwnd_ai_new_chat_, local_w - pad - 178, pad + 24, 82, header_h, TRUE);
+    MoveWindow(hwnd_ai_dock_toggle_, local_w - pad - 90, pad + 24, 90, header_h, TRUE);
+
+    const int tab_y = pad + 60;
+    const int tab_gap = 6;
+    const int tab_w = std::max(68, (content_w - tab_gap * (kAiWorkspaceTabCount - 1)) / kAiWorkspaceTabCount);
+    for (int i = 0; i < kAiWorkspaceTabCount; ++i) {
+        MoveWindow(hwnd_ai_tabs_[i], content_x + i * (tab_w + tab_gap), tab_y, tab_w, subtab_h, TRUE);
     }
 
-    output_top = std::max(output_top, content_top + 70);
-    output_top = std::min(output_top, h - 120);
-    MoveWindow(hwnd_output_, pad, output_top, panel_w - 20, std::max(110, h - output_top - 10), TRUE);
+    MoveWindow(hwnd_ai_history_, pad, tab_y, history_w, std::max(120, local_h - tab_y - pad - quick_h * quick_count - 28), TRUE);
+    int quick_y = local_h - pad - quick_h * quick_count - 20;
+    MoveWindow(hwnd_ai_scene_action_, pad, quick_y, history_w, quick_h, TRUE);
+    MoveWindow(hwnd_ai_sim_action_, pad, quick_y + quick_h + 4, history_w, quick_h, TRUE);
+    MoveWindow(hwnd_ai_sandbox_action_, pad, quick_y + (quick_h + 4) * 2, history_w, quick_h, TRUE);
+    MoveWindow(hwnd_ai_status_action_, pad, quick_y + (quick_h + 4) * 3, history_w, quick_h, TRUE);
+    MoveWindow(hwnd_ai_voice_toggle_, pad, quick_y + (quick_h + 4) * 4, history_w, quick_h, TRUE);
+    MoveWindow(hwnd_ai_speak_last_, pad, quick_y + (quick_h + 4) * 5, history_w, quick_h, TRUE);
+    MoveWindow(hwnd_ai_embed_sim_, pad, quick_y + (quick_h + 4) * 6, history_w, quick_h, TRUE);
+
+    const int action_y = tab_y + subtab_h + 8;
+    MoveWindow(hwnd_ai_primary_action_, content_x, action_y, 128, 26, TRUE);
+    MoveWindow(hwnd_ai_secondary_action_, content_x + 136, action_y, 128, 26, TRUE);
+
+    const bool show_asset_controls =
+        (ai_workspace_active_tab_index_ == AiWorkspaceTabImages ||
+         ai_workspace_active_tab_index_ == AiWorkspaceTabSimulation ||
+         ai_workspace_active_tab_index_ == AiWorkspaceTabTools);
+    ShowWindow(hwnd_ai_asset_label_, show_asset_controls ? SW_SHOW : SW_HIDE);
+    ShowWindow(hwnd_ai_asset_name_, show_asset_controls ? SW_SHOW : SW_HIDE);
+
+    if (show_asset_controls) {
+        MoveWindow(hwnd_ai_asset_label_, content_x + 276, action_y + 4, 82, 18, TRUE);
+        MoveWindow(hwnd_ai_asset_name_, content_x + 360, action_y, std::max(120, content_w - 360), 26, TRUE);
+    }
+
+    const bool embed_viewport = ShouldEmbedViewportInAiWorkspace();
+    const int output_y = action_y + 34;
+    const int viewport_h = embed_viewport ? std::max(170, (ai_workspace_active_tab_index_ == AiWorkspaceTabSimulation)
+                                                             ? (local_h / 2 - 48)
+                                                             : (local_h / 3))
+                                          : 0;
+    const int output_h = embed_viewport
+                             ? std::max(96, local_h - output_y - 124 - viewport_h - 8)
+                             : std::max(180, local_h - output_y - 124);
+    MoveWindow(hwnd_output_, content_x, output_y, content_w, output_h, TRUE);
+
+    const int viewport_y = output_y + output_h + 8;
+    if (embed_viewport) {
+        MoveWindow(hwnd_viewport_, content_x, viewport_y, content_w, viewport_h, TRUE);
+        resized_ = true;
+    }
+
+    const int composer_y = output_y + output_h + (embed_viewport ? viewport_h + 16 : 8);
+    const int button_y = composer_y + 64;
+    MoveWindow(hwnd_input_, content_x, composer_y, content_w, 58, TRUE);
+    MoveWindow(hwnd_send_, content_x, button_y, 108, 28, TRUE);
+    MoveWindow(hwnd_ai_secondary_action_, content_x + 116, button_y, 128, 28, TRUE);
+    MoveWindow(hwnd_ai_primary_action_, content_x + 252, button_y, 128, 28, TRUE);
+
+    RefreshAiWorkspaceStatus();
+}
+
+void App::SetAiWorkspaceDocked(bool docked) {
+    if (ai_workspace_docked_ == docked) return;
+    ai_workspace_docked_ = docked;
+    if (docked) {
+        SetSidePanelActiveTab(SidePanelTabChatGpt, false);
+    }
+    if (client_w_ > 0 && client_h_ > 0) {
+        LayoutChildren(client_w_, client_h_);
+    }
+    RefreshAiWorkspaceStatus();
+}
+
+void App::SetAiWorkspaceTab(int tab_index) {
+    if (tab_index < 0) tab_index = 0;
+    if (tab_index >= AiWorkspaceTabCount) tab_index = AiWorkspaceTabCount - 1;
+    if (ai_workspace_active_tab_index_ == tab_index) return;
+    ai_workspace_active_tab_index_ = tab_index;
+    if (client_w_ > 0 && client_h_ > 0) {
+        LayoutChildren(client_w_, client_h_);
+    }
+    RefreshAiWorkspaceStatus();
+}
+
+void App::ResetAiConversation() {
+    ai_output_history_utf8_.clear();
+    if (hwnd_output_) SetWindowTextW(hwnd_output_, L"");
+    AppendOutputUtf8("AI WORKSPACE: ready");
+    AppendOutputUtf8("AI WORKSPACE: tabs=Chat Images Sim Memory Tools");
+    AppendOutputUtf8("AI WORKSPACE: use Sandbox controls to open scene or simulation assets");
+}
+
+void App::RefreshAiWorkspaceStatus() {
+    const wchar_t* provider_label =
+        (ai_provider_mode_index_ == AiProviderModeGrokStyle) ? L"Grok-style" : L"ChatGPT";
+    const wchar_t* tab_label = L"Chat";
+    switch (ai_workspace_active_tab_index_) {
+        case AiWorkspaceTabImages: tab_label = L"Images"; break;
+        case AiWorkspaceTabSimulation: tab_label = L"Simulation"; break;
+        case AiWorkspaceTabMemory: tab_label = L"Memory"; break;
+        case AiWorkspaceTabTools: tab_label = L"Tools"; break;
+        default: break;
+    }
+
+    std::wostringstream oss;
+    oss << L"Genesis AI | provider=" << provider_label
+        << L" | tab=" << tab_label
+        << L" | web=" << (ai_web_search_enabled_ ? L"on" : L"off")
+        << L" | voice=" << (ai_voice_enabled_ ? L"on" : L"off")
+        << L" | sim_view=" << (ai_viewport_embedded_ ? L"embedded" : L"main")
+        << L" | docked=" << (ai_workspace_docked_ ? L"panel" : L"window")
+        << L" | asset=" << utf8_to_wide(ai_selected_asset_utf8_);
+    if (hwnd_ai_status_) {
+        SetWindowTextW(hwnd_ai_status_, oss.str().c_str());
+    }
+
+    if (hwnd_ai_provider_chatgpt_) {
+        SetWindowTextW(hwnd_ai_provider_chatgpt_,
+                       (ai_provider_mode_index_ == AiProviderModeChatGpt) ? L"[ChatGPT]" : L"ChatGPT");
+    }
+    if (hwnd_ai_provider_grok_) {
+        SetWindowTextW(hwnd_ai_provider_grok_,
+                       (ai_provider_mode_index_ == AiProviderModeGrokStyle) ? L"[Grok-style]" : L"Grok-style");
+    }
+    if (hwnd_ai_web_toggle_) {
+        SetWindowTextW(hwnd_ai_web_toggle_, ai_web_search_enabled_ ? L"Web On" : L"Web Off");
+    }
+    if (hwnd_ai_dock_toggle_) {
+        SetWindowTextW(hwnd_ai_dock_toggle_, ai_workspace_docked_ ? L"Open Window" : L"Dock Panel");
+    }
+    if (hwnd_ai_voice_toggle_) {
+        SetWindowTextW(hwnd_ai_voice_toggle_, ai_voice_enabled_ ? L"Voice On" : L"Voice Off");
+    }
+    if (hwnd_ai_embed_sim_) {
+        SetWindowTextW(hwnd_ai_embed_sim_, ai_viewport_embedded_ ? L"Detach Sim View" : L"Attach Sim View");
+    }
+
+    for (int i = 0; i < AiWorkspaceTabCount; ++i) {
+        if (!hwnd_ai_tabs_[i]) continue;
+        const std::wstring label =
+            (i == ai_workspace_active_tab_index_)
+                ? std::wstring(L"> ") + kAiWorkspaceTabLabels[i] + L" <"
+                : std::wstring(kAiWorkspaceTabLabels[i]);
+        SetWindowTextW(hwnd_ai_tabs_[i], label.c_str());
+    }
+
+    if (hwnd_send_) {
+        const wchar_t* send_label = L"Send";
+        if (ai_workspace_active_tab_index_ == AiWorkspaceTabImages) send_label = L"Draft Image";
+        else if (ai_workspace_active_tab_index_ == AiWorkspaceTabSimulation) send_label = L"Run Sim";
+        else if (ai_workspace_active_tab_index_ == AiWorkspaceTabMemory) send_label = L"Store Note";
+        else if (ai_workspace_active_tab_index_ == AiWorkspaceTabTools) send_label = L"Run Tool";
+        SetWindowTextW(hwnd_send_, send_label);
+    }
+    if (hwnd_ai_primary_action_) {
+        const wchar_t* label = L"AI Status";
+        if (ai_workspace_active_tab_index_ == AiWorkspaceTabImages) label = L"Image -> Sim";
+        else if (ai_workspace_active_tab_index_ == AiWorkspaceTabSimulation) label = L"Sandbox";
+        else if (ai_workspace_active_tab_index_ == AiWorkspaceTabMemory) label = L"AI Memory";
+        else if (ai_workspace_active_tab_index_ == AiWorkspaceTabTools) label = L"OpenAI";
+        SetWindowTextW(hwnd_ai_primary_action_, label);
+    }
+    if (hwnd_ai_secondary_action_) {
+        const wchar_t* label = L"Sandbox";
+        if (ai_workspace_active_tab_index_ == AiWorkspaceTabImages) label = L"Asset Status";
+        else if (ai_workspace_active_tab_index_ == AiWorkspaceTabSimulation) label = L"Sim Status";
+        else if (ai_workspace_active_tab_index_ == AiWorkspaceTabMemory) label = L"AI Data";
+        else if (ai_workspace_active_tab_index_ == AiWorkspaceTabTools) label = L"Research";
+        SetWindowTextW(hwnd_ai_secondary_action_, label);
+    }
+    RefreshMainMenuState();
+}
+
+void App::RefreshAiWorkspaceHistory() {
+    if (!hwnd_ai_history_) return;
+    SendMessageW(hwnd_ai_history_, LB_RESETCONTENT, 0, 0);
+    if (ai_prompt_history_utf8_.empty()) {
+        SendMessageW(hwnd_ai_history_, LB_ADDSTRING, 0, (LPARAM)L"Ask about a scene");
+        SendMessageW(hwnd_ai_history_, LB_ADDSTRING, 0, (LPARAM)L"Generate a sandbox sim");
+        SendMessageW(hwnd_ai_history_, LB_ADDSTRING, 0, (LPARAM)L"Inspect AI substrate");
+        return;
+    }
+    for (auto it = ai_prompt_history_utf8_.rbegin(); it != ai_prompt_history_utf8_.rend(); ++it) {
+        SendMessageW(hwnd_ai_history_, LB_ADDSTRING, 0, (LPARAM)utf8_to_wide(*it).c_str());
+    }
+}
+
+void App::RefreshAiWorkspaceOutput() {
+    if (!hwnd_output_) return;
+    std::wstring all;
+    for (const std::string& line : ai_output_history_utf8_) {
+        all.append(utf8_to_wide(line));
+        all.append(L"\r\n");
+    }
+    SetWindowTextW(hwnd_output_, all.c_str());
+    const int len = GetWindowTextLengthW(hwnd_output_);
+    SendMessageW(hwnd_output_, EM_SETSEL, (WPARAM)len, (LPARAM)len);
+}
+
+std::string App::ReadWindowTextUtf8(HWND hwnd) const {
+    if (!hwnd) return std::string();
+    const int len = GetWindowTextLengthW(hwnd);
+    if (len <= 0) return std::string();
+    std::wstring buf((size_t)len + 1u, L'\0');
+    GetWindowTextW(hwnd, buf.data(), len + 1);
+    buf.resize((size_t)len);
+    return wide_to_utf8(buf);
+}
+
+void App::SetWindowTextUtf8(HWND hwnd, const std::string& utf8) const {
+    if (!hwnd) return;
+    SetWindowTextW(hwnd, utf8_to_wide(utf8).c_str());
+}
+
+bool App::ShouldEmbedViewportInAiWorkspace() const {
+    if (!ai_viewport_embedded_) return false;
+    if (!hwnd_ai_workspace_ || !hwnd_viewport_) return false;
+    if (ai_workspace_docked_) {
+        return side_panel_active_tab_index_ == SidePanelTabChatGpt;
+    }
+    return true;
+}
+
+void App::SetAiViewportEmbedded(bool enabled) {
+    if (ai_viewport_embedded_ == enabled) return;
+    ai_viewport_embedded_ = enabled;
+    if (enabled && ai_workspace_docked_) {
+        SetSidePanelActiveTab(SidePanelTabChatGpt, false);
+    }
+    if (client_w_ > 0 && client_h_ > 0) {
+        LayoutChildren(client_w_, client_h_);
+    }
+    RefreshAiWorkspaceStatus();
+}
+
+void App::SpeakAiText(const std::string& utf8) {
+    if (!scene_) {
+        AppendOutputUtf8("AI VOICE ERR: runtime scene unavailable");
+        return;
+    }
+    const std::string text = ew_trim_ascii_copy(utf8);
+    if (text.empty()) {
+        AppendOutputUtf8("AI VOICE: empty");
+        return;
+    }
+
+    std::vector<genesis::PhonemeSpan> phones;
+    std::vector<genesis::PauseKind> pause_kinds;
+    std::vector<uint8_t> pause_strength_u8;
+    if (!genesis::ge_text_to_phones_english_with_pause_meta(text, &phones, &pause_kinds, &pause_strength_u8) ||
+        phones.empty()) {
+        AppendOutputUtf8("AI VOICE ERR: g2p_failed");
+        return;
+    }
+
+    genesis::VoiceSynthConfig cfg{};
+    cfg.sample_rate_hz_u32 = 48000u;
+    cfg.amp_q15_i16 = 12500;
+    cfg.phones_per_sec_q16_u32 = 4u << 16;
+    cfg.f0_hz_q16_u32 = (ai_provider_mode_index_ == AiProviderModeGrokStyle) ? (118u << 16) : (132u << 16);
+
+    const std::vector<genesis::VoiceProsodyControl> controls =
+        genesis::ge_voice_plan_prosody_with_pause_meta(phones, cfg, pause_kinds, pause_strength_u8, text);
+    genesis::TtsResult tts =
+        genesis::ge_synthesize_phones_to_wav_controlled(phones, controls, cfg);
+    if (!tts.ok || tts.wav.samples_i16.empty()) {
+        AppendOutputUtf8(std::string("AI VOICE ERR: ") + (tts.info.empty() ? "tts_failed" : tts.info));
+        return;
+    }
+
+    scene_->sm.inject_audio_pcm16(tts.wav.samples_i16.data(),
+                                  (int)tts.wav.samples_i16.size(),
+                                  1);
+    AppendOutputUtf8("AI VOICE: emitted");
+}
+
+void App::SubmitAiWorkspaceCommand(const std::string& command_utf8) {
+    const std::string command = ew_trim_ascii_copy(command_utf8);
+    if (command.empty()) return;
+    AppendOutputUtf8("AI CMD> " + command);
+    if (scene_) {
+        scene_->SubmitUiLine(command);
+    } else {
+        AppendOutputUtf8("AI CMD ERR: runtime scene unavailable");
+    }
+}
+
+void App::OpenAiWorkspaceAsset(bool simulation_asset, bool sandbox_open) {
+    std::string asset = ew_trim_ascii_copy(ReadWindowTextUtf8(hwnd_ai_asset_name_));
+    if (asset.empty()) asset = ai_selected_asset_utf8_;
+    ai_selected_asset_utf8_ = asset;
+    SetWindowTextUtf8(hwnd_ai_asset_name_, ai_selected_asset_utf8_);
+    RefreshAiWorkspaceStatus();
+    if (sandbox_open) {
+        SubmitAiWorkspaceCommand(std::string("SANDBOX_OPEN: scene=") + asset + " replace=1");
+    } else if (simulation_asset) {
+        SubmitAiWorkspaceCommand(std::string("SIM_OPEN:") + asset);
+    } else {
+        SubmitAiWorkspaceCommand(std::string("SCENE_OPEN:") + asset);
+    }
+}
+
+void App::OpenSceneAssetDialog(bool simulation_asset) {
+    if (!scene_) return;
+    scene_->EnsureAssetLibraryInitialized(false);
+
+    wchar_t file[4096] = {0};
+    const std::filesystem::path initial_dir =
+        scene_->AssetLibraryProjectRootPath() /
+        (simulation_asset ? "Simulations" : "Worlds");
+    const std::wstring initial_dir_w = initial_dir.wstring();
+
+    OPENFILENAMEW ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = hwnd_main_;
+    ofn.lpstrFilter = L"Genesis Scene Assets\0*.gevsd\0All Files\0*.*\0";
+    ofn.lpstrFile = file;
+    ofn.nMaxFile = 4096;
+    ofn.lpstrInitialDir = initial_dir_w.c_str();
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+    if (!GetOpenFileNameW(&ofn)) return;
+
+    const std::string path_utf8 = wide_to_utf8(file);
+    const bool ok = scene_->LoadSceneAssetDescriptor(path_utf8, true);
+    if (ok && simulation_asset && !scene_->sandbox_viewport_active && !scene_->objects.empty()) {
+        const uint64_t oid =
+            (scene_->selected >= 0 && scene_->selected < (int)scene_->objects.size())
+                ? scene_->objects[(size_t)scene_->selected].object_id_u64
+                : scene_->objects[0].object_id_u64;
+        scene_->ActivateSandboxViewportForObject(oid, true, 0u, 0.0, true);
+    }
+    if (ok) {
+        RefreshMainMenuState();
+    } else {
+        MessageBoxW(hwnd_main_,
+                    simulation_asset ? L"Failed to open simulation asset." : L"Failed to open scene asset.",
+                    L"Genesis Engine",
+                    MB_ICONWARNING | MB_OK);
+    }
+}
+
+void App::SaveSceneAssetDialog(bool simulation_asset) {
+    if (!scene_) return;
+    scene_->EnsureAssetLibraryInitialized(false);
+
+    wchar_t file[4096] = {0};
+    const std::filesystem::path initial_dir =
+        scene_->AssetLibraryProjectRootPath() /
+        (simulation_asset ? "Simulations" : "Worlds");
+    const std::wstring initial_dir_w = initial_dir.wstring();
+    const std::wstring default_name = simulation_asset ? L"sandbox_sim_asset.gevsd" : L"scene_asset.gevsd";
+    wcsncpy_s(file, default_name.c_str(), _TRUNCATE);
+
+    OPENFILENAMEW ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = hwnd_main_;
+    ofn.lpstrFilter = L"Genesis Scene Assets\0*.gevsd\0All Files\0*.*\0";
+    ofn.lpstrDefExt = L"gevsd";
+    ofn.lpstrFile = file;
+    ofn.nMaxFile = 4096;
+    ofn.lpstrInitialDir = initial_dir_w.c_str();
+    ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
+    if (!GetSaveFileNameW(&ofn)) return;
+
+    const std::filesystem::path chosen_path(file);
+    const std::string label_utf8 =
+        chosen_path.stem().string().empty()
+            ? (simulation_asset ? std::string("sandbox_sim_asset") : std::string("scene_asset"))
+            : chosen_path.stem().string();
+    (void)scene_->SaveSceneAssetDescriptor(label_utf8,
+                                           simulation_asset ? genesis::GeAssetPartition::Simulations
+                                                            : genesis::GeAssetPartition::Worlds,
+                                           true);
+    RefreshMainMenuState();
+}
+
+void App::ShowEditorAboutDialog() const {
+    const wchar_t* text =
+        L"Genesis Engine\n\n"
+        L"Physics-first editor shell with substrate-driven simulation,\n"
+        L"research-calibrated GPU pulse control, and an integrated AI workspace.\n\n"
+        L"Top-bar menus mirror the Unreal-style editor layout where it applies:\n"
+        L"File, Edit, AI, Window, Tools, and Help.";
+    MessageBoxW(hwnd_main_, text, L"About Genesis Engine", MB_OK | MB_ICONINFORMATION);
+}
+
+void App::ShowAiQuickstartDialog() const {
+    const wchar_t* text =
+        L"AI Workspace Quickstart\n\n"
+        L"1. Use AI > Open in Panel or Open in Window.\n"
+        L"2. Pick Chat, Images, Simulation, Memory, or Tools.\n"
+        L"3. Toggle Web Search, Voice Output, or Attach Simulation View.\n"
+        L"4. Open a scene or sandbox asset directly from the AI menu.\n"
+        L"5. Use Window > ChatGPT/Scene/Research Panel to swap editor focus.\n\n"
+        L"The AI workspace is wired to the same substrate and sandbox systems as the editor.";
+    MessageBoxW(hwnd_main_, text, L"Genesis AI Quickstart", MB_OK | MB_ICONINFORMATION);
+}
+
+void App::SubmitAiImagePrompt(const std::string& prompt_utf8) {
+    if (prompt_utf8.empty()) return;
+    AppendOutputUtf8("AI IMAGE> " + prompt_utf8);
+    SubmitAiWorkspaceCommand("/asset_library_status");
+    SubmitAiWorkspaceCommand("/ai_data_status");
+
+    EwOpenAiTextRequest request{};
+    request.instructions_utf8 =
+        "You are the Genesis Engine images workspace. Produce a compact image concept, materials,"
+        " simulation-facing visual notes, and a short sandbox suggestion that preserves temporal phase"
+        " coherence with the AI substrate.";
+    request.input_utf8 = prompt_utf8;
+    request.model_utf8 = ew_openai_default_model_utf8();
+    request.enable_web_search = ai_web_search_enabled_;
+    request.max_output_tokens_u32 = 700u;
+
+    EwOpenAiTextResponse response{};
+    AppendOutputUtf8("AI IMAGE: requesting...");
+    const bool ok = ew_openai_send_text_request(request, &response);
+    if (ok && response.ok) {
+        ai_last_response_text_utf8_ = response.output_text_utf8;
+        std::istringstream iss(response.output_text_utf8);
+        std::string line;
+        while (std::getline(iss, line)) {
+            line = ew_trim_ascii_copy(line);
+            if (!line.empty()) AppendOutputUtf8("AI IMAGE " + line);
+        }
+        if (ai_voice_enabled_ && !ai_last_response_text_utf8_.empty()) {
+            SpeakAiText(ai_last_response_text_utf8_);
+        }
+    } else {
+        std::ostringstream oss;
+        oss << "AI IMAGE ERR";
+        if (response.http_status_u32 != 0u) oss << " http=" << response.http_status_u32;
+        if (!response.error_utf8.empty()) oss << " " << response.error_utf8;
+        AppendOutputUtf8(oss.str());
+    }
+}
+
+void App::SubmitAiSimulationPrompt(const std::string& prompt_utf8) {
+    if (prompt_utf8.empty()) return;
+    std::string asset = ew_trim_ascii_copy(ReadWindowTextUtf8(hwnd_ai_asset_name_));
+    if (asset.empty()) asset = ai_selected_asset_utf8_;
+    ai_selected_asset_utf8_ = asset;
+    RefreshAiWorkspaceStatus();
+
+    AppendOutputUtf8("AI SIM> " + prompt_utf8);
+    SubmitAiWorkspaceCommand("/ai_status");
+    SubmitAiWorkspaceCommand("/ai_data_status");
+    SubmitAiWorkspaceCommand(std::string("SANDBOX_OPEN: scene=") + asset + " replace=1");
+    SubmitAiWorkspaceCommand("SANDBOX_STATUS:");
+
+    EwOpenAiTextRequest request{};
+    request.instructions_utf8 =
+        "You are the Genesis Engine simulation workspace. Convert the request into a concise sandbox plan"
+        " grounded in the engine's temporal-coupling substrate, GPU pulse calculus, and highest available"
+        " phase coherence. Prefer actionable operator guidance.";
+    request.input_utf8 = prompt_utf8 + "\nAsset: " + asset;
+    request.model_utf8 = ew_openai_default_model_utf8();
+    request.enable_web_search = ai_web_search_enabled_;
+    request.max_output_tokens_u32 = 700u;
+
+    EwOpenAiTextResponse response{};
+    AppendOutputUtf8("AI SIM: requesting...");
+    const bool ok = ew_openai_send_text_request(request, &response);
+    if (ok && response.ok) {
+        ai_last_response_text_utf8_ = response.output_text_utf8;
+        std::istringstream iss(response.output_text_utf8);
+        std::string line;
+        while (std::getline(iss, line)) {
+            line = ew_trim_ascii_copy(line);
+            if (!line.empty()) AppendOutputUtf8("AI SIM " + line);
+        }
+        if (ai_voice_enabled_ && !ai_last_response_text_utf8_.empty()) {
+            SpeakAiText(ai_last_response_text_utf8_);
+        }
+    } else {
+        std::ostringstream oss;
+        oss << "AI SIM ERR";
+        if (response.http_status_u32 != 0u) oss << " http=" << response.http_status_u32;
+        if (!response.error_utf8.empty()) oss << " " << response.error_utf8;
+        AppendOutputUtf8(oss.str());
+    }
+}
+
+void App::SubmitAiWorkspacePrompt() {
+    const std::string prompt_utf8 = ew_trim_ascii_copy(ReadWindowTextUtf8(hwnd_input_));
+    if (prompt_utf8.empty()) return;
+
+    ai_prompt_history_utf8_.push_back(prompt_utf8);
+    if (ai_prompt_history_utf8_.size() > 32u) {
+        ai_prompt_history_utf8_.erase(ai_prompt_history_utf8_.begin(),
+                                      ai_prompt_history_utf8_.begin() + (ai_prompt_history_utf8_.size() - 32u));
+    }
+    RefreshAiWorkspaceHistory();
+
+    bool consumed = false;
+    if (ew_is_engine_command_like_ascii(prompt_utf8)) {
+        SubmitAiWorkspaceCommand(prompt_utf8);
+        consumed = true;
+    } else if (ai_workspace_active_tab_index_ == AiWorkspaceTabImages) {
+        SubmitAiImagePrompt(prompt_utf8);
+        consumed = true;
+    } else if (ai_workspace_active_tab_index_ == AiWorkspaceTabSimulation) {
+        SubmitAiSimulationPrompt(prompt_utf8);
+        consumed = true;
+    } else {
+        consumed = SubmitChatGptPrompt(prompt_utf8);
+    }
+
+    if (consumed && hwnd_input_) {
+        SetWindowTextW(hwnd_input_, L"");
+    }
 }
 
 void App::SetSidePanelActiveTab(int tab_index, bool focus_tab) {
@@ -5318,6 +7498,7 @@ void App::SetSidePanelActiveTab(int tab_index, bool focus_tab) {
     if (focus_tab && hwnd_side_tabs_[tab_index]) {
         SetFocus(hwnd_side_tabs_[tab_index]);
     }
+    RefreshMainMenuState();
 }
 
 void App::SetSidePanelHoverTab(int tab_index) {
@@ -5600,6 +7781,24 @@ void App::Tick() {
 
     // Authoritative simulation ticks (server-truth) at fixed cadence.
     // Deterministic clamp: never execute more than N ticks per rendered frame.
+    RECT pre_tick_viewport_rect{};
+    GetClientRect(hwnd_viewport_, &pre_tick_viewport_rect);
+    const int pre_tick_viewport_w =
+        std::max<int>(0, (int)(pre_tick_viewport_rect.right - pre_tick_viewport_rect.left));
+    const int pre_tick_viewport_h =
+        std::max<int>(0, (int)(pre_tick_viewport_rect.bottom - pre_tick_viewport_rect.top));
+    const bool output_connected =
+        hwnd_main_ &&
+        hwnd_viewport_ &&
+        IsWindowVisible(hwnd_main_) &&
+        !IsIconic(hwnd_main_) &&
+        IsWindowVisible(hwnd_viewport_) &&
+        pre_tick_viewport_w > 0 &&
+        pre_tick_viewport_h > 0;
+    scene_->UpdateSandboxOutputConnectionState(output_connected,
+                                               (uint32_t)pre_tick_viewport_w,
+                                               (uint32_t)pre_tick_viewport_h);
+
     acc += dt;
     const int kMaxTicksPerFrame = 12;
     int steps = 0;
@@ -5607,6 +7806,13 @@ void App::Tick() {
         scene_->Tick();
         acc -= tick_dt;
         steps++;
+    }
+    if (scene_ && scene_->viewport_focus_pending) {
+        cam_target_[0] = scene_->viewport_focus_target_m[0];
+        cam_target_[1] = scene_->viewport_focus_target_m[1];
+        cam_target_[2] = scene_->viewport_focus_target_m[2];
+        cam_dist_m_ = std::max(1.0f, scene_->viewport_focus_distance_m);
+        scene_->viewport_focus_pending = false;
     }
     // If we fell behind, drop excess accumulated time deterministically.
     if (acc > tick_dt * (float)kMaxTicksPerFrame) acc = 0.0f;
@@ -5618,11 +7824,17 @@ void App::Tick() {
     // - Translate/Rotate gizmo drag emitting ObjectSetTransform packets
     // All authoritative state remains in anchors; UI only emits control packets.
     // ------------------------------------------------------------------
-    const int panel_w = 420;
-    const int viewport_w = (client_w_ > panel_w) ? (client_w_ - panel_w) : client_w_;
-    const int viewport_h = client_h_;
-    const bool mouse_in_view = (input_.mouse_x >= 0 && input_.mouse_y >= 0 &&
-                               input_.mouse_x < viewport_w && input_.mouse_y < viewport_h);
+    RECT viewport_rect{};
+    GetWindowRect(hwnd_viewport_, &viewport_rect);
+    MapWindowPoints(HWND_DESKTOP, hwnd_main_, (LPPOINT)&viewport_rect, 2);
+    const int viewport_x = viewport_rect.left;
+    const int viewport_y = viewport_rect.top;
+    const int viewport_w = std::max<int>(1, (int)(viewport_rect.right - viewport_rect.left));
+    const int viewport_h = std::max<int>(1, (int)(viewport_rect.bottom - viewport_rect.top));
+    const int mouse_view_x = input_.mouse_x - viewport_x;
+    const int mouse_view_y = input_.mouse_y - viewport_y;
+    const bool mouse_in_view = (mouse_view_x >= 0 && mouse_view_y >= 0 &&
+                                mouse_view_x < viewport_w && mouse_view_y < viewport_h);
 
     // Hotkeys: W/E for gizmo mode, F to frame.
     static bool prev_w = false, prev_e = false, prev_f = false;
@@ -5715,8 +7927,8 @@ prev_uy = uy_now;
         const float aspect = (viewport_h > 0) ? (float)viewport_w / (float)viewport_h : 1.0f;
         const float fov = 60.0f * 0.01745329251994329577f;
         const float tanh = tanf(fov * 0.5f);
-        const float nx = ((float)input_.mouse_x / (float)viewport_w) * 2.0f - 1.0f;
-        const float ny = 1.0f - ((float)input_.mouse_y / (float)viewport_h) * 2.0f;
+        const float nx = ((float)mouse_view_x / (float)viewport_w) * 2.0f - 1.0f;
+        const float ny = 1.0f - ((float)mouse_view_y / (float)viewport_h) * 2.0f;
 
         // Camera basis from rig.
         const float cy = cosf(cam_yaw_rad_);
@@ -6063,8 +8275,26 @@ if (editor_axis_constraint_u8_ == 1) {
     std::vector<EwCarrierTriple> carrier_triples;
     (void)ew_compute_carrier_triples_for_anchor_ids(scene_->sm.anchors, carrier_anchor_ids, carrier_triples);
 
+    const bool sandbox_replace_world =
+        scene_->sandbox_viewport_active && scene_->sandbox_viewport_replace_world_u32 != 0u;
+    const float sandbox_half_x =
+        scene_->sandbox_viewport_active ? (scene_->sandbox_viewport_size_m[0] * 0.5f) : 0.0f;
+    const float sandbox_half_y =
+        scene_->sandbox_viewport_active ? (scene_->sandbox_viewport_size_m[1] * 0.5f) : 0.0f;
+    const float sandbox_half_z =
+        scene_->sandbox_viewport_active ? (scene_->sandbox_viewport_size_m[2] * 0.5f) : 0.0f;
+
     size_t idx_obj = 0;
     for (const auto& o : scene_->objects) {
+        if (sandbox_replace_world) {
+            const float dx_sb = std::fabs(o.xf.pos[0] - scene_->sandbox_viewport_center_m[0]);
+            const float dy_sb = std::fabs(o.xf.pos[1] - scene_->sandbox_viewport_center_m[1]);
+            const float dz_sb = std::fabs(o.xf.pos[2] - scene_->sandbox_viewport_center_m[2]);
+            if (dx_sb > sandbox_half_x || dy_sb > sandbox_half_y || dz_sb > sandbox_half_z) {
+                ++idx_obj;
+                continue;
+            }
+        }
         const float dx = o.xf.pos[0] - cam_.pos[0];
         const float dy = o.xf.pos[1] - cam_.pos[1];
         const float dz = o.xf.pos[2] - cam_.pos[2];
@@ -6154,6 +8384,39 @@ scene_->instances.push_back(inst);
         ++idx_obj;
     }
 
+    if (scene_->sandbox_viewport_active) {
+        float cx = 0.0f, cy = 0.0f, cz = 0.0f;
+        camera_space_pos(scene_->sandbox_viewport_center_m[0],
+                         scene_->sandbox_viewport_center_m[1],
+                         scene_->sandbox_viewport_center_m[2],
+                         cx,
+                         cy,
+                         cz);
+        EwRenderInstance inst{};
+        inst.object_id_u64 = scene_->sandbox_viewport_target_object_id_u64;
+        inst.anchor_id_u32 = 0u;
+        inst.kind_u32 = 0u;
+        inst.rel_pos_q16_16[0] = (int32_t)(cx * 65536.0f);
+        inst.rel_pos_q16_16[1] = (int32_t)(cy * 65536.0f);
+        inst.rel_pos_q16_16[2] = (int32_t)(cz * 65536.0f);
+        inst.rel_pos_q16_16[3] = 0;
+        const float sandbox_radius_m =
+            0.5f * std::max(scene_->sandbox_viewport_size_m[0],
+                            std::max(scene_->sandbox_viewport_size_m[1],
+                                     scene_->sandbox_viewport_size_m[2]));
+        inst.radius_q16_16 = (int32_t)std::llround((double)sandbox_radius_m * 65536.0);
+        inst.emissive_q16_16 = (int32_t)std::llround(0.15 * 65536.0);
+        inst.atmosphere_thickness_q16_16 = 0;
+        inst.lod_bias_q16_16 = 0;
+        inst.clarity_q16_16 = (int32_t)std::llround(0.25 * 65536.0);
+        inst.albedo_rgba8 = 0xFFB88A30u;
+        inst.atmosphere_rgba8 = scene_->sandbox_viewport_replace_world_u32 != 0u
+                                    ? 0x40505050u
+                                    : 0x20202020u;
+        inst.tick_u64 = scene_->sm.canonical_tick;
+        scene_->instances.push_back(inst);
+    }
+
     // Lattice projection: if the substrate has a lattice tag enabled, the runtime
     // will project a deterministic point cloud. Render those points as small
     // emissive instances in camera space.
@@ -6228,6 +8491,7 @@ scene_->instances.push_back(inst);
         OutputSTOVAudio(phase, oam, winding);
     }
 
+    RefreshMainMenuState();
     ew_input_reset_deltas(input_);
 }
 
@@ -7189,22 +9453,7 @@ push.pointSize = 20000.0f;
 }
 
 void App::OnSend() {
-    wchar_t wbuf[4096];
-    GetWindowTextW(hwnd_input_, wbuf, 4096);
-    const std::string utf8 = ew_trim_ascii_copy(wide_to_utf8(wbuf));
-    if (utf8.empty()) return;
-
-    bool consumed = false;
-    if (side_panel_active_tab_index_ == SidePanelTabChatGpt) {
-        consumed = SubmitChatGptPrompt(utf8);
-    } else if (scene_) {
-        scene_->SubmitUiLine(utf8);
-        consumed = true;
-    }
-
-    if (consumed) {
-        SetWindowTextW(hwnd_input_, L"");
-    }
+    SubmitAiWorkspacePrompt();
 }
 
 bool App::SubmitChatGptPrompt(const std::string& utf8) {
@@ -7221,33 +9470,44 @@ bool App::SubmitChatGptPrompt(const std::string& utf8) {
         return true;
     }
 
-    AppendOutputUtf8("CHATGPT> " + prompt);
+    AppendOutputUtf8(((ai_provider_mode_index_ == AiProviderModeGrokStyle) ? "GROK> " : "CHATGPT> ") + prompt);
 
     EwOpenAiTextRequest request{};
-    request.instructions_utf8 =
-        "You are integrated into the Genesis Engine AI side panel. "
-        "Give concise, useful answers, and when the user asks about the engine prefer concrete runtime or repository guidance.";
+    if (ai_provider_mode_index_ == AiProviderModeGrokStyle) {
+        request.instructions_utf8 =
+            "You are integrated into the Genesis Engine AI workspace in a Grok-style reasoning mode. "
+            "Be direct, technically sharp, slightly more exploratory in synthesis, and keep answers concise. "
+            "When the user asks about the engine, prefer concrete runtime, repository, or sandbox guidance.";
+    } else {
+        request.instructions_utf8 =
+            "You are integrated into the Genesis Engine AI workspace in a ChatGPT mode. "
+            "Give concise, useful answers, and when the user asks about the engine prefer concrete runtime or repository guidance.";
+    }
     request.input_utf8 = prompt;
     request.model_utf8 = ew_openai_default_model_utf8();
-    request.enable_web_search = true;
+    request.enable_web_search = ai_web_search_enabled_;
     request.max_output_tokens_u32 = 900u;
 
     EwOpenAiTextResponse response{};
-    AppendOutputUtf8("CHATGPT: requesting...");
+    AppendOutputUtf8((ai_provider_mode_index_ == AiProviderModeGrokStyle) ? "GROK-STYLE: requesting..." : "CHATGPT: requesting...");
     const bool ok = ew_openai_send_text_request(request, &response);
     if (ok && response.ok) {
+        ai_last_response_text_utf8_ = response.output_text_utf8;
         std::istringstream iss(response.output_text_utf8);
         std::string line;
         bool emitted = false;
         while (std::getline(iss, line)) {
             line = ew_trim_ascii_copy(line);
             if (!line.empty()) {
-                AppendOutputUtf8("CHATGPT " + line);
+                AppendOutputUtf8(((ai_provider_mode_index_ == AiProviderModeGrokStyle) ? "GROK " : "CHATGPT ") + line);
                 emitted = true;
             }
         }
         if (!emitted) {
-            AppendOutputUtf8("CHATGPT: response received");
+            AppendOutputUtf8((ai_provider_mode_index_ == AiProviderModeGrokStyle) ? "GROK: response received" : "CHATGPT: response received");
+        }
+        if (ai_voice_enabled_ && !ai_last_response_text_utf8_.empty()) {
+            SpeakAiText(ai_last_response_text_utf8_);
         }
         return true;
     }
@@ -7519,12 +9779,12 @@ void App::EmitCameraSetFromRig() {
     (void)ew_runtime_submit_control_packet(&scene_->sm, &cpkt);
 }
 void App::AppendOutputUtf8(const std::string& line) {
-    std::wstring wline = utf8_to_wide(line);
-    wline.append(L"\r\n");
-
-    int len = GetWindowTextLengthW(hwnd_output_);
-    SendMessageW(hwnd_output_, EM_SETSEL, (WPARAM)len, (LPARAM)len);
-    SendMessageW(hwnd_output_, EM_REPLACESEL, FALSE, (LPARAM)wline.c_str());
+    ai_output_history_utf8_.push_back(line);
+    if (ai_output_history_utf8_.size() > 512u) {
+        ai_output_history_utf8_.erase(ai_output_history_utf8_.begin(),
+                                      ai_output_history_utf8_.begin() + (ai_output_history_utf8_.size() - 512u));
+    }
+    RefreshAiWorkspaceOutput();
 }
 
 LRESULT CALLBACK App::WndProcThunk(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
@@ -7549,7 +9809,269 @@ LRESULT App::WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         case WM_COMMAND: {
             const int id = LOWORD(wparam);
             const int code = HIWORD(wparam);
+            switch (id) {
+                case kMenuFileNewDefaultScene:
+                    if (scene_) {
+                        scene_->EnsureBootstrapAssetLibraryAssets();
+                        scene_->SubmitUiLine("SCENE_OPEN:default_scene");
+                    }
+                    break;
+                case kMenuFileOpenScene: OpenSceneAssetDialog(false); break;
+                case kMenuFileOpenSimulation: OpenSceneAssetDialog(true); break;
+                case kMenuFileSaveSceneAs: SaveSceneAssetDialog(false); break;
+                case kMenuFileSaveSimulationAs: SaveSceneAssetDialog(true); break;
+                case kMenuFileImportObj: OnImportObj(); break;
+                case kMenuFileBootstrap: OnBootstrapGame(); break;
+                case kMenuFileExit: SendMessageW(hwnd_main_, WM_CLOSE, 0, 0); break;
+
+                case kMenuEditUndo: EmitEditorUndo(); AppendOutputUtf8("EDITOR: undo"); break;
+                case kMenuEditRedo: EmitEditorRedo(); AppendOutputUtf8("EDITOR: redo"); break;
+                case kMenuEditTranslate:
+                    editor_gizmo_mode_u8_ = 1;
+                    EmitEditorGizmo();
+                    AppendOutputUtf8("EDITOR: gizmo=Translate");
+                    break;
+                case kMenuEditRotate:
+                    editor_gizmo_mode_u8_ = 2;
+                    EmitEditorGizmo();
+                    AppendOutputUtf8("EDITOR: gizmo=Rotate");
+                    break;
+                case kMenuEditFrameSelection:
+                    input_.key_down['F'] = true;
+                    break;
+                case kMenuEditSnapToggle:
+                    editor_snap_enabled_u8_ = editor_snap_enabled_u8_ ? 0u : 1u;
+                    if (hwnd_snap_enable_) {
+                        SendMessageW(hwnd_snap_enable_, BM_SETCHECK,
+                                     editor_snap_enabled_u8_ ? BST_CHECKED : BST_UNCHECKED, 0);
+                    }
+                    EmitEditorSnap();
+                    break;
+                case kMenuEditInputBindings:
+                    if (scene_) ew_open_bindings_editor(&scene_->sm, scene_->sm.project_settings.input.bindings_path_utf8);
+                    break;
+
+                case kMenuAiOpenPanel:
+                    SetAiWorkspaceDocked(true);
+                    SetSidePanelActiveTab(SidePanelTabChatGpt, true);
+                    break;
+                case kMenuAiOpenWindow:
+                    SetAiWorkspaceDocked(false);
+                    break;
+                case kMenuAiNewChat:
+                    ResetAiConversation();
+                    break;
+                case kMenuAiProviderChatGpt:
+                    ai_provider_mode_index_ = AiProviderModeChatGpt;
+                    RefreshAiWorkspaceStatus();
+                    break;
+                case kMenuAiProviderGrok:
+                    ai_provider_mode_index_ = AiProviderModeGrokStyle;
+                    RefreshAiWorkspaceStatus();
+                    break;
+                case kMenuAiTabChat: SetAiWorkspaceTab(AiWorkspaceTabChat); break;
+                case kMenuAiTabImages: SetAiWorkspaceTab(AiWorkspaceTabImages); break;
+                case kMenuAiTabSimulation: SetAiWorkspaceTab(AiWorkspaceTabSimulation); break;
+                case kMenuAiTabMemory: SetAiWorkspaceTab(AiWorkspaceTabMemory); break;
+                case kMenuAiTabTools: SetAiWorkspaceTab(AiWorkspaceTabTools); break;
+                case kMenuAiWebToggle:
+                    ai_web_search_enabled_ = !ai_web_search_enabled_;
+                    RefreshAiWorkspaceStatus();
+                    break;
+                case kMenuAiVoiceToggle:
+                    ai_voice_enabled_ = !ai_voice_enabled_;
+                    RefreshAiWorkspaceStatus();
+                    break;
+                case kMenuAiEmbedViewport:
+                    SetAiViewportEmbedded(!ai_viewport_embedded_);
+                    break;
+                case kMenuAiStatus:
+                    SubmitAiWorkspaceCommand("/ai_status");
+                    break;
+                case kMenuAiDataStatus:
+                    SubmitAiWorkspaceCommand("/ai_data_status");
+                    break;
+                case kMenuAiOpenAiStatus:
+                    SubmitAiWorkspaceCommand("/openai_status");
+                    break;
+                case kMenuAiOpenScene:
+                    SetAiWorkspaceTab(AiWorkspaceTabSimulation);
+                    OpenAiWorkspaceAsset(false, false);
+                    break;
+                case kMenuAiOpenSimulation:
+                    SetAiWorkspaceTab(AiWorkspaceTabSimulation);
+                    OpenAiWorkspaceAsset(true, false);
+                    break;
+                case kMenuAiOpenSandbox:
+                    SetAiWorkspaceTab(AiWorkspaceTabSimulation);
+                    OpenAiWorkspaceAsset(true, true);
+                    break;
+                case kMenuAiSpeakLast:
+                    if (ai_last_response_text_utf8_.empty()) AppendOutputUtf8("AI VOICE: no_cached_reply");
+                    else SpeakAiText(ai_last_response_text_utf8_);
+                    break;
+
+                case kMenuWindowSideChat: SetSidePanelActiveTab(SidePanelTabChatGpt, true); break;
+                case kMenuWindowSideScene: SetSidePanelActiveTab(SidePanelTabScene, true); break;
+                case kMenuWindowSideResearch: SetSidePanelActiveTab(SidePanelTabResearch, true); break;
+                case kMenuWindowAiWorkspace:
+                    if (ai_workspace_docked_) SetSidePanelActiveTab(SidePanelTabChatGpt, true);
+                    else SetAiWorkspaceDocked(false);
+                    break;
+                case kMenuWindowAiDocked:
+                    SetAiWorkspaceDocked(true);
+                    SetSidePanelActiveTab(SidePanelTabChatGpt, true);
+                    break;
+                case kMenuWindowAiFloating:
+                    SetAiWorkspaceDocked(false);
+                    break;
+                case kMenuWindowSandboxStatus:
+                    if (scene_) scene_->SubmitUiLine("SANDBOX_STATUS:");
+                    break;
+                case kMenuWindowCloseSandbox:
+                    if (scene_) scene_->SubmitUiLine("SANDBOX_CLOSE:");
+                    break;
+                case kMenuWindowAssetLibraryStatus:
+                    if (scene_) scene_->SubmitUiLine("/asset_library_status");
+                    break;
+                case kMenuWindowAssetLibraryList:
+                    if (scene_) scene_->SubmitUiLine("/asset_library_list");
+                    break;
+
+                case kMenuToolsResearchStatus:
+                    if (scene_) scene_->SubmitUiLine("/research_status");
+                    break;
+                case kMenuToolsProcessStatus:
+                    if (scene_) scene_->SubmitUiLine("/process_substrate_status");
+                    break;
+                case kMenuToolsSubsystemStatus:
+                    if (scene_) scene_->SubmitUiLine("/subsystem_substrate_status");
+                    break;
+                case kMenuToolsRunFrequencySimulation:
+                    if (scene_) scene_->SubmitUiLine("/sim_freq_run");
+                    break;
+                case kMenuToolsReloadResearchArchive:
+                    if (scene_) scene_->SubmitUiLine("/research_reload");
+                    break;
+                case kMenuToolsFrequencyMode:
+                    if (scene_) scene_->SetResearchOutputMode(1u, true);
+                    AppendOutputUtf8("RESEARCH: mode=frequency");
+                    break;
+                case kMenuToolsVectorMode:
+                    if (scene_) scene_->SetResearchOutputMode(2u, true);
+                    AppendOutputUtf8("RESEARCH: mode=vector");
+                    break;
+                case kMenuToolsStovMode:
+                    if (hwnd_stov_toggle_) {
+                        const bool next_on = !stov_mode_;
+                        SendMessageW(hwnd_stov_toggle_, BM_SETCHECK, next_on ? BST_CHECKED : BST_UNCHECKED, 0);
+                        SetSTOVMode(next_on);
+                    } else {
+                        SetSTOVMode(!stov_mode_);
+                    }
+                    break;
+                case kMenuToolsRepoReaderStatus:
+                    if (scene_) scene_->SubmitUiLine("/repo_reader_status");
+                    break;
+                case kMenuToolsMergedRepoStatus:
+                    if (scene_) scene_->SubmitUiLine("/merged_repo_status");
+                    break;
+
+                case kMenuHelpAbout:
+                    ShowEditorAboutDialog();
+                    break;
+                case kMenuHelpAiQuickstart:
+                    ShowAiQuickstartDialog();
+                    break;
+                default:
+                    break;
+            }
             if (id == 2002 && code == BN_CLICKED) { OnSend(); }
+            if (id == kAiButtonProviderChatGpt && code == BN_CLICKED) {
+                ai_provider_mode_index_ = AiProviderModeChatGpt;
+                RefreshAiWorkspaceStatus();
+            }
+            if (id == kAiButtonProviderGrok && code == BN_CLICKED) {
+                ai_provider_mode_index_ = AiProviderModeGrokStyle;
+                RefreshAiWorkspaceStatus();
+            }
+            if (id == kAiButtonDockToggle && code == BN_CLICKED) {
+                SetAiWorkspaceDocked(!ai_workspace_docked_);
+            }
+            if (id == kAiButtonNewChat && code == BN_CLICKED) {
+                ResetAiConversation();
+            }
+            if (id == kAiButtonWebToggle && code == BN_CLICKED) {
+                ai_web_search_enabled_ = !ai_web_search_enabled_;
+                RefreshAiWorkspaceStatus();
+            }
+            for (int i = 0; i < kAiWorkspaceTabCount; ++i) {
+                if (id == kAiWorkspaceTabIds[i] && code == BN_CLICKED) {
+                    SetAiWorkspaceTab(i);
+                }
+            }
+            if (id == kAiListHistory && code == LBN_SELCHANGE) {
+                const int sel = (int)SendMessageW(hwnd_ai_history_, LB_GETCURSEL, 0, 0);
+                if (sel != LB_ERR) {
+                    wchar_t wbuf[1024] = {};
+                    SendMessageW(hwnd_ai_history_, LB_GETTEXT, (WPARAM)sel, (LPARAM)wbuf);
+                    SetWindowTextW(hwnd_input_, wbuf);
+                }
+            }
+            if (id == kAiButtonPrimaryAction && code == BN_CLICKED) {
+                if (ai_workspace_active_tab_index_ == AiWorkspaceTabImages) {
+                    std::string prompt = ew_trim_ascii_copy(ReadWindowTextUtf8(hwnd_input_));
+                    if (prompt.empty()) prompt = "Create a coherent image brief for " + ai_selected_asset_utf8_;
+                    SubmitAiImagePrompt(prompt);
+                } else if (ai_workspace_active_tab_index_ == AiWorkspaceTabSimulation) {
+                    OpenAiWorkspaceAsset(true, true);
+                } else if (ai_workspace_active_tab_index_ == AiWorkspaceTabMemory) {
+                    SubmitAiWorkspaceCommand("/ai_status");
+                } else if (ai_workspace_active_tab_index_ == AiWorkspaceTabTools) {
+                    SubmitAiWorkspaceCommand("/openai_status");
+                } else {
+                    SubmitAiWorkspaceCommand("/ai_status");
+                }
+            }
+            if (id == kAiButtonSecondaryAction && code == BN_CLICKED) {
+                if (ai_workspace_active_tab_index_ == AiWorkspaceTabImages) {
+                    SubmitAiWorkspaceCommand("/asset_library_status");
+                } else if (ai_workspace_active_tab_index_ == AiWorkspaceTabSimulation) {
+                    SubmitAiWorkspaceCommand("SANDBOX_STATUS:");
+                } else if (ai_workspace_active_tab_index_ == AiWorkspaceTabMemory) {
+                    SubmitAiWorkspaceCommand("/ai_data_status");
+                } else if (ai_workspace_active_tab_index_ == AiWorkspaceTabTools) {
+                    SubmitAiWorkspaceCommand("/research_status");
+                } else {
+                    SubmitAiWorkspaceCommand("SANDBOX_STATUS:");
+                }
+            }
+            if (id == kAiButtonOpenScene && code == BN_CLICKED) {
+                OpenAiWorkspaceAsset(false, false);
+            }
+            if (id == kAiButtonOpenSim && code == BN_CLICKED) {
+                OpenAiWorkspaceAsset(true, false);
+            }
+            if (id == kAiButtonOpenSandbox && code == BN_CLICKED) {
+                OpenAiWorkspaceAsset(true, true);
+            }
+            if (id == kAiButtonStatus && code == BN_CLICKED) {
+                SubmitAiWorkspaceCommand("/research_status");
+            }
+            if (id == kAiButtonVoiceToggle && code == BN_CLICKED) {
+                ai_voice_enabled_ = !ai_voice_enabled_;
+                RefreshAiWorkspaceStatus();
+            }
+            if (id == kAiButtonSpeakLast && code == BN_CLICKED) {
+                if (ai_last_response_text_utf8_.empty()) {
+                    AppendOutputUtf8("AI VOICE: no_cached_reply");
+                } else {
+                    SpeakAiText(ai_last_response_text_utf8_);
+                }
+            }
+            if (id == kAiButtonEmbedSim && code == BN_CLICKED) {
+                SetAiViewportEmbedded(!ai_viewport_embedded_);
+            }
             if (id == 2003 && code == BN_CLICKED) { OnImportObj(); }
             if (id == 2006 && code == BN_CLICKED) { OnBootstrapGame(); }
             if (id == 2013 && code == BN_CLICKED) { OnApplyTransform(); }
@@ -7682,6 +10204,7 @@ if (id == 2031 && code == BN_CLICKED) { EmitEditorRedo(); AppendOutputUtf8("EDIT
                     SetWindowTextW(hwnd_posz_, fmt(o.pos_q16_16[2]).c_str());
                 }
             }
+            RefreshMainMenuState();
         } break;
         case WM_KEYDOWN:
         case WM_SYSKEYDOWN: {

@@ -92,6 +92,11 @@ static inline uint16_t ge_abs_q32_32_to_q15_sat(int64_t v_q32_32) {
     return (uint16_t)q;
 }
 
+static inline int64_t ge_q15_to_q32_32(uint16_t v_q15) {
+    if (v_q15 >= 32767u) return (1LL << 32);
+    return (int64_t)(((__int128)v_q15 << 32) / 32767);
+}
+
 static inline uint16_t ge_bool_to_q15(bool on) {
     return on ? 32767u : 0u;
 }
@@ -118,6 +123,19 @@ static inline uint16_t ge_q32_32_ratio_to_q15_sat(int64_t v_q32_32, int64_t full
     return ge_ratio_q15_u64(mag, den);
 }
 
+static inline uint32_t ge_abs_i32_u32_local(int32_t v) {
+    return (v < 0) ? (uint32_t)(-(int64_t)v) : (uint32_t)v;
+}
+
+static inline uint16_t ge_full_u16_to_q15(uint16_t v_u16) {
+    return (uint16_t)(((uint32_t)v_u16) >> 1);
+}
+
+static inline uint16_t ge_code_u16_to_q15(uint16_t code_u16, uint32_t max_code_u32) {
+    return ge_ratio_q15_u64((uint64_t)code_u16,
+                            (uint64_t)((max_code_u32 != 0u) ? max_code_u32 : 1u));
+}
+
 static inline uint32_t ge_popcount_u64_local(uint64_t v) {
     uint32_t n = 0u;
     while (v != 0u) {
@@ -125,6 +143,187 @@ static inline uint32_t ge_popcount_u64_local(uint64_t v) {
         v >>= 1u;
     }
     return n;
+}
+
+static uint16_t ge_meta_tensor_norm_q15(const genesis::GeMetaFrequencyTensor& tensor) {
+    const uint16_t mags_q15[4] = {
+        ge_full_u16_to_q15(tensor.dft[0].magnitude_q15),
+        ge_full_u16_to_q15(tensor.dft[1].magnitude_q15),
+        ge_full_u16_to_q15(tensor.dft[2].magnitude_q15),
+        ge_full_u16_to_q15(tensor.dft[3].magnitude_q15)
+    };
+    return ge_mean_q15_u16(mags_q15, 4u);
+}
+
+static bool ge_encode_spidercode4_from_record_input(const std::string& type_utf8,
+                                                    const std::string& metadata_utf8,
+                                                    const std::vector<uint8_t>& value_bytes,
+                                                    SpiderCode4& out_sc) {
+    const std::string normalized_type_utf8 = normalize_text(type_utf8);
+    const std::string normalized_metadata_utf8 = normalize_text(metadata_utf8);
+    const std::string merged_meta_utf8 = normalized_type_utf8 + "\n" + normalized_metadata_utf8;
+
+    std::vector<uint8_t> merged_bytes;
+    merged_bytes.reserve(merged_meta_utf8.size() + 1u + value_bytes.size());
+    merged_bytes.insert(merged_bytes.end(), merged_meta_utf8.begin(), merged_meta_utf8.end());
+    merged_bytes.push_back(0u);
+    merged_bytes.insert(merged_bytes.end(), value_bytes.begin(), value_bytes.end());
+    if (merged_bytes.empty()) return false;
+    return ew_encode_spidercode4_from_bytes_chunked_cuda(merged_bytes.data(),
+                                                         merged_bytes.size(),
+                                                         256u,
+                                                         &out_sc);
+}
+
+static void ge_update_ai_gpu_spider_drive(SubstrateManager& sm, EwAiDataSubstrateTelemetry& out) {
+    int32_t last_f_code_i32 = 0;
+    uint16_t last_a_code_u16 = 0;
+    uint16_t last_v_code_u16 = 0;
+    uint16_t last_i_code_u16 = 0;
+    if (sm.ai_action_log_count_u32 > 0u) {
+        const uint32_t idx =
+            (sm.ai_action_log_head_u32 + SubstrateManager::AI_ACTION_LOG_CAP - 1u) %
+            SubstrateManager::AI_ACTION_LOG_CAP;
+        const EwAiActionEvent& e = sm.ai_action_log[idx];
+        last_f_code_i32 = e.f_code_i32;
+        last_a_code_u16 = (uint16_t)((e.a_code_u32 > 65535u) ? 65535u : e.a_code_u32);
+        last_v_code_u16 = (uint16_t)((e.v_code_u32 > 65535u) ? 65535u : e.v_code_u32);
+        last_i_code_u16 = (uint16_t)((e.i_code_u32 > 65535u) ? 65535u : e.i_code_u32);
+    }
+
+    const uint16_t freq_norm_q15 =
+        (sm.gpu_pulse_freq_hz_u64 != 0u && sm.gpu_pulse_freq_ref_hz_u64 != 0u)
+            ? ge_ratio_q15_u64(sm.gpu_pulse_freq_hz_u64, sm.gpu_pulse_freq_ref_hz_u64)
+            : ge_ratio_q15_u64((uint64_t)ge_abs_i32_u32_local(last_f_code_i32),
+                               (uint64_t)((F_SCALE != 0) ? F_SCALE : 1));
+    const uint16_t amp_norm_q15 =
+        (sm.gpu_pulse_amp_ref_u32 != 0u && sm.gpu_pulse_amp_u32 != 0u)
+            ? ge_ratio_q15_u64((uint64_t)sm.gpu_pulse_amp_u32, (uint64_t)sm.gpu_pulse_amp_ref_u32)
+            : ge_code_u16_to_q15(last_a_code_u16, 65535u);
+    const uint16_t volt_norm_q15 =
+        (sm.gpu_pulse_volt_ref_u32 != 0u && sm.gpu_pulse_volt_u32 != 0u)
+            ? ge_ratio_q15_u64((uint64_t)sm.gpu_pulse_volt_u32, (uint64_t)sm.gpu_pulse_volt_ref_u32)
+            : ge_code_u16_to_q15(last_v_code_u16, V_MAX);
+    const uint16_t ampere_norm_q15 =
+        (sm.process_substrate_telemetry.valid_u32 != 0u && sm.process_substrate_telemetry.last_i_code_u16 != 0u)
+            ? ge_code_u16_to_q15(sm.process_substrate_telemetry.last_i_code_u16, I_MAX)
+            : ge_code_u16_to_q15(last_i_code_u16, I_MAX);
+
+    const int32_t dims_i32[EW_AI_GPU_GRADIENT_DIM_CAP] = {
+        (int32_t)freq_norm_q15,
+        (int32_t)amp_norm_q15,
+        (int32_t)volt_norm_q15,
+        (int32_t)ampere_norm_q15,
+        (int32_t)amp_norm_q15 - (int32_t)freq_norm_q15,
+        (int32_t)volt_norm_q15 - (int32_t)freq_norm_q15,
+        (int32_t)ampere_norm_q15 - (int32_t)freq_norm_q15,
+        (int32_t)volt_norm_q15 - (int32_t)amp_norm_q15,
+        (int32_t)ampere_norm_q15 - (int32_t)amp_norm_q15,
+        (int32_t)ampere_norm_q15 - (int32_t)volt_norm_q15
+    };
+
+    out.gpu_gradient_dim_q15[0] = freq_norm_q15;
+    out.gpu_gradient_dim_q15[1] = amp_norm_q15;
+    out.gpu_gradient_dim_q15[2] = volt_norm_q15;
+    out.gpu_gradient_dim_q15[3] = ampere_norm_q15;
+    for (uint32_t i = 4u; i < EW_AI_GPU_GRADIENT_DIM_CAP; ++i) {
+        out.gpu_gradient_dim_q15[i] = (uint16_t)ge_abs_i32_u32_local(dims_i32[i]);
+    }
+    out.gpu_gradient_energy_norm_q15 = ge_mean_q15_u16(&out.gpu_gradient_dim_q15[4], 6u);
+
+    std::vector<uint8_t> payload;
+    payload.resize(EW_AI_GPU_GRADIENT_DIM_CAP * sizeof(int32_t), 0u);
+    for (uint32_t i = 0u; i < EW_AI_GPU_GRADIENT_DIM_CAP; ++i) {
+        const uint32_t off = i * 4u;
+        const uint32_t u = (uint32_t)dims_i32[i];
+        payload[off + 0u] = (uint8_t)(u & 0xFFu);
+        payload[off + 1u] = (uint8_t)((u >> 8) & 0xFFu);
+        payload[off + 2u] = (uint8_t)((u >> 16) & 0xFFu);
+        payload[off + 3u] = (uint8_t)((u >> 24) & 0xFFu);
+    }
+
+    std::ostringstream meta;
+    meta << "domain=ai_substrate\n"
+         << "kind=gpu_spider_10d\n"
+         << "layout=F,A,V,I,FA,FV,FI,AV,AI,VI\n"
+         << "tick=" << sm.canonical_tick << "\n"
+         << "freq_raw=" << sm.gpu_pulse_freq_hz_u64 << "\n"
+         << "freq_ref=" << sm.gpu_pulse_freq_ref_hz_u64 << "\n"
+         << "amp_raw=" << sm.gpu_pulse_amp_u32 << "\n"
+         << "amp_ref=" << sm.gpu_pulse_amp_ref_u32 << "\n"
+         << "volt_raw=" << sm.gpu_pulse_volt_u32 << "\n"
+         << "volt_ref=" << sm.gpu_pulse_volt_ref_u32 << "\n"
+         << "ampere_code=" << sm.process_substrate_telemetry.last_i_code_u16 << "\n";
+
+    if (sm.ai_substrate_drive.put_bytes("ai/gpu_spider_10d",
+                                        "gpu_spider_10d",
+                                        meta.str(),
+                                        payload.data(),
+                                        payload.size())) {
+        sm.ai_gpu_spider_encode_count_u64 += 1u;
+    }
+
+    SpiderCode4 spider_sc{};
+    if (ge_encode_spidercode4_from_record_input("gpu_spider_10d", meta.str(), payload, spider_sc)) {
+        out.gpu_spider_f_code_i32 = spider_sc.f_code;
+        out.gpu_spider_a_code_u16 = spider_sc.a_code;
+        out.gpu_spider_v_code_u16 = spider_sc.v_code;
+        out.gpu_spider_i_code_u16 = spider_sc.i_code;
+    }
+
+    genesis::GeVirtualStateRecord record{};
+    if (sm.ai_substrate_drive.get_record("ai/gpu_spider_10d", record)) {
+        if (out.gpu_spider_f_code_i32 == 0) out.gpu_spider_f_code_i32 = record.tensor.channels.f_code;
+        if (out.gpu_spider_a_code_u16 == 0u) out.gpu_spider_a_code_u16 = record.tensor.channels.a_code;
+        if (out.gpu_spider_v_code_u16 == 0u) out.gpu_spider_v_code_u16 = record.tensor.channels.v_code;
+        if (out.gpu_spider_i_code_u16 == 0u) out.gpu_spider_i_code_u16 = record.tensor.channels.i_code;
+        out.gpu_spider_carrier_phase_u64 = record.tensor.carrier_phase_u64;
+    }
+    if (out.gpu_spider_f_code_i32 == 0 && out.gpu_gradient_energy_norm_q15 != 0u) {
+        int32_t signed_gradient_sum_i32 = 0;
+        for (uint32_t i = 4u; i < EW_AI_GPU_GRADIENT_DIM_CAP; ++i) {
+            signed_gradient_sum_i32 += dims_i32[i];
+        }
+        int32_t fallback_f_code_i32 = signed_gradient_sum_i32 / 256;
+        if (fallback_f_code_i32 == 0) {
+            fallback_f_code_i32 = (dims_i32[6] >= dims_i32[9]) ? 1 : -1;
+        }
+        out.gpu_spider_f_code_i32 = fallback_f_code_i32;
+    }
+}
+
+static void ge_update_ai_api_decode_drive(SubstrateManager& sm, EwAiDataSubstrateTelemetry& out) {
+    out.api_decode_request_id_u64 = sm.ai_last_api_decode_request_id_u64;
+    out.api_decode_http_status_s32 = sm.ai_last_api_decode_http_status_s32;
+    out.api_decode_count_u16 = (uint16_t)((sm.ai_api_decode_count_u64 > 65535u) ? 65535u : sm.ai_api_decode_count_u64);
+    out.api_decode_body_bytes_u16 =
+        (uint16_t)((sm.ai_last_api_decode_body_bytes_u32 > 65535u) ? 65535u : sm.ai_last_api_decode_body_bytes_u32);
+    out.api_decode_http_status_q15 =
+        (sm.ai_last_api_decode_http_status_s32 >= 200 && sm.ai_last_api_decode_http_status_s32 < 400) ? 32767u : 0u;
+
+    genesis::GeVirtualStateRecord record{};
+    if (!sm.ai_substrate_drive.get_record("ai/api_decode/last", record)) return;
+
+    SpiderCode4 spider_sc{};
+    if (ge_encode_spidercode4_from_record_input(record.type_utf8, record.metadata_utf8, record.value_bytes, spider_sc)) {
+        out.api_decode_f_code_i32 = spider_sc.f_code;
+        out.api_decode_a_code_u16 = spider_sc.a_code;
+        out.api_decode_v_code_u16 = spider_sc.v_code;
+        out.api_decode_i_code_u16 = spider_sc.i_code;
+    } else {
+        out.api_decode_f_code_i32 = record.tensor.channels.f_code;
+        out.api_decode_a_code_u16 = record.tensor.channels.a_code;
+        out.api_decode_v_code_u16 = record.tensor.channels.v_code;
+        out.api_decode_i_code_u16 = record.tensor.channels.i_code;
+    }
+    out.api_decode_norm_q15 = ge_meta_tensor_norm_q15(record.tensor);
+    if (out.api_decode_f_code_i32 == 0 && out.api_decode_norm_q15 != 0u) {
+        const int32_t signed_api_carrier_i32 =
+            (int32_t)out.api_decode_a_code_u16 +
+            (int32_t)out.api_decode_v_code_u16 -
+            (int32_t)out.api_decode_i_code_u16;
+        out.api_decode_f_code_i32 = (signed_api_carrier_i32 >= 0) ? 1 : -1;
+    }
 }
 
 static const EwSubsystemCalculusLane* ge_find_prev_subsystem_lane(
@@ -314,21 +513,117 @@ static void ge_update_ai_substrate_telemetry(SubstrateManager& sm) {
     if (sm.ai_anticipation_auto_execute) out.anticipation_flags_u16 |= 0x2u;
     if (sm.ai_anticipation_emit_ui) out.anticipation_flags_u16 |= 0x4u;
 
+    const EwAiDataSubstrateTelemetry& ai_data = sm.ai_data_substrate_telemetry;
+    const CrawlerStats& crawler_stats = sm.crawler.stats();
     const Anchor* spectral = nullptr;
     if (sm.spectral_field_anchor_id_u32 != 0u && sm.spectral_field_anchor_id_u32 < sm.anchors.size()) {
         const Anchor& a = sm.anchors[sm.spectral_field_anchor_id_u32];
         if (a.kind_u32 == EW_ANCHOR_KIND_SPECTRAL_FIELD) spectral = &a;
     }
+    uint16_t process_coherence_q15 = sm.process_substrate_telemetry.coherence_norm_q15;
+    uint16_t process_temporal_q15 = sm.process_substrate_telemetry.temporal_coherence_q15;
+    uint16_t process_vibration_q15 = 0u;
     if (spectral) {
         const EwSpectralFieldAnchorState& ss = spectral->spectral_field_state;
         out.fanout_budget_u32 = ss.fanout_budget_u32;
         out.controller_authority_q15 = ss.calculus_summary.controller_authority_q15;
         out.op_gain_q15 = ss.op_gain_q15;
         out.op_phase_bias_q15 = ss.op_phase_bias_q15;
+        process_coherence_q15 = ss.calibration_summary.coherence_norm_q15;
+        process_vibration_q15 = ss.calibration_summary.source_vibration_q15;
         for (uint32_t i = 0; i < 8u; ++i) {
             out.carrier_band_q15[i] = ss.intent_summary.band_mag_q15[i];
         }
     }
+    uint32_t nonzero_carrier_count_u32 = 0u;
+    for (uint32_t i = 0u; i < 8u; ++i) {
+        if (out.carrier_band_q15[i] != 0u) nonzero_carrier_count_u32 += 1u;
+    }
+    const uint16_t confidence_q15 = ge_abs_q32_32_to_q15_sat(out.confidence_q32_32);
+    const uint16_t attractor_q15 = ge_abs_q32_32_to_q15_sat(out.attractor_strength_q32_32);
+    const uint16_t command_q15 = ge_ratio_q15_u64((uint64_t)out.command_count_u32, 128u);
+    const uint16_t action_q15 = ge_ratio_q15_u64((uint64_t)out.action_log_count_u32, 128u);
+    const uint16_t chat_q15 = ge_ratio_q15_u64((uint64_t)out.ui_chat_count_u32, 64u);
+    const uint16_t carrier_diversity_q15 = ge_ratio_q15_u64((uint64_t)nonzero_carrier_count_u32, 8u);
+    const uint16_t api_headroom_q15 =
+        ge_headroom_q15_from_used_u32(out.pending_external_api_u32 + out.inflight_external_api_u32, 32u);
+    const uint16_t gpu_spider_f_q15 =
+        ge_ratio_q15_u64((uint64_t)ge_abs_i32_u32_local(ai_data.gpu_spider_f_code_i32),
+                         (uint64_t)((F_SCALE != 0) ? F_SCALE : 1));
+    const uint16_t gpu_spider_q15_tmp[4] = {
+        gpu_spider_f_q15,
+        ge_code_u16_to_q15(ai_data.gpu_spider_a_code_u16, 65535u),
+        ge_code_u16_to_q15(ai_data.gpu_spider_v_code_u16, V_MAX),
+        ge_code_u16_to_q15(ai_data.gpu_spider_i_code_u16, I_MAX)
+    };
+    const uint16_t gpu_spider_norm_q15 = ge_mean_q15_u16(gpu_spider_q15_tmp, 4u);
+    const uint16_t api_decode_f_q15 =
+        ge_ratio_q15_u64((uint64_t)ge_abs_i32_u32_local(ai_data.api_decode_f_code_i32),
+                         (uint64_t)((F_SCALE != 0) ? F_SCALE : 1));
+    const uint16_t api_decode_q15_tmp[4] = {
+        api_decode_f_q15,
+        ge_code_u16_to_q15(ai_data.api_decode_a_code_u16, 65535u),
+        ge_code_u16_to_q15(ai_data.api_decode_v_code_u16, V_MAX),
+        ge_code_u16_to_q15(ai_data.api_decode_i_code_u16, I_MAX)
+    };
+    const uint16_t api_decode_spider_q15 = ge_mean_q15_u16(api_decode_q15_tmp, 4u);
+    const uint16_t memory_tmp[5] = {
+        attractor_q15,
+        ai_data.temporal_memory_norm_q15,
+        ai_data.measured_band_q15[6],
+        process_vibration_q15,
+        ai_data.api_decode_norm_q15
+    };
+    const uint16_t reasoning_tmp[5] = {
+        confidence_q15,
+        ai_data.measured_band_q15[4],
+        ai_data.measured_band_q15[5],
+        ai_data.controller_authority_q15,
+        gpu_spider_norm_q15
+    };
+    const uint16_t planning_tmp[5] = {
+        api_headroom_q15,
+        ai_data.measured_band_q15[7],
+        command_q15,
+        ai_data.temporal_prediction_norm_q15,
+        ai_data.api_decode_http_status_q15
+    };
+    const uint16_t creativity_tmp[5] = {
+        carrier_diversity_q15,
+        ai_data.measured_band_q15[2],
+        ai_data.measured_band_q15[3],
+        action_q15,
+        gpu_spider_norm_q15
+    };
+    const uint16_t perception_tmp[5] = {
+        chat_q15,
+        ai_data.crawler_flow_norm_q15,
+        ai_data.measured_band_q15[0],
+        ai_data.measured_band_q15[1],
+        ai_data.api_decode_norm_q15
+    };
+    const uint16_t temporal_tmp[5] = {
+        ai_data.temporal_prediction_norm_q15,
+        ai_data.crawler_coherence_norm_q15,
+        process_temporal_q15,
+        process_vibration_q15,
+        ai_data.gpu_gradient_energy_norm_q15
+    };
+    const uint16_t network_tmp[5] = {
+        ai_data.crawler_coherence_norm_q15,
+        process_coherence_q15,
+        api_headroom_q15,
+        ge_headroom_q15_from_used_u32(crawler_stats.pending_obs_u32, 64u),
+        api_decode_spider_q15
+    };
+    out.memory_norm_q15 = ge_mean_q15_u16(memory_tmp, 5u);
+    out.reasoning_norm_q15 = ge_mean_q15_u16(reasoning_tmp, 5u);
+    out.planning_norm_q15 = ge_mean_q15_u16(planning_tmp, 5u);
+    out.creativity_norm_q15 = ge_mean_q15_u16(creativity_tmp, 5u);
+    out.perception_norm_q15 = ge_mean_q15_u16(perception_tmp, 5u);
+    out.temporal_binding_norm_q15 = ge_mean_q15_u16(temporal_tmp, 5u);
+    out.crawler_drift_norm_q15 = ai_data.crawler_drift_norm_q15;
+    out.network_coherence_norm_q15 = ge_mean_q15_u16(network_tmp, 5u);
 
     if (sm.ai_action_log_count_u32 > 0u) {
         const uint32_t idx = (sm.ai_action_log_head_u32 + SubstrateManager::AI_ACTION_LOG_CAP - 1u) %
@@ -347,6 +642,10 @@ static void ge_update_ai_substrate_telemetry(SubstrateManager& sm) {
 static void ge_update_ai_data_substrate_telemetry(SubstrateManager& sm) {
     const int64_t prev_error_q32_32 = sm.ai_data_substrate_telemetry.error_q32_32;
     const int64_t prev_integral_q32_32 = sm.ai_data_substrate_telemetry.error_integral_q32_32;
+    const uint64_t prev_crawler_enqueued_obs_u64 = sm.ai_data_substrate_telemetry.crawler_enqueued_obs_u64;
+    const uint64_t prev_crawler_admitted_pulses_u64 = sm.ai_data_substrate_telemetry.crawler_admitted_pulses_u64;
+    const uint64_t prev_crawler_dropped_obs_u64 = sm.ai_data_substrate_telemetry.crawler_dropped_obs_u64;
+    const uint64_t prev_crawler_truncated_segments_u64 = sm.ai_data_substrate_telemetry.crawler_truncated_segments_u64;
 
     sm.ai_data_substrate_telemetry = EwAiDataSubstrateTelemetry{};
     EwAiDataSubstrateTelemetry& out = sm.ai_data_substrate_telemetry;
@@ -393,6 +692,94 @@ static void ge_update_ai_data_substrate_telemetry(SubstrateManager& sm) {
 
     out.pending_external_api_u32 = (uint32_t)sm.external_api_pending.size();
     out.inflight_external_api_u32 = (uint32_t)sm.external_api_inflight.size();
+    const CrawlerStats& crawler_stats = sm.crawler.stats();
+    out.crawler_pending_obs_u32 = crawler_stats.pending_obs_u32;
+    out.crawler_last_utf8_bytes_u32 = crawler_stats.last_utf8_bytes_u32;
+    out.crawler_enqueued_obs_u64 = crawler_stats.enqueued_obs_u64;
+    out.crawler_admitted_pulses_u64 = crawler_stats.admitted_pulses_u64;
+    out.crawler_dropped_obs_u64 = crawler_stats.dropped_obs_u64;
+    out.crawler_truncated_segments_u64 = crawler_stats.truncated_segments_u64;
+
+    const uint64_t delta_crawler_enqueued_u64 =
+        (out.crawler_enqueued_obs_u64 >= prev_crawler_enqueued_obs_u64)
+            ? (out.crawler_enqueued_obs_u64 - prev_crawler_enqueued_obs_u64)
+            : 0u;
+    const uint64_t delta_crawler_admitted_u64 =
+        (out.crawler_admitted_pulses_u64 >= prev_crawler_admitted_pulses_u64)
+            ? (out.crawler_admitted_pulses_u64 - prev_crawler_admitted_pulses_u64)
+            : 0u;
+    const uint64_t delta_crawler_dropped_u64 =
+        (out.crawler_dropped_obs_u64 >= prev_crawler_dropped_obs_u64)
+            ? (out.crawler_dropped_obs_u64 - prev_crawler_dropped_obs_u64)
+            : 0u;
+    const uint64_t delta_crawler_truncated_u64 =
+        (out.crawler_truncated_segments_u64 >= prev_crawler_truncated_segments_u64)
+            ? (out.crawler_truncated_segments_u64 - prev_crawler_truncated_segments_u64)
+            : 0u;
+    const uint16_t delta_crawler_enqueued_q15 = ge_ratio_q15_u64(delta_crawler_enqueued_u64, 64u);
+    const uint16_t delta_crawler_admitted_q15 = ge_ratio_q15_u64(delta_crawler_admitted_u64, 64u);
+    const uint16_t delta_crawler_dropped_q15 = ge_ratio_q15_u64(delta_crawler_dropped_u64, 32u);
+    const uint16_t delta_crawler_truncated_q15 = ge_ratio_q15_u64(delta_crawler_truncated_u64, 32u);
+    const uint16_t pending_crawler_q15 = ge_ratio_q15_u64((uint64_t)out.crawler_pending_obs_u32, 64u);
+    const uint16_t crawler_bytes_q15 = ge_ratio_q15_u64((uint64_t)out.crawler_last_utf8_bytes_u32, 4096u);
+    const uint16_t crawler_flow_tmp[3] = {
+        delta_crawler_enqueued_q15,
+        delta_crawler_admitted_q15,
+        crawler_bytes_q15
+    };
+    out.crawler_flow_norm_q15 = ge_mean_q15_u16(crawler_flow_tmp, 3u);
+    const uint16_t crawler_drift_gap_q15 =
+        (delta_crawler_enqueued_q15 > delta_crawler_admitted_q15)
+            ? (uint16_t)(delta_crawler_enqueued_q15 - delta_crawler_admitted_q15)
+            : (uint16_t)(delta_crawler_admitted_q15 - delta_crawler_enqueued_q15);
+    const uint16_t crawler_drift_tmp[4] = {
+        crawler_drift_gap_q15,
+        delta_crawler_dropped_q15,
+        delta_crawler_truncated_q15,
+        pending_crawler_q15
+    };
+    out.crawler_drift_norm_q15 = ge_mean_q15_u16(crawler_drift_tmp, 4u);
+    const uint16_t process_interference_q15 =
+        (sm.process_substrate_telemetry.valid_u32 != 0u) ? sm.process_substrate_telemetry.interference_norm_q15 : 0u;
+    const uint16_t crawler_interference_tmp[4] = {
+        process_interference_q15,
+        pending_crawler_q15,
+        delta_crawler_dropped_q15,
+        delta_crawler_truncated_q15
+    };
+    out.crawler_interference_norm_q15 = ge_mean_q15_u16(crawler_interference_tmp, 4u);
+    const uint16_t process_coherence_q15 =
+        (sm.process_substrate_telemetry.valid_u32 != 0u) ? sm.process_substrate_telemetry.coherence_norm_q15 : 0u;
+    const uint16_t admitted_alignment_q15 =
+        (delta_crawler_enqueued_u64 != 0u)
+            ? ge_ratio_q15_u64(delta_crawler_admitted_u64, delta_crawler_enqueued_u64)
+            : ge_headroom_q15_from_used_u32(out.crawler_pending_obs_u32, 64u);
+    const int64_t crawler_flow_q32_32 = ge_q15_to_q32_32(out.crawler_flow_norm_q15);
+    const int64_t process_coherence_q32_32 = ge_q15_to_q32_32(process_coherence_q15);
+    const int64_t coherence_dev_q32_32 = coherence_map_dev(process_coherence_q32_32, crawler_flow_q32_32);
+    const uint16_t coherence_dev_q15 = ge_abs_q32_32_to_q15_sat(coherence_dev_q32_32);
+    out.crawler_coherence_norm_q15 = (coherence_dev_q15 >= 32767u) ? 0u : (uint16_t)(32767u - coherence_dev_q15);
+    const uint16_t temporal_memory_seed_tmp[3] = {
+        out.crawler_flow_norm_q15,
+        ge_ratio_q15_u64((uint64_t)out.accepted_metric_count_u32,
+                         (uint64_t)((out.completed_metric_count_u32 != 0u) ? out.completed_metric_count_u32 : 1u)),
+        admitted_alignment_q15
+    };
+    const int64_t temporal_memory_seed_q32_32 =
+        ge_q15_to_q32_32(ge_mean_q15_u16(temporal_memory_seed_tmp, 3u));
+    const int64_t temporal_memory_q32_32 =
+        admit_memory(temporal_memory_seed_q32_32, ge_q15_to_q32_32(out.crawler_coherence_norm_q15));
+    out.temporal_memory_norm_q15 = ge_abs_q32_32_to_q15_sat(temporal_memory_q32_32);
+    int64_t temporal_prediction_q32_32 =
+        temporal_memory_q32_32 +
+        (ge_q15_to_q32_32(out.crawler_coherence_norm_q15) >> 1) -
+        (ge_q15_to_q32_32(out.crawler_drift_norm_q15) >> 1);
+    temporal_prediction_q32_32 = budget_state(temporal_prediction_q32_32, (1LL << 32));
+    if (temporal_prediction_q32_32 < 0) temporal_prediction_q32_32 = 0;
+    out.temporal_prediction_q32_32 = temporal_prediction_q32_32;
+    out.temporal_prediction_norm_q15 = ge_abs_q32_32_to_q15_sat(out.temporal_prediction_q32_32);
+    ge_update_ai_gpu_spider_drive(sm, out);
+    ge_update_ai_api_decode_drive(sm, out);
 
     out.intent_band_q15[0] = sm.corpus_pipeline_enable_u32 ? 32767u : 0u;
     out.intent_band_q15[1] = sm.corpus_pipeline_enable_u32 ? 32767u : 0u;
@@ -446,8 +833,15 @@ static void ge_update_ai_data_substrate_telemetry(SubstrateManager& sm) {
         uint16_t pending_headroom_q15 = ge_headroom_q15_from_used_u32(out.pending_metric_count_u32, 32u);
         uint16_t api_headroom_q15 = ge_headroom_q15_from_used_u32(out.pending_external_api_u32 + out.inflight_external_api_u32, 16u);
         uint16_t data_surface_q15 = ge_ratio_q15_u64(out.corpus_text_artifact_count_u32, 64u);
-        uint16_t tmp[3] = { pending_headroom_q15, api_headroom_q15, data_surface_q15 };
-        out.measured_band_q15[7] = ge_mean_q15_u16(tmp, 3u);
+        uint16_t tmp[6] = {
+            pending_headroom_q15,
+            api_headroom_q15,
+            data_surface_q15,
+            out.temporal_prediction_norm_q15,
+            out.gpu_gradient_energy_norm_q15,
+            out.api_decode_norm_q15
+        };
+        out.measured_band_q15[7] = ge_mean_q15_u16(tmp, 6u);
     }
 
     out.intent_norm_q15 = ge_mean_q15_u16(out.intent_band_q15, 8u);
@@ -1122,6 +1516,14 @@ static std::string ge_format_ai_substrate_status_line(const EwAiSubstrateTelemet
         << " ctrl_q15=" << t.controller_authority_q15
         << " gain_q15=" << t.op_gain_q15
         << " phase_q15=" << t.op_phase_bias_q15
+        << " mem_q15=" << t.memory_norm_q15
+        << " reason_q15=" << t.reasoning_norm_q15
+        << " plan_q15=" << t.planning_norm_q15
+        << " create_q15=" << t.creativity_norm_q15
+        << " perceive_q15=" << t.perception_norm_q15
+        << " bind_q15=" << t.temporal_binding_norm_q15
+        << " drift_q15=" << t.crawler_drift_norm_q15
+        << " net_q15=" << t.network_coherence_norm_q15
         << " b0=" << t.carrier_band_q15[0]
         << " b1=" << t.carrier_band_q15[1]
         << " b2=" << t.carrier_band_q15[2]
@@ -1163,15 +1565,36 @@ static std::string ge_format_ai_data_substrate_status_line(const EwAiDataSubstra
         << " khan_chars=" << t.math_khan_chars_ingested_u32
         << " pending_api=" << t.pending_external_api_u32
         << " inflight_api=" << t.inflight_external_api_u32
+        << " crawl_pending=" << t.crawler_pending_obs_u32
+        << " crawl_enq=" << t.crawler_enqueued_obs_u64
+        << " crawl_adm=" << t.crawler_admitted_pulses_u64
+        << " crawl_drop=" << t.crawler_dropped_obs_u64
+        << " crawl_trunc=" << t.crawler_truncated_segments_u64
         << " intent_q15=" << t.intent_norm_q15
         << " measured_q15=" << t.measured_norm_q15
         << " residual_q15=" << t.residual_norm_q15
         << " dErr_q15=" << t.error_delta_norm_q15
         << " intErr_q15=" << t.error_integral_norm_q15
         << " ctrl_q15=" << t.controller_authority_q15
+        << " crawl_flow_q15=" << t.crawler_flow_norm_q15
+        << " crawl_drift_q15=" << t.crawler_drift_norm_q15
+        << " crawl_intf_q15=" << t.crawler_interference_norm_q15
+        << " crawl_coh_q15=" << t.crawler_coherence_norm_q15
+        << " mem_q15=" << t.temporal_memory_norm_q15
+        << " pred_q15=" << t.temporal_prediction_norm_q15
+        << " gpu_grad_q15=" << t.gpu_gradient_energy_norm_q15
+        << " gpu_spider_f=" << t.gpu_spider_f_code_i32
+        << " gpu_spider_a=" << t.gpu_spider_a_code_u16
+        << " gpu_spider_v=" << t.gpu_spider_v_code_u16
+        << " gpu_spider_i=" << t.gpu_spider_i_code_u16
+        << " api_decode_n=" << t.api_decode_count_u16
+        << " api_http=" << t.api_decode_http_status_s32
+        << " api_decode_q15=" << t.api_decode_norm_q15
+        << " api_decode_f=" << t.api_decode_f_code_i32
         << " err_q32_32=" << t.error_q32_32
         << " derr_q32_32=" << t.error_delta_q32_32
         << " ierr_q32_32=" << t.error_integral_q32_32
+        << " pred_q32_32=" << t.temporal_prediction_q32_32
         << " t0=" << t.intent_band_q15[0]
         << " t1=" << t.intent_band_q15[1]
         << " t2=" << t.intent_band_q15[2]
@@ -3365,6 +3788,29 @@ void SubstrateManager::submit_external_api_response(const EwExternalApiResponse&
             url_ascii,
             snippet
         );
+
+        const size_t drive_cap =
+            (resp.body_bytes.size() < (size_t)4096) ? resp.body_bytes.size() : (size_t)4096;
+        if (drive_cap != 0u) {
+            std::ostringstream meta;
+            meta << "domain=ai_substrate\n"
+                 << "kind=api_decode\n"
+                 << "request_id=" << resp.request_id_u64 << "\n"
+                 << "http_status=" << resp.http_status_s32 << "\n"
+                 << "context_anchor=" << resp.context_anchor_id_u32 << "\n"
+                 << "crawler_anchor=" << resp.crawler_anchor_id_u32 << "\n"
+                 << "domain_anchor=" << resp.domain_anchor_id_u32 << "\n";
+            if (ai_substrate_drive.put_bytes("ai/api_decode/last",
+                                             "api_decode_bytes",
+                                             meta.str(),
+                                             resp.body_bytes.data(),
+                                             drive_cap)) {
+                ai_api_decode_count_u64 += 1u;
+                ai_last_api_decode_request_id_u64 = resp.request_id_u64;
+                ai_last_api_decode_http_status_s32 = resp.http_status_s32;
+                ai_last_api_decode_body_bytes_u32 = (uint32_t)drive_cap;
+            }
+        }
     }
 }
 
@@ -3970,6 +4416,11 @@ void SubstrateManager::ui_submit_user_text_line(const std::string& utf8_line) {
         }
     }
 
+    if (!routed_line.empty() && routed_line[0] != '/') {
+        if (ui_chat_q.size() >= UI_CHAT_CAP) ui_chat_q.pop_front();
+        ui_chat_q.push_back(routed_line);
+    }
+
     // UI text submission is a viewport observation. All downstream processing occurs in substrate.
     observe_text_line(routed_line);
 
@@ -4478,6 +4929,12 @@ if (!in.good()) return false;
     sim_snapshot_valid = true;
     sim_play_loop_enabled = play_loop;
     sim_play_loop_start_tick_u64 = canonical_tick_u64();
+    ai_substrate_drive.clear();
+    ai_gpu_spider_encode_count_u64 = 0u;
+    ai_api_decode_count_u64 = 0u;
+    ai_last_api_decode_request_id_u64 = 0u;
+    ai_last_api_decode_http_status_s32 = -1;
+    ai_last_api_decode_body_bytes_u32 = 0u;
 
     emit_ui_line(play_loop ? "SIM_PLAY_LOOP" : "SIM_PLAY_LIVE");
     return true;
@@ -6555,6 +7012,12 @@ void SubstrateManager::tick() {
         if (split_child_b.size() < need) split_child_b.resize(need, 0u);
         next_anchor_id_u32 = (uint32_t)anchors.size();
         ge_rebuild_cached_anchor_ids(*this);
+        ai_substrate_drive.clear();
+        ai_gpu_spider_encode_count_u64 = 0u;
+        ai_api_decode_count_u64 = 0u;
+        ai_last_api_decode_request_id_u64 = 0u;
+        ai_last_api_decode_http_status_s32 = -1;
+        ai_last_api_decode_body_bytes_u32 = 0u;
     }
 
     // ------------------------------------------------------------------
@@ -8973,8 +9436,8 @@ if (ap && ap->object_id_u64 != 0u) {
     }
 
     ge_update_process_substrate_telemetry(*this);
-    ge_update_ai_substrate_telemetry(*this);
     ge_update_ai_data_substrate_telemetry(*this);
+    ge_update_ai_substrate_telemetry(*this);
     ge_update_subsystem_substrate_telemetry(*this);
 
     if ((canonical_tick_u64() % 360u) == 0u && process_substrate_telemetry.valid_u32 != 0u) {
@@ -9531,6 +9994,14 @@ if (ap && ap->object_id_u64 != 0u) {
         a.payload += "controller_authority_q15: " + std::to_string((uint32_t)ai_substrate_telemetry.controller_authority_q15) + "\n";
         a.payload += "op_gain_q15: " + std::to_string((uint32_t)ai_substrate_telemetry.op_gain_q15) + "\n";
         a.payload += "op_phase_bias_q15: " + std::to_string((uint32_t)ai_substrate_telemetry.op_phase_bias_q15) + "\n";
+        a.payload += "memory_norm_q15: " + std::to_string((uint32_t)ai_substrate_telemetry.memory_norm_q15) + "\n";
+        a.payload += "reasoning_norm_q15: " + std::to_string((uint32_t)ai_substrate_telemetry.reasoning_norm_q15) + "\n";
+        a.payload += "planning_norm_q15: " + std::to_string((uint32_t)ai_substrate_telemetry.planning_norm_q15) + "\n";
+        a.payload += "creativity_norm_q15: " + std::to_string((uint32_t)ai_substrate_telemetry.creativity_norm_q15) + "\n";
+        a.payload += "perception_norm_q15: " + std::to_string((uint32_t)ai_substrate_telemetry.perception_norm_q15) + "\n";
+        a.payload += "temporal_binding_norm_q15: " + std::to_string((uint32_t)ai_substrate_telemetry.temporal_binding_norm_q15) + "\n";
+        a.payload += "crawler_drift_norm_q15: " + std::to_string((uint32_t)ai_substrate_telemetry.crawler_drift_norm_q15) + "\n";
+        a.payload += "network_coherence_norm_q15: " + std::to_string((uint32_t)ai_substrate_telemetry.network_coherence_norm_q15) + "\n";
         for (uint32_t i = 0; i < 8u; ++i) {
             a.payload += std::string("carrier_band_q15_") + std::to_string((unsigned long long)i) + ": " +
                          std::to_string((uint32_t)ai_substrate_telemetry.carrier_band_q15[i]) + "\n";
@@ -9553,15 +10024,37 @@ if (ap && ap->object_id_u64 != 0u) {
         a.payload += "math_graph_packets_emitted_u32: " + std::to_string(ai_data_substrate_telemetry.math_graph_packets_emitted_u32) + "\n";
         a.payload += "math_khan_pages_seen_u32: " + std::to_string(ai_data_substrate_telemetry.math_khan_pages_seen_u32) + "\n";
         a.payload += "math_khan_chars_ingested_u32: " + std::to_string(ai_data_substrate_telemetry.math_khan_chars_ingested_u32) + "\n";
+        a.payload += "crawler_pending_obs_u32: " + std::to_string(ai_data_substrate_telemetry.crawler_pending_obs_u32) + "\n";
+        a.payload += "crawler_last_utf8_bytes_u32: " + std::to_string(ai_data_substrate_telemetry.crawler_last_utf8_bytes_u32) + "\n";
+        a.payload += "crawler_enqueued_obs_u64: " + std::to_string(ai_data_substrate_telemetry.crawler_enqueued_obs_u64) + "\n";
+        a.payload += "crawler_admitted_pulses_u64: " + std::to_string(ai_data_substrate_telemetry.crawler_admitted_pulses_u64) + "\n";
+        a.payload += "crawler_dropped_obs_u64: " + std::to_string(ai_data_substrate_telemetry.crawler_dropped_obs_u64) + "\n";
+        a.payload += "crawler_truncated_segments_u64: " + std::to_string(ai_data_substrate_telemetry.crawler_truncated_segments_u64) + "\n";
         a.payload += "intent_norm_q15: " + std::to_string((uint32_t)ai_data_substrate_telemetry.intent_norm_q15) + "\n";
         a.payload += "measured_norm_q15: " + std::to_string((uint32_t)ai_data_substrate_telemetry.measured_norm_q15) + "\n";
         a.payload += "residual_norm_q15: " + std::to_string((uint32_t)ai_data_substrate_telemetry.residual_norm_q15) + "\n";
         a.payload += "error_delta_norm_q15: " + std::to_string((uint32_t)ai_data_substrate_telemetry.error_delta_norm_q15) + "\n";
         a.payload += "error_integral_norm_q15: " + std::to_string((uint32_t)ai_data_substrate_telemetry.error_integral_norm_q15) + "\n";
         a.payload += "controller_authority_q15: " + std::to_string((uint32_t)ai_data_substrate_telemetry.controller_authority_q15) + "\n";
+        a.payload += "crawler_flow_norm_q15: " + std::to_string((uint32_t)ai_data_substrate_telemetry.crawler_flow_norm_q15) + "\n";
+        a.payload += "crawler_drift_norm_q15: " + std::to_string((uint32_t)ai_data_substrate_telemetry.crawler_drift_norm_q15) + "\n";
+        a.payload += "crawler_interference_norm_q15: " + std::to_string((uint32_t)ai_data_substrate_telemetry.crawler_interference_norm_q15) + "\n";
+        a.payload += "crawler_coherence_norm_q15: " + std::to_string((uint32_t)ai_data_substrate_telemetry.crawler_coherence_norm_q15) + "\n";
+        a.payload += "temporal_memory_norm_q15: " + std::to_string((uint32_t)ai_data_substrate_telemetry.temporal_memory_norm_q15) + "\n";
+        a.payload += "temporal_prediction_norm_q15: " + std::to_string((uint32_t)ai_data_substrate_telemetry.temporal_prediction_norm_q15) + "\n";
+        a.payload += "gpu_gradient_energy_norm_q15: " + std::to_string((uint32_t)ai_data_substrate_telemetry.gpu_gradient_energy_norm_q15) + "\n";
+        a.payload += "gpu_spider_f_code_i32: " + std::to_string((int64_t)ai_data_substrate_telemetry.gpu_spider_f_code_i32) + "\n";
+        a.payload += "gpu_spider_a_code_u16: " + std::to_string((uint32_t)ai_data_substrate_telemetry.gpu_spider_a_code_u16) + "\n";
+        a.payload += "gpu_spider_v_code_u16: " + std::to_string((uint32_t)ai_data_substrate_telemetry.gpu_spider_v_code_u16) + "\n";
+        a.payload += "gpu_spider_i_code_u16: " + std::to_string((uint32_t)ai_data_substrate_telemetry.gpu_spider_i_code_u16) + "\n";
+        a.payload += "api_decode_count_u16: " + std::to_string((uint32_t)ai_data_substrate_telemetry.api_decode_count_u16) + "\n";
+        a.payload += "api_decode_http_status_s32: " + std::to_string((int64_t)ai_data_substrate_telemetry.api_decode_http_status_s32) + "\n";
+        a.payload += "api_decode_norm_q15: " + std::to_string((uint32_t)ai_data_substrate_telemetry.api_decode_norm_q15) + "\n";
+        a.payload += "api_decode_f_code_i32: " + std::to_string((int64_t)ai_data_substrate_telemetry.api_decode_f_code_i32) + "\n";
         a.payload += "error_q32_32: " + std::to_string(ai_data_substrate_telemetry.error_q32_32) + "\n";
         a.payload += "error_delta_q32_32: " + std::to_string(ai_data_substrate_telemetry.error_delta_q32_32) + "\n";
         a.payload += "error_integral_q32_32: " + std::to_string(ai_data_substrate_telemetry.error_integral_q32_32) + "\n";
+        a.payload += "temporal_prediction_q32_32: " + std::to_string(ai_data_substrate_telemetry.temporal_prediction_q32_32) + "\n";
         for (uint32_t i = 0; i < 8u; ++i) {
             a.payload += std::string("intent_band_q15_") + std::to_string((unsigned long long)i) + ": " +
                          std::to_string((uint32_t)ai_data_substrate_telemetry.intent_band_q15[i]) + "\n";

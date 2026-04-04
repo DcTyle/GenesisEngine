@@ -280,6 +280,22 @@ add_executable(test_virtual_state_drive
 target_link_libraries(test_virtual_state_drive PRIVATE EigenWareCore)
 add_test(NAME virtual_state_drive COMMAND test_virtual_state_drive)
 
+if (NOT TARGET test_ai_golden)
+add_executable(test_ai_golden
+    tests/test_ai_golden.cpp
+)
+target_link_libraries(test_ai_golden PRIVATE EigenWareCore)
+add_test(NAME ai_golden COMMAND test_ai_golden)
+endif()
+
+if (NOT TARGET test_microprocessor)
+add_executable(test_microprocessor
+    tests/test_microprocessor.cpp
+)
+target_link_libraries(test_microprocessor PRIVATE EigenWareCore)
+add_test(NAME microprocessor COMMAND test_microprocessor)
+endif()
+
 add_executable(test_asset_substrate_virtual_state_drive
     tests/test_asset_substrate_virtual_state_drive.cpp
 )
@@ -325,17 +341,21 @@ add_executable(ew_verify_proofs
 )
 target_link_libraries(ew_verify_proofs PRIVATE EigenWareCore)
 
+if (NOT TARGET test_ai_golden)
 add_executable(test_ai_golden
     tests/test_ai_golden.cpp
 )
 target_link_libraries(test_ai_golden PRIVATE EigenWareCore)
 add_test(NAME ai_golden COMMAND test_ai_golden)
+endif()
 
+if (NOT TARGET test_microprocessor)
 add_executable(test_microprocessor
     tests/test_microprocessor.cpp
 )
 target_link_libraries(test_microprocessor PRIVATE EigenWareCore)
 add_test(NAME microprocessor COMMAND test_microprocessor)
+endif()
 
 add_executable(test_contact_constraint
     tests/test_contact_constraint.cpp

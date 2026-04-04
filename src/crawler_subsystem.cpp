@@ -122,6 +122,9 @@ void CrawlerSubsystem::enqueue_observation_utf8(
     o.utf8 = utf8;
     q_.push_back(o);
     stats_.enqueued_obs_u64 += 1;
+    stats_.pending_obs_u32 = (uint32_t)q_.size();
+    stats_.last_utf8_bytes_u32 =
+        (utf8.size() > 0xFFFFFFFFull) ? 0xFFFFFFFFu : (uint32_t)utf8.size();
 }
 
 EigenWare::EwId9 CrawlerSubsystem::id9_from_spidercode4_(uint16_t f, uint16_t a, uint16_t v, uint16_t i) {
@@ -348,4 +351,5 @@ void CrawlerSubsystem::tick(SubstrateManager* sm) {
     }
 
     stats_.last_tick_u64 = sm->canonical_tick_u64();
+    stats_.pending_obs_u32 = (uint32_t)q_.size();
 }

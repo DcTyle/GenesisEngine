@@ -53,6 +53,7 @@
 #include "spec_aux_ops.hpp"
 
 #include "field_lattice.hpp"
+#include "VirtualStateDrive.hpp"
 
 
 struct EwVizPoint {
@@ -1223,6 +1224,14 @@ std::deque<std::string> ui_out_q;
     uint64_t synth_index_revision_u64 = 0;
     std::vector<EwSynthArtifactInfo> synth_artifacts;
     std::vector<EwSynthSymRef> synth_sym_refs;
+
+    // AI substrate-local encoded/decode records.
+    genesis::VirtualStateDrive ai_substrate_drive;
+    uint64_t ai_gpu_spider_encode_count_u64 = 0u;
+    uint64_t ai_api_decode_count_u64 = 0u;
+    uint64_t ai_last_api_decode_request_id_u64 = 0u;
+    int32_t ai_last_api_decode_http_status_s32 = -1;
+    uint32_t ai_last_api_decode_body_bytes_u32 = 0u;
     
 
     // Latest human-readable observation line (e.g., from headless tools).

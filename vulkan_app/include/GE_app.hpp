@@ -11,6 +11,7 @@
 
 #include "camera_controller.hpp"
 #include "openxr_runtime.hpp"
+#include "GE_audio_wav.hpp"
 
 namespace ewv {
 
@@ -42,18 +43,53 @@ private:
         SidePanelTabCount = 3
     };
 
+    enum AiWorkspaceTabIndex {
+        AiWorkspaceTabChat = 0,
+        AiWorkspaceTabImages = 1,
+        AiWorkspaceTabSimulation = 2,
+        AiWorkspaceTabMemory = 3,
+        AiWorkspaceTabTools = 4,
+        AiWorkspaceTabCount = 5
+    };
+
+    enum AiProviderModeIndex {
+        AiProviderModeChatGpt = 0,
+        AiProviderModeGrokStyle = 1
+    };
+
     AppConfig cfg_;
 
     // Win64
     HWND hwnd_main_ = nullptr;
     HWND hwnd_viewport_ = nullptr;
     HWND hwnd_panel_ = nullptr;
+    HMENU hmenu_main_ = nullptr;
     HWND hwnd_side_tabs_[SidePanelTabCount] = {nullptr, nullptr, nullptr};
+    HWND hwnd_ai_workspace_ = nullptr;
 
     // UI controls
     HWND hwnd_input_ = nullptr;
     HWND hwnd_send_ = nullptr;
     HWND hwnd_output_ = nullptr;
+    HWND hwnd_ai_status_ = nullptr;
+    HWND hwnd_ai_provider_chatgpt_ = nullptr;
+    HWND hwnd_ai_provider_grok_ = nullptr;
+    HWND hwnd_ai_dock_toggle_ = nullptr;
+    HWND hwnd_ai_new_chat_ = nullptr;
+    HWND hwnd_ai_web_toggle_ = nullptr;
+    HWND hwnd_ai_history_ = nullptr;
+    HWND hwnd_ai_tabs_[AiWorkspaceTabCount] = {nullptr, nullptr, nullptr, nullptr, nullptr};
+    HWND hwnd_ai_primary_action_ = nullptr;
+    HWND hwnd_ai_secondary_action_ = nullptr;
+    HWND hwnd_ai_asset_label_ = nullptr;
+    HWND hwnd_ai_asset_name_ = nullptr;
+    HWND hwnd_ai_scene_action_ = nullptr;
+    HWND hwnd_ai_sim_action_ = nullptr;
+    HWND hwnd_ai_sandbox_action_ = nullptr;
+    HWND hwnd_ai_status_action_ = nullptr;
+    HWND hwnd_ai_voice_toggle_ = nullptr;
+    HWND hwnd_ai_speak_last_ = nullptr;
+    HWND hwnd_ai_embed_sim_ = nullptr;
     HWND hwnd_import_ = nullptr;
     HWND hwnd_bootstrap_ = nullptr;
     HWND hwnd_objlist_ = nullptr;
@@ -153,6 +189,16 @@ private:
     int side_panel_active_tab_index_ = SidePanelTabChatGpt;
     int side_panel_hover_tab_index_ = -1;
     float side_panel_tab_anim_[SidePanelTabCount] = {1.0f, 0.0f, 0.0f};
+    bool ai_workspace_docked_ = true;
+    int ai_workspace_active_tab_index_ = AiWorkspaceTabChat;
+    int ai_provider_mode_index_ = AiProviderModeChatGpt;
+    bool ai_web_search_enabled_ = true;
+    bool ai_voice_enabled_ = true;
+    bool ai_viewport_embedded_ = false;
+    std::vector<std::string> ai_output_history_utf8_;
+    std::vector<std::string> ai_prompt_history_utf8_;
+    std::string ai_selected_asset_utf8_ = "default_sandbox_sim";
+    std::string ai_last_response_text_utf8_;
 
 // View modes
     bool immersion_mode_ = false; // Standard vs Immersion
@@ -165,13 +211,36 @@ private:
     LRESULT SideTabWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
 
     void CreateMainWindow(HINSTANCE hInst);
+    void CreateMainMenuBar();
+    void RefreshMainMenuState();
     void CreateChildWindows();
     void LayoutChildren(int w, int h);
+    void LayoutAiWorkspace(int x, int y, int w, int h);
     void SetSidePanelActiveTab(int tab_index, bool focus_tab);
     void SetSidePanelHoverTab(int tab_index);
     void StepSidePanelTabAnimations(float dt);
     void HandleSidePanelTabStep(int delta, bool focus_tab);
     void DrawSidePanelTab(HWND hwnd, HDC hdc, const RECT& rc);
+    void SetAiWorkspaceDocked(bool docked);
+    void SetAiWorkspaceTab(int tab_index);
+    void ResetAiConversation();
+    void RefreshAiWorkspaceStatus();
+    void RefreshAiWorkspaceHistory();
+    void RefreshAiWorkspaceOutput();
+    std::string ReadWindowTextUtf8(HWND hwnd) const;
+    void SetWindowTextUtf8(HWND hwnd, const std::string& utf8) const;
+    bool ShouldEmbedViewportInAiWorkspace() const;
+    void SetAiViewportEmbedded(bool enabled);
+    void SpeakAiText(const std::string& utf8);
+    void SubmitAiWorkspacePrompt();
+    void SubmitAiImagePrompt(const std::string& prompt_utf8);
+    void SubmitAiSimulationPrompt(const std::string& prompt_utf8);
+    void SubmitAiWorkspaceCommand(const std::string& command_utf8);
+    void OpenAiWorkspaceAsset(bool simulation_asset, bool sandbox_open);
+    void OpenSceneAssetDialog(bool simulation_asset);
+    void SaveSceneAssetDialog(bool simulation_asset);
+    void ShowEditorAboutDialog() const;
+    void ShowAiQuickstartDialog() const;
 
     void Tick();
     void Render();

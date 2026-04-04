@@ -1,5 +1,6 @@
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -59,9 +60,9 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    SubstrateManager sim(128);
-    sim.projection_seed = 77;
-    sim.configure_cosmic_expansion(1, 1);
+    auto sim = std::make_unique<SubstrateManager>(128);
+    sim->projection_seed = 77;
+    sim->configure_cosmic_expansion(1, 1);
 
     // Minimal crawler loop: ingestion -> actuation -> feedback.
     // Ingestion: each seed line is enqueued as a crawler observation.
@@ -73,7 +74,7 @@ int main(int argc, char** argv) {
         const uint32_t extractor_id_u32 = 1;
         const uint32_t trust_class_u32 = 1;
         const uint32_t causal_tag_u32 = (uint32_t)((i + 1) & 0xFFU);
-        sim.crawler_enqueue_observation_utf8(
+        sim->crawler_enqueue_observation_utf8(
             artifact_id_u64,
             stream_id_u32,
             extractor_id_u32,
@@ -83,21 +84,21 @@ int main(int argc, char** argv) {
             std::string("seed:") + std::to_string((unsigned long long)(i + 1)),
             seeds[i]
         );
-        for (int k = 0; k < 32; ++k) sim.tick();
+        for (int k = 0; k < 32; ++k) sim->tick();
     }
 
     uint64_t coord9[9];
-    coord_coord9_u64x9(sim, coord9);
+    coord_coord9_u64x9(*sim, coord9);
 
     int64_t conv_sum = 0;
-    for (size_t i = 0; i < sim.ancilla.size(); ++i) {
-        conv_sum += sim.ancilla[i].convergence_metric_q32_32;
+    for (size_t i = 0; i < sim->ancilla.size(); ++i) {
+        conv_sum += sim->ancilla[i].convergence_metric_q32_32;
     }
 
     std::string j;
     j += "{\n";
     j += "  \"crawler_steps\": " + std::to_string((unsigned long long)seeds.size()) + ",\n";
-    j += "  \"canonical_tick\": " + std::to_string((unsigned long long)sim.canonical_tick) + ",\n";
+    j += "  \"canonical_tick\": " + std::to_string((unsigned long long)sim->canonical_tick) + ",\n";
     j += "  \"anchor_coord_coord9_u64x9\": [";
     for (int i = 0; i < 9; ++i) {
         j += std::to_string((unsigned long long)coord9[i]);
